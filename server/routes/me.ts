@@ -27,7 +27,8 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
   return c.json({
     user: me, account, integrations: settings, unread, running, inbox,
     features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead },
-    inboundAddress: `${account.inbound_token}@${process.env.INBOUND_DOMAIN ?? 'in.projectlead.io'}`,
+    // L'adresse de capture n'existe que si un domaine de réception est vraiment branché (MX vers un relais).
+    inboundAddress: process.env.INBOUND_DOMAIN ? `${account.inbound_token}@${process.env.INBOUND_DOMAIN}` : null,
     inboundUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/inbound/${account.inbound_token}`,
     icalUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/public/calendar/${me.ical_token}.ics`,
   })
