@@ -424,6 +424,24 @@ check('relancer le même mois ne refacture rien', ilInvoices.length === n && r.b
 r = await marc.patch(`/api/time/entries/${(await marc.get(`/api/time/entries?project=${projId}`)).body[0].id}`, { minutes: 10 })
 check('temps facturé non modifiable → 409', r.status === 409, r.body)
 
+section('InvoiceLead : contacts repris comme clients')
+ilContacts.push({ id: randomUUID(), kind: 'company', name: 'Garage Muller SA', email: 'info@muller.ch', street: 'Rue du Lac',
+  buildingNumber: '12', postalCode: '1800', town: 'Vevey', country: 'CH', language: 'fr', isCustomer: true },
+  { id: randomUUID(), kind: 'company', name: 'Fournisseur Papier', isCustomer: false, isSupplier: true })
+r = await eve.get('/api/clients/invoicelead/search?q=')
+const muller = r.body.find?.((x: any) => x.name === 'Garage Muller SA')
+check('recherche : clients seulement, déjà repris signalés', muller && !muller.imported && muller.address === 'Rue du Lac 12, 1800 Vevey'
+  && !r.body.some((x: any) => x.name === 'Fournisseur Papier') && r.body.some((x: any) => x.name === 'Boulangerie Rochat SA' && x.imported), r.body)
+r = await eve.post('/api/clients/invoicelead/import', { contactId: muller.id })
+const mullerClient = (await eve.get(`/api/clients/${r.body.id}`)).body
+check('contact repris : adresse et lien InvoiceLead', r.status === 201 && mullerClient.town === 'Vevey' && mullerClient.building_number === '12'
+  && mullerClient.invoicelead_contact_id === muller.id, mullerClient)
+const clientsBefore = (await eve.get('/api/clients')).body.length
+r = await eve.post('/api/clients/invoicelead/import', { all: true })
+check('tout reprendre ne crée pas de doublon', r.status === 201 && (await eve.get('/api/clients')).body.length === clientsBefore, { clientsBefore, r: r.body })
+r = await marc.post('/api/clients/invoicelead/import', { contactId: 'inconnu' })
+check('contact inconnu → 404', r.status === 404, r.body)
+
 section('Échange Compte Lead : affaire gagnée dans CRMlead')
 await pool.query(`update accounts set lead_org = $2 where id = $1`, [accountId, `org-${stamp}`])
 const envelope = { id: randomUUID(), type: 'deal', org: `org-${stamp}`, occurred_at: new Date().toISOString(),

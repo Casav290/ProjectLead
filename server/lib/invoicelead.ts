@@ -66,7 +66,45 @@ export async function ensureContact(db: Db, cfg: IlConfig, client: any): Promise
   return found.id
 }
 
-export type InvoiceLine = { description: string; quantity: number; unit: 'hour' | 'day' | 'piece' | 'flat' | 'month'; unitPriceCents: number }
+/** Les clients du carnet d'InvoiceLead (pas les fournisseurs), recherche facultative. */
+export async function searchContacts(cfg: IlConfig, q: string) {
+  const list: any[] = (await ilFetch(cfg, `/contacts?q=${encodeURIComponent(q.slice(0, 100))}`)).data ?? []
+  return list.filter((x) => x.isCustomer !== false)
+}
+
+/**
+ * Reprend (ou met à jour) un client depuis un contact InvoiceLead. Le client déjà relié à ce contact
+ * est mis à jour, sinon celui qui porte le même email, sinon un nouveau est créé. Rend son identifiant.
+ */
+export async function upsertClientFromContact(db: Db, accountId: string, ct: any) {
+  const id = String(ct.id)
+  const email = ct.email ? String(ct.email).slice(0, 200) : null
+  const existing = (await db.query(
+    `select id from clients where invoicelead_contact_id = $1
+        or ($2::text is not null and invoicelead_contact_id is null and lower(email) = lower($2))
+      order by (invoicelead_contact_id = $1) desc nulls last limit 1`, [id, email])).rows[0]
+  const v = [ct.kind === 'person' ? 'person' : 'company', String(ct.name ?? '').slice(0, 200) || email || id,
+    ct.contactPerson ?? null, email, ct.phone ?? null, ct.street ?? null, ct.buildingNumber ?? null,
+    ct.postalCode ?? null, ct.town ?? null, /^[A-Z]{2}$/.test(ct.country ?? '') ? ct.country : null,
+    IL_LANGUAGES.has(ct.language) ? ct.language : null, ct.uid ?? null, id]
+  if (existing) {
+    await db.query(
+      `update clients set kind = $2, name = $3, contact_person = coalesce($4, contact_person), email = coalesce($5, email),
+         phone = coalesce($6, phone), street = coalesce($7, street), building_number = coalesce($8, building_number),
+         postal_code = coalesce($9, postal_code), town = coalesce($10, town), country = coalesce($11, country),
+         language = coalesce($12, language), vat_number = coalesce($13, vat_number), invoicelead_contact_id = $14,
+         archived_at = null
+       where id = $1`, [existing.id, ...v])
+    return existing.id as string
+  }
+  return (await db.query(
+    `insert into clients (account_id, kind, name, contact_person, email, phone, street, building_number, postal_code, town,
+                          country, language, vat_number, invoicelead_contact_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,coalesce($11,'CH'),coalesce($12,'fr'),$13,$14) returning id`,
+    [accountId, ...v])).rows[0].id as string
+}
+
+export type InvoiceLine ={ description: string; quantity: number; unit: 'hour' | 'day' | 'piece' | 'flat' | 'month'; unitPriceCents: number }
 
 export async function createDraftInvoice(cfg: IlConfig, x: {
   contactId: string; title: string; intro?: string; serviceDate: string; currency: string; vatCode: string; lines: InvoiceLine[]

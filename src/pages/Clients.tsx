@@ -14,6 +14,7 @@ export default function Clients() {
   const [tab, setTab] = useState<'active' | 'archived'>('active')
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [ilImporting, setIlImporting] = useState(false)
 
   // La recherche part une fois la frappe posée.
   useEffect(() => { const t = setTimeout(() => setQuery(q.trim()), 250); return () => clearTimeout(t) }, [q])
@@ -23,9 +24,10 @@ export default function Clients() {
 
   return (
     <>
-      <PageHeader title="Clients" subtitle="Le carnet d'adresses des projets, repris de CRMlead ou saisi ici."
+      <PageHeader title="Clients" subtitle="Le carnet d'adresses des projets, repris de CRMlead ou d'InvoiceLead, ou saisi ici."
         actions={<>
           <Button onClick={() => setImporting(true)}>Importer depuis CRMlead</Button>
+          <Button onClick={() => setIlImporting(true)}>Importer depuis InvoiceLead</Button>
           <Button variant="primary" onClick={() => setCreating(true)}>Nouveau client</Button>
         </>} />
 
@@ -43,9 +45,10 @@ export default function Clients() {
           : <Empty title="Aucun client pour l'instant"
               action={<div className="flex flex-wrap justify-center gap-2">
                 <Button onClick={() => setImporting(true)}>Importer depuis CRMlead</Button>
+                <Button onClick={() => setIlImporting(true)}>Importer depuis InvoiceLead</Button>
                 <Button variant="primary" onClick={() => setCreating(true)}>Nouveau client</Button>
               </div>}>
-              Reprenez vos adresses depuis CRMlead, ou saisissez votre premier client.
+              Reprenez vos adresses depuis CRMlead ou InvoiceLead, ou saisissez votre premier client.
             </Empty>
       ) : (
         <TableStack>
@@ -66,6 +69,7 @@ export default function Clients() {
                     <span className="flex flex-wrap items-center gap-2">
                       <Link to={`/clients/${c.id}`} className="font-bold hover:text-accent break-words">{c.name}</Link>
                       {isFromCrmlead(c) && <Badge tone="info">CRMlead</Badge>}
+                      {c.invoicelead_contact_id && <Badge>InvoiceLead</Badge>}
                     </span>
                   </td>
                   <td className="px-3 py-2">{c.contact_person ?? <span className="text-muted-foreground">—</span>}</td>
@@ -83,6 +87,7 @@ export default function Clients() {
 
       <NewClientDialog open={creating} onClose={() => setCreating(false)} />
       <CrmleadImportDialog open={importing} onClose={() => { setImporting(false); reload() }} connected={Boolean(me?.features.crmlead)} />
+      <InvoiceleadImportDialog open={ilImporting} onClose={() => { setIlImporting(false); reload() }} connected={Boolean(me?.features.invoicelead)} />
     </>
   )
 }
@@ -204,6 +209,93 @@ function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onCl
               </ul>
             ))}
           {!results && <p className="text-sm text-muted-foreground">L'adresse et les contacts sont repris tels quels ; la fiche reste liée à CRMlead pour les mises à jour.</p>}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+type IlResult = { id: string; name: string; email: string | null; address: string | null; imported: boolean }
+
+/** Le carnet de contacts d'InvoiceLead : un contact, ou tous d'un coup. */
+function InvoiceleadImportDialog({ open, onClose, connected }: { open: boolean; onClose: () => void; connected: boolean }) {
+  const { me } = useApp()
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<IlResult[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [taking, setTaking] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
+  const [notConnected, setNotConnected] = useState(!connected)
+
+  const search = async (e?: FormEvent) => {
+    e?.preventDefault()
+    setBusy(true); setError(null)
+    try {
+      setResults(await api.get<IlResult[]>(`/clients/invoicelead/search?q=${encodeURIComponent(q.trim())}`))
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'invoicelead_not_configured') setNotConnected(true)
+      else setError(err)
+    } finally { setBusy(false) }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setQ(''); setResults(null); setError(null); setNotConnected(!connected)
+    if (connected) search()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, connected])
+
+  const take = async (r: IlResult | null) => {
+    setTaking(r?.id ?? 'all')
+    try {
+      const { count } = await api.post<{ id: string; count: number }>('/clients/invoicelead/import', r ? { contactId: r.id } : { all: true })
+      toast(r ? `${r.name} repris d'InvoiceLead` : `${count} client${count > 1 ? 's' : ''} repris d'InvoiceLead`)
+      setResults((x) => x?.map((y) => (!r || y.id === r.id ? { ...y, imported: true } : y)) ?? null)
+    } catch (err) { setError(err) } finally { setTaking(null) }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Importer depuis InvoiceLead" wide>
+      {notConnected ? (
+        <div className="space-y-3 text-sm">
+          <p>InvoiceLead n'est pas encore branché à ProjectLead. Une fois relié avec une clé d'API, vous retrouvez ici vos
+             contacts InvoiceLead et les reprenez comme clients, sans rien ressaisir.</p>
+          {me?.user.role === 'admin'
+            ? <ButtonLink to="/reglages/integrations" variant="primary">Brancher InvoiceLead</ButtonLink>
+            : <p className="text-muted-foreground">Demandez à un administrateur de le brancher dans Réglages → Intégrations.</p>}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <form onSubmit={search} className="flex gap-2">
+            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, email ou localité"
+              aria-label="Rechercher dans InvoiceLead" />
+            <Button type="submit" disabled={busy}>{busy ? 'Recherche…' : 'Rechercher'}</Button>
+          </form>
+          <ErrorNote error={error} />
+          {results && results.length > 0 && results.some((r) => !r.imported) && (
+            <Button variant="primary" disabled={taking !== null} onClick={() => take(null)}>
+              {taking === 'all' ? 'Reprise…' : 'Tout reprendre'}
+            </Button>
+          )}
+          {results && (results.length === 0
+            ? <p className="text-sm text-muted-foreground">Aucun contact client dans InvoiceLead pour cette recherche.</p>
+            : (
+              <ul className="divide-y divide-border border border-border">
+                {results.map((r) => (
+                  <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold break-words">{r.name}</p>
+                      <p className="text-xs text-muted-foreground break-words">{[r.address, r.email].filter(Boolean).join(' · ') || 'Sans adresse'}</p>
+                    </div>
+                    {r.imported
+                      ? <span className="text-xs font-bold text-muted-foreground">Déjà repris</span>
+                      : <Button size="sm" variant="primary" disabled={taking !== null} onClick={() => take(r)}>
+                          {taking === r.id ? 'Reprise…' : 'Reprendre'}
+                        </Button>}
+                  </li>
+                ))}
+              </ul>
+            ))}
         </div>
       )}
     </Modal>

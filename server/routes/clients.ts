@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { crmleadConfig, getLead, searchLeads, upsertClientFromLead } from '../lib/crmlead.js'
+import { invoiceleadConfig, searchContacts, upsertClientFromContact } from '../lib/invoicelead.js'
 import { body, email, HttpError, notFound, router, setClause, tx } from '../lib/http.js'
 
 /** Les clients et leurs adresses ; CRMlead en est la source quand il est branché. */
@@ -131,5 +132,38 @@ app.post('/:id/crmlead/refresh', async (c) => tx(c, async (db, ctx) => {
   await upsertClientFromLead(db, ctx.accountId, await getLead(cfg, cl.external_ref.slice(8)))
   return c.json({ ok: true })
 }))
+
+// ------------------------------------------------------------------ InvoiceLead
+
+/** Cherche dans le carnet de contacts d'InvoiceLead (les clients), pour les reprendre ici. */
+app.get('/invoicelead/search', async (c) => tx(c, async (db) => {
+  const cfg = await invoiceleadConfig(db)
+  if (!cfg) throw new HttpError(400, 'invoicelead_not_configured')
+  const list = await searchContacts(cfg, c.req.query('q') ?? '')
+  const known = new Set((await db.query('select invoicelead_contact_id from clients where invoicelead_contact_id is not null'))
+    .rows.map((r) => r.invoicelead_contact_id))
+  return c.json(list.map((x) => ({
+    id: String(x.id), name: x.name, email: x.email ?? null,
+    address: [[x.street, x.buildingNumber].filter(Boolean).join(' '), [x.postalCode, x.town].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null,
+    imported: known.has(String(x.id)),
+  })))
+}))
+
+/** Reprend un contact (`contactId`) ou tout le carnet (`all`) d'InvoiceLead. */
+app.post('/invoicelead/import', async (c) => {
+  const b = await body(c, z.object({ contactId: z.string().min(1).max(100).optional(), all: z.boolean().optional() })
+    .refine((x) => x.contactId || x.all))
+  const ids = await tx(c, async (db, ctx) => {
+    const cfg = await invoiceleadConfig(db)
+    if (!cfg) throw new HttpError(400, 'invoicelead_not_configured')
+    const list = await searchContacts(cfg, '')
+    const pick = b.all ? list : list.filter((x) => String(x.id) === b.contactId)
+    if (!pick.length) throw notFound()
+    const out: string[] = []
+    for (const ct of pick) out.push(await upsertClientFromContact(db, ctx.accountId, ct))
+    return out
+  })
+  return c.json({ id: ids[0], count: ids.length }, 201)
+})
 
 export default app
