@@ -513,6 +513,16 @@ const jobs = await runJobs(true)
 const after = (await pool.query(`select count(*)::int as n from client_reports where project_id = $1 and automatic`, [projId])).rows[0].n
 check('suivi hebdomadaire automatique envoyé', after >= 1 && (jobs as any).clientUpdates >= 1, { before, after, jobs })
 
+section('Tâches planifiées : jeton enregistré en base')
+const taskToken = `tache-${stamp}-${randomUUID()}`
+await pool.query(`insert into task_tokens (token_hash, label) values (encode(sha256($1::bytea), 'hex'), 'contrôle')`, [taskToken])
+r = await new Client().req('POST', '/api/tasks/run', {}, { authorization: `Bearer ${taskToken}` })
+check('jeton connu → tâches lancées', r.status === 200 && typeof r.body === 'object', r)
+r = await new Client().req('POST', '/api/tasks/run', {}, { authorization: `Bearer ${taskToken}x` })
+check('jeton inconnu → 401', r.status === 401)
+r = await pool.query('select last_used_at from task_tokens where token_hash = encode(sha256($1::bytea), \'hex\')', [taskToken])
+check('dernier usage noté', r.rows[0]?.last_used_at !== null, r.rows)
+
 section('File « À trier » : 30 jours au plus')
 await pool.query(`insert into email_messages (account_id, message_id, from_email, subject, received_at) values
   ($1, $2, 'vieux@exemple.test', 'Ancien', now() - interval '31 days'), ($1, $3, 'recent@exemple.test', 'Récent', now() - interval '2 days')`,
