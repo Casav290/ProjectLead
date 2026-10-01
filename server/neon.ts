@@ -7,6 +7,8 @@ import assets from 'virtual:assets'
 import migrations from 'virtual:migrations'
 
 process.env.NO_LISTEN = '1'
+// L'adresse injectée par Neon Functions ne porte pas de mot de passe : la nôtre passe avant.
+if (process.env.PL_DATABASE_URL) process.env.DATABASE_URL = process.env.PL_DATABASE_URL
 process.env.NODE_ENV ||= 'production'
 
 const { migrate } = await import('./migrate.js')

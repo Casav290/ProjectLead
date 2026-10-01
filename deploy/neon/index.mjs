@@ -1322,7 +1322,7 @@ create policy tenant on sent_emails using (account_id = app_account()) with chec
 grant select, insert on sent_emails to projectlead_app;
 
 grant usage, select on all sequences in schema public to projectlead_app;
-`}];process.env.NO_LISTEN="1";process.env.NODE_ENV||="production";var{migrate:Qoe}=await Promise.resolve().then(()=>(jg(),Dg));await Qoe(console.log,kW);var{default:qoe}=await Promise.resolve().then(()=>(BN(),CN)),$oe=/^\/(api|auth|\.well-known)(\/|$)/;function XN(t){let e=NW[t];return e?new Response(Buffer.from(e.body,"base64"),{headers:{"Content-Type":e.type,"Cache-Control":t.startsWith("/assets/")?"public, max-age=31536000, immutable":"no-cache"}}):null}var Nge={fetch(t,e,i){let{pathname:s}=new URL(t.url);return $oe.test(s)||t.method!=="GET"?qoe.fetch(t,e,i):XN(s)??XN("/index.html")}};export{Nge as default};
+`}];process.env.NO_LISTEN="1";process.env.PL_DATABASE_URL&&(process.env.DATABASE_URL=process.env.PL_DATABASE_URL);process.env.NODE_ENV||="production";var{migrate:Qoe}=await Promise.resolve().then(()=>(jg(),Dg));await Qoe(console.log,kW);var{default:qoe}=await Promise.resolve().then(()=>(BN(),CN)),$oe=/^\/(api|auth|\.well-known)(\/|$)/;function XN(t){let e=NW[t];return e?new Response(Buffer.from(e.body,"base64"),{headers:{"Content-Type":e.type,"Cache-Control":t.startsWith("/assets/")?"public, max-age=31536000, immutable":"no-cache"}}):null}var Nge={fetch(t,e,i){let{pathname:s}=new URL(t.url);return $oe.test(s)||t.method!=="GET"?qoe.fetch(t,e,i):XN(s)??XN("/index.html")}};export{Nge as default};
 /*! Bundled license information:
 
 he/he.js:
