@@ -63,8 +63,8 @@ export default function Profile() {
             ) : (
               <>
                 <p className="flex flex-wrap items-center gap-2"><Badge>Non lié</Badge>Vous vous connectez avec votre email et votre mot de passe.</p>
-                {me.features.leadId && <p className="text-muted-foreground">Pour lier votre Compte Lead, déconnectez-vous puis choisissez
-                  « Se connecter avec mon compte Lead » avec la même adresse email.</p>}
+                {me.features.leadId && <p className="text-muted-foreground">Pour lier votre Compte Lead, déconnectez-vous puis reconnectez-vous :
+                  la connexion passe par le Compte Lead. Utilisez la même adresse e-mail, votre accès est repris tel quel.</p>}
               </>
             )}
           </div>

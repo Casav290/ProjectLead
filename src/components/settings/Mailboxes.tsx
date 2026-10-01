@@ -119,13 +119,20 @@ export default function Mailboxes() {
         )}
 
         {me && (
-          <Card title="Adresse de capture">
+          <Card title={me.inboundAddress ? 'Adresse de capture' : "Relais d'emails"}>
             <div className="space-y-3 p-4 text-sm">
-              <p>Transférez un email à cette adresse, ou mettez-la en copie d'un échange avec un client : il arrive dans
-                {' '}<Link to="/emails" className="font-semibold text-accent">Emails</Link>, où il peut devenir un projet en un clic. Pratique
-                sans boîte branchée, ou depuis le téléphone.</p>
-              <CopyField value={me.inboundAddress} label="Adresse de capture" />
-              <details className="text-xs text-muted-foreground">
+              {me.inboundAddress ? (
+                <>
+                  <p>Transférez un email à cette adresse, ou mettez-la en copie d'un échange avec un client : il arrive dans
+                    {' '}<Link to="/emails" className="font-semibold text-accent">Emails</Link>, où il peut devenir un projet en un clic. Pratique
+                    sans boîte branchée, ou depuis le téléphone.</p>
+                  <CopyField value={me.inboundAddress} label="Adresse de capture" />
+                </>
+              ) : (
+                <p>Un relais d'emails ou un script peut aussi déposer des messages dans <Link to="/emails" className="font-semibold text-accent">Emails</Link>,
+                  où ils deviennent un projet en un clic.</p>
+              )}
+              <details className="text-xs text-muted-foreground" open={!me.inboundAddress}>
                 <summary className="cursor-pointer font-semibold">Pour un relais d'emails ou un script</summary>
                 <p className="mt-2">Le même point d'entrée accepte un POST, en JSON (<code className="font-mono">from, to, subject, text, html</code>) ou en
                   message brut (<code className="font-mono">message/rfc822</code>) :</p>
