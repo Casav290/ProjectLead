@@ -67,7 +67,7 @@ export async function buildReport(db: Db, projectId: string, message?: string | 
   lines.push('', p.client_update_signature?.trim() || `Cordialement,\n${p.account_name}`)
   const text = lines.join('\n')
 
-  const color = (s: string) => s === 'done' ? '#15803d' : s === 'in_progress' ? '#3b4fd8' : s === 'blocked' ? '#c2410c' : '#67625c'
+  const color = (s: string) => s === 'done' ? '#15803d' : s === 'in_progress' ? '#8e2a6b' : s === 'blocked' ? '#c2410c' : '#67625c'
   const rows = stages.map((s) => `<tr>
     <td style="padding:8px 10px;border-bottom:1px solid #eeebe7;border-left:3px solid ${color(s.status)}"><strong>${esc(s.name)}</strong>
       ${s.client_note ? `<div style="color:#67625c;font-size:13px;margin-top:2px">${esc(s.client_note)}</div>` : ''}</td>
@@ -76,7 +76,7 @@ export async function buildReport(db: Db, projectId: string, message?: string | 
   const html = layout(p.name,
     htmlParagraphs(`Bonjour,\n\n${message?.trim() || `Voici où en est le projet « ${p.name} ».`}`) +
     `<p style="margin:0 0 6px;font-weight:700">Avancement : ${progress} %</p>
-     <div style="background:#f2f0ee;height:8px;margin-bottom:16px"><div style="background:#3b4fd8;height:8px;width:${progress}%"></div></div>
+     <div style="background:#f2f0ee;height:8px;margin-bottom:16px"><div style="background:#8e2a6b;height:8px;width:${progress}%"></div></div>
      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7e4e0;font-size:14px">${rows}</table>` +
     (update ? `<p style="margin:16px 0 4px;font-weight:700">Dernier point</p>${htmlParagraphs(update.body)}` : '') +
     htmlParagraphs(p.client_update_signature?.trim() || `Cordialement,\n${p.account_name}`),

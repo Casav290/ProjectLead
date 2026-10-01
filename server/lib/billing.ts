@@ -34,7 +34,7 @@ export type Draft = {
   timeEntryIds: string[]
   stageIds: string[]
   totalCents: number
-  existing: { status: string; invoice_id: string | null; invoice_url: string | null } | null
+  existing: { status: string; invoice_id: string | null; invoice_url: string | null; amount_cents: number } | null
 }
 
 /** Ce que contiendrait la facture du mois, sans rien envoyer. */
@@ -46,7 +46,7 @@ export async function draftFor(db: Db, projectId: string, period: string): Promi
   if (!p) throw new HttpError(404, 'not_found')
   const end = periodEnd(period)
   const client = p.client_id ? (await db.query('select * from clients where id = $1', [p.client_id])).rows[0] : null
-  const existing = (await db.query('select status, invoice_id, invoice_url from invoice_runs where project_id = $1 and period = $2',
+  const existing = (await db.query('select status, invoice_id, invoice_url, amount_cents from invoice_runs where project_id = $1 and period = $2',
     [projectId, period])).rows[0] ?? null
   const lines: Draft['lines'] = []
   let timeEntryIds: string[] = []

@@ -8,7 +8,7 @@ import type { Person } from '../lib/types'
 
 /**
  * Composants communs, au visuel « Trait net » de la famille Lead (repris de CRMlead) :
- * angles vifs, aucune ombre, Archivo, une seule couleur d'action (indigo pour ProjectLead).
+ * angles vifs, aucune ombre, Archivo, une seule couleur d'action (prune pour ProjectLead).
  */
 
 type Variant = 'primary' | 'outline' | 'ghost' | 'danger'

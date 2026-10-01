@@ -13,7 +13,7 @@ type PreviewProject = {
   project: { id: string; name: string; code: string | null; billing_mode: string; currency: string; vat_code: string }
   client: { id: string; name: string } | null
   lines: Line[]; total_cents: number
-  existing: { status: 'created' | 'empty' | 'error'; invoice_id: string | null; invoice_url: string | null } | null
+  existing: { status: 'created' | 'empty' | 'error'; invoice_id: string | null; invoice_url: string | null; amount_cents: number } | null
 }
 type RunResult = { projectId: string; project: string; status: 'created' | 'empty' | 'error' | 'skipped'
   invoiceId?: string; invoiceUrl?: string; amountCents?: number; error?: string }
@@ -177,7 +177,7 @@ function PreviewCard({ p, checked, selectable, onToggle, result }:
           {done ? <Badge tone="ok">Déjà facturé</Badge>
             : empty ? <Badge>Rien à facturer</Badge>
             : p.existing?.status === 'error' ? <Badge tone="late">Dernier essai en erreur</Badge> : null}
-          <span className="font-bold tabular-nums">{money(p.total_cents, p.project.currency)}</span>
+          <span className="font-bold tabular-nums">{money(done ? p.existing!.amount_cents : p.total_cents, p.project.currency)}</span>
         </div>
       </header>
 

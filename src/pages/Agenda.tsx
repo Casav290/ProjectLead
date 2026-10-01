@@ -56,7 +56,7 @@ export default function Agenda() {
     if (!data) return []
     const list: Item[] = [
       ...data.events.map((e) => ({ key: `e${e.id}`, type: 'event' as const, title: e.title, start: new Date(e.starts_at), end: new Date(e.ends_at), allDay: e.all_day,
-        color: e.project_color ?? '#3b4fd8', sub: [e.project_name ?? e.client_name, e.location].filter(Boolean).join(' · '), ev: e })),
+        color: e.project_color ?? '#8e2a6b', sub: [e.project_name ?? e.client_name, e.location].filter(Boolean).join(' · '), ev: e })),
       ...data.tasks.map((t) => ({ key: `t${t.id}`, type: 'task' as const, title: t.title, start: local(t.due_date.slice(0, 10)), end: local(t.due_date.slice(0, 10)),
         allDay: true, color: t.project_color, sub: t.project_name, done: !!t.completed_at, link: `/projets/${t.project_id}?tache=${t.id}` })),
       ...data.stages.map((s) => ({ key: `s${s.id}`, type: 'stage' as const, title: `Étape : ${s.name}`, start: local(s.due_date.slice(0, 10)), end: local(s.due_date.slice(0, 10)),
