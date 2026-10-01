@@ -95,9 +95,10 @@ export async function runJobs(force = false) {
 
 let running = false
 let last = 0
-export function runJobsIfDue() {
+/** Rend la promesse du passage lancé (à confier à `waitUntil` sur Vercel), ou rien. */
+export function runJobsIfDue(): Promise<unknown> | undefined {
   if (process.env.JOBS_DISABLED === '1' || running || Date.now() - last < 60_000) return
   running = true
   last = Date.now()
-  runJobs().catch((e) => console.error('[tâches]', e)).finally(() => { running = false })
+  return runJobs().catch((e) => console.error('[tâches]', e)).finally(() => { running = false })
 }

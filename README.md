@@ -65,6 +65,14 @@ eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Co
 `POST /api/tasks/run`, à appeler par un cron : boîtes mail, agendas, suivis automatiques, rappels
 d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine affiché de l'adresse de capture).
 
+## Mise en ligne
+
+Comme InvoiceLead : Vercel (région `cle1`) et Neon (projet `gentle-frog-61717092`, branche `production`,
+base `projectlead`, `aws-us-east-2`). `scripts/vercel-build.mjs` migre la base (production seulement),
+construit l'interface et empaquette le serveur en une fonction (Build Output API). Une tâche Vercel
+appelle `/api/tasks/run` chaque matin avec `CRON_SECRET`. Variables Vercel : `DATABASE_URL` (chaîne
+« pooled » de Neon), `APP_SECRET`, `CRON_SECRET` ; `PUBLIC_URL` est déduite de l'adresse Vercel si absente.
+
 ## Recevoir des emails sans boîte branchée
 
 Chaque entreprise a une adresse de capture : `POST /api/inbound/<jeton>`, en JSON

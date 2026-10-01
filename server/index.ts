@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
+import { waitUntil } from '@vercel/functions'
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { hashToken, SESSION_COOKIE } from './auth.js'
@@ -44,7 +45,12 @@ app.onError((err, c) => {
 })
 
 // Les tâches de fond profitent du trafic (relances, boîtes mail, facturation du mois…).
-app.use('*', async (c, next) => { runJobsIfDue(); await next() })
+// Sur Vercel, `waitUntil` laisse la fonction finir le passage après la réponse.
+app.use('*', async (c, next) => {
+  const jobs = runJobsIfDue()
+  if (jobs && process.env.VERCEL) waitUntil(jobs)
+  await next()
+})
 
 // ------------------------------------------------------------------ routes ouvertes
 
@@ -59,12 +65,15 @@ app.route('/api/v1', v1Routes)
 
 app.get('/api/health', (c) => c.json({ ok: true }))
 
-/** Tâches planifiées appelables de l'extérieur (cron du déploiement). */
-app.post('/api/tasks/run', async (c) => {
-  if (!process.env.TASKS_SECRET || c.req.header('authorization') !== `Bearer ${process.env.TASKS_SECRET}`)
-    return c.json({ error: 'unauthenticated' }, 401)
+/** Tâches planifiées appelables de l'extérieur : cron Vercel (GET, `CRON_SECRET`) ou autre (`TASKS_SECRET`). */
+const runTasks = async (c: any) => {
+  const auth = c.req.header('authorization')
+  const ok = [process.env.TASKS_SECRET, process.env.CRON_SECRET].some((s) => s && auth === `Bearer ${s}`)
+  if (!ok) return c.json({ error: 'unauthenticated' }, 401)
   return c.json(await runJobs(true))
-})
+}
+app.post('/api/tasks/run', runTasks)
+app.get('/api/tasks/run', runTasks)
 
 // ------------------------------------------------------------------ session
 
@@ -109,7 +118,7 @@ if (existsSync(dist)) {
 }
 
 const port = Number(process.env.PORT ?? 3002)
-if (!process.env.NO_LISTEN) {
+if (!process.env.NO_LISTEN && !process.env.VERCEL) {
   serve({ fetch: app.fetch, port }, () => console.log(`[projectlead] API sur http://localhost:${port}`))
 }
 
