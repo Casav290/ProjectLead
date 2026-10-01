@@ -1,0 +1,32 @@
+name: Vérifier le site en ligne
+
+on:
+  push:
+    branches: [main, claude/gracious-goldberg-in79y0]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      URL: https://br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech
+    steps:
+      - name: Santé de l'API
+        run: |
+          for i in 1 2 3 4 5 6; do
+            body=$(curl -s -m 60 "$URL/api/health") && echo "$body" && echo "$body" | grep -q '"ok":true' && exit 0
+            echo "essai $i : $body"; sleep 10
+          done
+          exit 1
+      - name: Page de connexion
+        run: curl -s -m 30 "$URL/login" | tee page.html | grep -q "<title>ProjectLead</title>"
+      - name: Fichier de l'interface
+        run: |
+          js=$(grep -o 'assets/index-[^"]*\.js' page.html | head -1)
+          test -n "$js"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL/$js"); echo "$js → $code"; test "$code" = 200
+      - name: Session refusée sans connexion
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/me")" = 401
