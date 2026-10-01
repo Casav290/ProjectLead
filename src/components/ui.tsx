@@ -119,7 +119,11 @@ export function Modal({ open, onClose, title, children, wide, footer }:
   useEffect(() => {
     if (!open) return
     const before = document.activeElement as HTMLElement | null
-    setTimeout(() => box.current?.querySelector<HTMLElement>('input,textarea,select')?.focus(), 30)
+    // Premier champ, sauf si l'on écrit déjà ailleurs dans la fenêtre : la saisie ne doit pas sauter de champ.
+    setTimeout(() => {
+      if (!box.current || box.current.contains(document.activeElement)) return
+      box.current.querySelector<HTMLElement>('input,textarea,select')?.focus()
+    }, 30)
     return () => before?.focus?.()
   }, [open])
   if (!open) return null
