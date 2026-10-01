@@ -30,6 +30,8 @@ Comme InvoiceLead : `/login` et `/signup` partent tout droit vers le Compte Lead
 Trait net, ocre). L'inscription locale est fermée quand le Compte Lead est branché (`403
 signup_via_lead`). Formule gratuite : refus avant de créer quoi que ce soit. L'e-mail et le mot de
 passe restent en secours sur `/login?acces=email` pour les accès créés avant le Compte Lead.
+Chaque jour, la formule de chaque entreprise liée est relue au Compte Lead (`refreshLeadPlans`) :
+sans accès, ses sessions sont fermées. Un Compte Lead injoignable ne ferme rien.
 
 ## Accès à GitHub depuis le VPS
 
