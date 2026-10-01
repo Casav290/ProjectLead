@@ -12,7 +12,8 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: 'fr-CH' })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+// Un 401 avant connexion (lecture de la session) est attendu : ce n'est pas une erreur de l'application.
+page.on('console', (m) => m.type() === 'error' && !/status of 401/.test(m.text()) && errors.push(m.text()))
 // Le texte visible de chaque écran, aussi en annotation GitHub (lisible par l'API, contrairement aux fichiers).
 const shot = async (n) => {
   await page.screenshot({ path: `captures/${n}.png`, fullPage: true })
