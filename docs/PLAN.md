@@ -30,9 +30,9 @@ Version 1, 01.10.2026.
 
 ## Ce qui bloque
 
-Les étapes 2 à 4 demandent les comptes Porkbun, Resend et l'administration de crmlead.io. Mon
-conteneur n'y a pas accès (réseau filtré). La session InvoiceLead a fait les mêmes gestes pour
-invoicelead.io : je lui ai demandé comment, pour refaire pareil.
+Les étapes 2 et 3 se font depuis Claude Desktop sur l'ordinateur d'Ève, comme pour InvoiceLead :
+marche à suivre dans `docs/DESKTOP.md`. L'étape 4 demande l'administration de crmlead.io. Mon
+conteneur n'atteint ni Porkbun ni Resend (réseau filtré).
 
 ## Publier une nouvelle version
 
