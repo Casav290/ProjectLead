@@ -6,6 +6,8 @@ import { PublicShell, publicError, publicFetch } from './Booking'
 type Managed = { name: string; email: string; starts_at: string; ends_at: string; status: 'confirmed' | 'cancelled'; type_name: string
   location: string; account_name: string; timezone: string; slug: string }
 
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
 /** Le lien reçu par email : voir son rendez-vous et l'annuler. */
 export default function BookingManage() {
   const { token = '' } = useParams()
@@ -41,7 +43,7 @@ export default function BookingManage() {
         </div>
         <dl className="mt-5 space-y-3 text-sm">
           <div><dt className="text-xs text-muted-foreground">Quand</dt>
-            <dd className={cancelled ? 'line-through' : 'font-bold'}><span className="inline-block first-letter:uppercase">{when({ dateStyle: 'full' }).format(new Date(b.starts_at))}</span>,
+            <dd className={cancelled ? 'line-through' : 'font-bold'}>{cap(when({ dateStyle: 'full' }).format(new Date(b.starts_at)))},
               {' '}{when({ timeStyle: 'short' }).format(new Date(b.starts_at))} – {when({ timeStyle: 'short' }).format(new Date(b.ends_at))}</dd></div>
           {b.location && <div><dt className="text-xs text-muted-foreground">Où</dt><dd className="[overflow-wrap:anywhere]">{b.location}</dd></div>}
           <div><dt className="text-xs text-muted-foreground">Avec</dt><dd>{b.account_name}</dd></div>
