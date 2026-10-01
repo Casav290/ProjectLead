@@ -124,7 +124,8 @@ function ProjectCards({ rows }: { rows: ProjectSummary[] }) {
 /** Le portefeuille de projets : filtres, tableau ou cartes. */
 export default function Projects() {
   const [params, setParams] = useSearchParams()
-  const [creating, setCreating] = useState(false)
+  // « Nouveau projet pour ce client » (fiche client) arrive avec ?nouveau=1&client=<id>.
+  const [creating, setCreating] = useState(params.get('nouveau') === '1')
   const status = params.get('statut') ?? ''
   const client = params.get('client') ?? ''
   const mine = params.get('miens') === '1'
@@ -187,7 +188,7 @@ export default function Projects() {
                 Un projet réunit étapes, tâches, temps passé et suivi du client.</Empty>
         ) : view === 'table' ? <ProjectTable rows={data} /> : <ProjectCards rows={data} />}
 
-      <NewProjectDialog open={creating} onClose={() => setCreating(false)} />
+      <NewProjectDialog open={creating} onClose={() => setCreating(false)} clientId={params.get('nouveau') === '1' ? client || undefined : undefined} />
     </>
   )
 }

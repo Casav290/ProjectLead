@@ -74,11 +74,11 @@ export default function Dashboard() {
   ]
   const c = data.counts
   const tiles = [
-    { label: 'Projets actifs', value: c.active, to: '/projets' },
+    { label: 'Projets actifs', value: c.active, to: '/projets?statut=active' },
     { label: 'À surveiller', value: c.at_risk, to: '/projets', tone: c.at_risk ? 'warn' : '' },
     { label: 'En retard', value: c.late, to: '/projets', tone: c.late ? 'late' : '' },
     { label: 'Emails à trier', value: c.inbox, to: '/emails', tone: c.inbox ? 'accent' : '' },
-    { label: 'Demandes à qualifier', value: c.leads, to: '/projets', tone: c.leads ? 'accent' : '' },
+    { label: 'Demandes à qualifier', value: c.leads, to: '/projets?statut=lead', tone: c.leads ? 'accent' : '' },
   ]
 
   return (

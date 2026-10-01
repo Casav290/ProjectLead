@@ -479,7 +479,7 @@ function Bookings() {
   const past = (data ?? []).filter((b) => Date.parse(b.starts_at) < now)
   const list = [...upcoming, ...past].slice(0, 15)
   return (
-    <Card title="Rendez-vous pris" action={<Link to="/reglages" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Types de rendez-vous</Link>}>
+    <Card title="Rendez-vous pris" action={<Link to="/reglages/rendez-vous" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Types de rendez-vous</Link>}>
       {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} /></div> : list.length === 0 ? (
         <p className="px-4 py-6 text-sm text-muted-foreground">Aucun rendez-vous pris en ligne ces 30 derniers jours. Partagez votre page de prise de rendez-vous (Réglages) pour en recevoir.</p>
       ) : (
