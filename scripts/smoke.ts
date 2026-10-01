@@ -100,9 +100,16 @@ const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 20
 const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }
 // Ce que le faux Compte Lead mettra dans le prochain jeton d'identité (connexion de bout en bout).
 let nextIdClaims: Record<string, unknown> = {}
+// Et ce qu'il répond quand une application relit les droits d'une organisation.
+const entitlementsByOrg: Record<string, unknown> = {}
 const issuerSrv = createServer((req, res) => {
   res.setHeader('content-type', 'application/json')
   if (req.url === '/oauth/jwks') return res.end(JSON.stringify({ keys: [jwk] }))
+  if (req.url?.startsWith('/api/lead-id/v1/entitlements')) {
+    const org = new URL(req.url, 'http://x').searchParams.get('org') ?? ''
+    if (!entitlementsByOrg[org] || req.headers.authorization !== 'Bearer a') { res.statusCode = 404; return res.end('{"error":"org_not_found"}') }
+    return res.end(JSON.stringify({ org, ...(entitlementsByOrg[org] as object) }))
+  }
   if (req.url === '/oauth/token' && req.method === 'POST') {
     const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
     const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', exp: Math.floor(Date.now() / 1000) + 300, ...nextIdClaims })
@@ -561,6 +568,7 @@ check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.a
 check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 check('l’entreprise Lead devient l’espace ProjectLead', r.status === 200 && r.body.account?.name === `Entreprise lead-org-${stamp}`, r.body)
+const proSession = ll.session
 const freeOrg = `free-org-${stamp}`
 ll = await leadLogin((n) => lead(n, false, freeOrg))
 check('formule gratuite : refus, lien vers la mise à niveau', ll.location?.startsWith('/login?erreur=formule&upgrade=') && !ll.session, ll)
@@ -572,6 +580,16 @@ ll = await leadLogin((n) => ({ ...lead(n, true), nonce: 'autre' }))
 check('jeton d’un autre départ (nonce) → erreur, pas de session', ll.location === '/login?erreur=lead' && !ll.session, ll)
 r = await app.request('http://localhost/auth/lead/callback?code=c&state=x')
 check('retour sans départ → erreur de session', r.headers.get('location') === '/login?erreur=session')
+const { refreshLeadPlans } = await import('../server/lib/jobs.js')
+entitlementsByOrg[`lead-org-${stamp}`] = { plan: { code: 'pro', name: 'Pro', rank: 10, seats: 1 }, apps: { projectlead: { access: true } }, subscriptions: [] }
+let plans = await refreshLeadPlans()
+r = await new Client().req('GET', '/api/me', undefined, { cookie: proSession })
+check('formule relue chaque jour : Pro, la session reste ouverte', r.status === 200 && plans.checked >= 1 && plans.closed === 0, { plans, status: r.status })
+entitlementsByOrg[`lead-org-${stamp}`] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
+plans = await refreshLeadPlans()
+r = await new Client().req('GET', '/api/me', undefined, { cookie: proSession })
+const planNow = (await pool.query('select plan from accounts where lead_org = $1', [`lead-org-${stamp}`])).rows[0]?.plan
+check('formule résiliée : sessions fermées, formule notée', r.status === 401 && plans.closed >= 1 && planNow === 'free', { plans, status: r.status, planNow })
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
