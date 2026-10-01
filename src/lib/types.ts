@@ -7,7 +7,7 @@ export type Me = {
   unread: number; inbox: number
   running: { id: string; started_at: string; project_id: string; project_name: string; task_id: string | null; task_title: string | null } | null
   features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean }
-  inboundAddress: string; inboundUrl: string; icalUrl: string
+  inboundAddress: string | null; inboundUrl: string; icalUrl: string
 }
 
 export type Person = { id: string; name: string; color: string; email?: string; role?: string }
