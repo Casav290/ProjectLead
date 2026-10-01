@@ -7,6 +7,7 @@ Langue de travail : français. Commits en français, courts.
 
 - `README.md` : pile, démarrage, variables, contrôles.
 - `docs/FONCTIONNALITES.md` : les fonctions et ce qui vient de chaque leader du marché et de CRMlead.
+- `docs/PASSATION.md` : à lire en premier en reprenant le projet (état, hébergement, ce qui reste).
 - `docs/PLAN.md` : décisions, étapes, état, ce qui bloque. À tenir à jour.
 - `docs/INTEGRATIONS.md` : CRMlead (adresses, affaires gagnées) et InvoiceLead (facturation mensuelle).
 - Dépôts sœurs : `Casav290/crmlead` (fournisseur du Compte Lead, `docs/LEAD-ID.md`), `Casav290/InvoiceLead`

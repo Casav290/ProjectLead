@@ -21,18 +21,18 @@ Version 1, 01.10.2026.
 
 | Étape | Contenu | Preuve | État |
 |---|---|---|---|
-| 0. Application | Projets, tâches (tableau, liste, Gantt, calendrier), temps, emails → projets, agenda, rendez-vous, suivi client, facturation, CRMlead, équipe | 126 contrôles de bout en bout ; parcours navigateur (12 étapes) ; PR #1 | fait |
+| 0. Application | Projets, tâches (tableau, liste, Gantt, calendrier), temps, emails → projets, agenda, rendez-vous, suivi client, facturation, CRMlead, équipe | 130 contrôles de bout en bout ; parcours navigateur (12 étapes) ; PR #1 et #2 | fait ; contacts InvoiceLead repris comme clients (PR #2) |
 | 1. En ligne | Neon Functions, base migrée au démarrage, contrôle automatique quotidien | Contrôle GitHub « Vérifier le site en ligne » vert (connexion, inscription, accueil, modèles) | fait, adresse provisoire `br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech` |
-| 2. Domaine | `projectlead.io` vers la fonction (domaine personnalisé Neon + DNS Porkbun) | `https://projectlead.io/api/health` répond | en cours : accès Porkbun à obtenir |
-| 3. Emails | Resend : domaine vérifié (DKIM, SPF, DMARC chez Porkbun), `RESEND_API_KEY` dans la fonction | Code et contrôle faits (faux Resend) ; reste un premier envoi réel | en cours : accès Resend à obtenir |
-| 4. Compte Lead | ProjectLead déclaré dans CRMlead (secret, adresse de retour `https://projectlead.io/auth/lead/callback`), variables `LEAD_ID_*` | Connexion réelle avec le compte d'Ève | à faire : accès administrateur crmlead.io |
+| 2. Domaine | `projectlead.io` vers la fonction (domaine personnalisé Neon + DNS Porkbun) | `https://projectlead.io/api/health` répond | confié à Cowork (`docs/DESKTOP.md`) ; `PUBLIC_URL` déjà à `https://projectlead.io` ; à vérifier |
+| 3. Emails | Resend : domaine vérifié (DKIM, SPF, DMARC chez Porkbun), `RESEND_API_KEY` dans la fonction | Code et contrôle faits (faux Resend) ; reste un premier envoi réel | clé posée dans la fonction (01.10) ; `EMAIL_FROM` = `suivi@invoicelead.io` (choix d'Ève, domaine déjà vérifié) ; reste le premier envoi réel |
+| 4. Compte Lead | ProjectLead déclaré dans CRMlead (secret, adresse de retour `https://projectlead.io/auth/lead/callback`), variables `LEAD_ID_*` | Connexion réelle avec le compte d'Ève | secret créé par Cowork et posé avec les 5 `LEAD_ID_*` (01.10) ; écran de connexion à entrée unique en ligne ; reste un essai réel une fois le domaine branché |
 | 5. Liens famille | Clés CRMlead et InvoiceLead posées dans l'entreprise d'Ève ; `projectlead` en `live` dans `lead_apps` de CRMlead | Une adresse reprise de CRMlead, un brouillon dans InvoiceLead | à faire après l'étape 4 |
 
 ## Ce qui bloque
 
-Les étapes 2 et 3 se font depuis Claude Desktop sur l'ordinateur d'Ève, comme pour InvoiceLead :
-marche à suivre dans `docs/DESKTOP.md`. L'étape 4 demande l'administration de crmlead.io. Mon
-conteneur n'atteint ni Porkbun ni Resend (réseau filtré).
+Le domaine projectlead.io (étape 2) : Cowork le branche depuis l'ordinateur d'Ève (Porkbun, Resend).
+Tant qu'il ne répond pas, la connexion par Compte Lead échoue au retour (adresse de retour sur
+projectlead.io). Passation complète : `docs/PASSATION.md`.
 
 ## Publier une nouvelle version
 

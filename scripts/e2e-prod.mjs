@@ -24,7 +24,9 @@ let ko = 0
 const check = (n, c) => { console.log(`${c ? '::notice title=ok::' : '::error title=échec::'}${n}`); if (!c) ko++ }
 
 await page.goto(URL + '/login'); await page.waitForTimeout(3000); await shot('1-connexion')
-check('écran de connexion', await page.getByRole('button', { name: 'Se connecter' }).isVisible().catch(() => false))
+// Compte Lead branché : son bouton seul ; sinon le formulaire email.
+check('écran de connexion', await page.getByRole('link', { name: 'Se connecter avec mon compte Lead' }).isVisible().catch(() => false)
+  || await page.getByRole('button', { name: 'Se connecter', exact: true }).isVisible().catch(() => false))
 await page.goto(URL + '/signup'); await page.waitForTimeout(1500)
 await page.getByLabel('Votre nom').fill('Contrôle automatique')
 await page.getByLabel('Entreprise').fill(`Contrôle ${stamp}`)
