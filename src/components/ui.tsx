@@ -221,10 +221,10 @@ export function AvatarStack({ people, max = 4, size = 22 }: { people: Pick<Perso
   )
 }
 
-export function Progress({ value, className, tone = 'accent' }: { value: number; className?: string; tone?: 'accent' | 'ok' | 'late' | 'warn' }) {
+export function Progress({ value, className, tone = 'accent', label = 'Avancement' }: { value: number; className?: string; tone?: 'accent' | 'ok' | 'late' | 'warn'; label?: string }) {
   const v = Math.max(0, Math.min(100, value))
   return (
-    <div className={clsx('h-1.5 w-full bg-muted', className)} role="progressbar" aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={clsx('h-1.5 w-full bg-muted', className)} role="progressbar" aria-label={label} aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
       <div className={clsx('h-full', tone === 'accent' && 'bg-accent', tone === 'ok' && 'bg-won', tone === 'late' && 'bg-late', tone === 'warn' && 'bg-soon')} style={{ width: `${v}%` }} />
     </div>
   )
