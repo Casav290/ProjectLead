@@ -40,6 +40,12 @@ export const TASK_COLS = `
   exists (select 1 from task_dependencies d join tasks dt on dt.id = d.depends_on_id where d.task_id = t.id and dt.completed_at is null) as blocked,
   (select coalesce(sum(te.minutes),0)::int from time_entries te where te.task_id = t.id) as minutes_spent`
 
+/** Une tâche n'est lisible que si son projet l'est (projets réservés aux intervenants, RLS de `projects`). */
+const VISIBLE = 'from tasks t join projects p on p.id = t.project_id'
+async function assertVisible(db: Db, taskId: string) {
+  if (!(await db.query(`select 1 ${VISIBLE} where t.id = $1`, [taskId])).rowCount) throw notFound()
+}
+
 const FROM = `from tasks t join projects p on p.id = t.project_id
   left join board_columns bc on bc.id = t.column_id left join stages s on s.id = t.stage_id`
 
@@ -174,7 +180,7 @@ app.post('/', async (c) => {
 app.patch('/:id', async (c) => {
   const b = await body(c, taskSchema.partial().extend({ assignee_ids: z.array(uuid).max(50).optional(), completed: z.boolean().optional() }))
   await tx(c, async (db, ctx) => {
-    const t = (await db.query('select * from tasks where id = $1', [c.req.param('id')])).rows[0]
+    const t = (await db.query(`select t.* ${VISIBLE} where t.id = $1`, [c.req.param('id')])).rows[0]
     if (!t) throw notFound()
     if (b.parent_id && b.parent_id === t.id) throw new HttpError(400, 'invalid_parent')
     const s = setClause(b, TASK_FIELDS, 2)
@@ -202,7 +208,7 @@ app.post('/bulk', async (c) => {
   }) }))
   await tx(c, async (db, ctx) => {
     for (const id of b.ids) {
-      const t = (await db.query('select id, title, project_id from tasks where id = $1', [id])).rows[0]
+      const t = (await db.query(`select t.id, t.title, t.project_id ${VISIBLE} where t.id = $1`, [id])).rows[0]
       if (!t) continue
       if (b.patch.delete) { await db.query('delete from tasks where id = $1', [id]); continue }
       const s = setClause(b.patch, ['priority', 'due_date', 'stage_id'], 2)
@@ -219,7 +225,7 @@ app.post('/bulk', async (c) => {
 
 app.delete('/:id', async (c) => {
   await tx(c, async (db, ctx) => {
-    const t = (await db.query('select project_id, title from tasks where id = $1', [c.req.param('id')])).rows[0]
+    const t = (await db.query(`select t.project_id, t.title ${VISIBLE} where t.id = $1`, [c.req.param('id')])).rows[0]
     if (!t) throw notFound()
     await db.query('delete from tasks where id = $1', [c.req.param('id')])
     await logActivity(db, ctx, t.project_id, 'task_deleted', { title: t.title })
@@ -231,7 +237,7 @@ app.delete('/:id', async (c) => {
 
 app.post('/:id/checklist', async (c) => {
   const b = await body(c, z.object({ label: z.string().trim().min(1).max(300) }))
-  const id = await tx(c, async (db, ctx) => (await db.query(
+  const id = await tx(c, async (db, ctx) => (await assertVisible(db, c.req.param('id')), await db.query(
     `insert into checklist_items (account_id, task_id, label, position)
      values ($1,$2,$3,(select coalesce(max(position),-1)+1 from checklist_items where task_id = $2)) returning id`,
     [ctx.accountId, c.req.param('id'), b.label])).rows[0].id)
@@ -259,6 +265,7 @@ app.post('/:id/dependencies', async (c) => {
   await tx(c, async (db, ctx) => {
     const id = c.req.param('id')
     if (id === b.depends_on_id) throw new HttpError(400, 'self_dependency')
+    await assertVisible(db, id)
     // Refuser un cycle : si `depends_on_id` attend déjà (même indirectement) cette tâche.
     const cycle = (await db.query(
       `with recursive chain(id) as (select depends_on_id from task_dependencies where task_id = $1
@@ -282,7 +289,7 @@ app.delete('/:id/dependencies/:dep', async (c) => {
 app.post('/:id/comments', async (c) => {
   const b = await body(c, z.object({ body: z.string().trim().min(1).max(20000) }))
   const id = await tx(c, async (db, ctx) => {
-    const t = (await db.query('select id, project_id, title, created_by from tasks where id = $1', [c.req.param('id')])).rows[0]
+    const t = (await db.query(`select t.id, t.project_id, t.title, t.created_by ${VISIBLE} where t.id = $1`, [c.req.param('id')])).rows[0]
     if (!t) throw notFound()
     const mentions = await mentionedUsers(db, b.body)
     const r = (await db.query('insert into comments (account_id, project_id, task_id, author_id, body, mentions) values ($1,$2,$3,$4,$5,$6) returning id',

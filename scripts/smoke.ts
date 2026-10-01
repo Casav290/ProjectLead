@@ -13,6 +13,9 @@ import { createServer, type Server } from 'node:http'
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 
+// Une base à part pour les contrôles : ils créent des entreprises à chaque passage.
+if (process.env.TEST_DATABASE_URL) process.env.DATABASE_URL = process.env.TEST_DATABASE_URL
+
 const { migrate } = await import('../server/migrate.js')
 await migrate(() => {})
 const { default: app } = await import('../server/index.js')
@@ -440,6 +443,11 @@ await eve.patch(`/api/projects/${fromMail}`, { visibility: 'members' })
 await eve.del(`/api/projects/${fromMail}/members/${marcId}`)
 r = await marc.get(`/api/projects/${fromMail}`)
 check('projet réservé aux intervenants invisible pour un non-membre', r.status === 404, r.status)
+const hiddenTask = (await eve.get(`/api/tasks?project=${fromMail}`)).body[0].id
+r = await marc.patch(`/api/tasks/${hiddenTask}`, { title: 'vu' })
+check('tâche d’un projet réservé non modifiable par un non-membre', r.status === 404, r.body)
+r = await marc.post(`/api/tasks/${hiddenTask}/comments`, { body: 'vu' })
+check('ni commentable', r.status === 404, r.body)
 
 section('API publique')
 r = await eve.post('/api/api-keys', { name: 'Make' })
