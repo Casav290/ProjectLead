@@ -280,6 +280,23 @@ await eve.patch(`/api/projects/files/${r.body.id}`, { visible_to_client: true })
 r = await new Client().get(`/api/public/portal/${portalToken}`)
 check('fichier partagé visible du client', r.body.files.length === 1)
 
+section('Envoi par Resend')
+const resendGot: any[] = []
+const resendSrv = createServer(async (req, res) => {
+  const b = await readBody(req)
+  resendGot.push({ auth: req.headers.authorization, ...b })
+  res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ id: 're_test' }))
+})
+const resendPort = await listen(resendSrv)
+process.env.RESEND_API_KEY = 're_test_key'
+process.env.RESEND_API_URL = `http://127.0.0.1:${resendPort}/emails`
+r = await eve.post(`/api/projects/${projId}/client-report`, { message: 'Par Resend.' })
+check('suivi envoyé par Resend', r.status === 200 && r.body.via === 'resend', r.body)
+check('Resend : clé, expéditeur, destinataires, HTML', resendGot[0]?.auth === 'Bearer re_test_key' && /via ProjectLead </.test(resendGot[0]?.from)
+  && resendGot[0]?.to?.includes('info@favre.ch') && resendGot[0]?.html?.includes('Avancement'), resendGot[0])
+delete process.env.RESEND_API_KEY; delete process.env.RESEND_API_URL
+resendSrv.close()
+
 section('Automatisations')
 r = await eve.post('/api/automations', { name: 'Clore l’étape', trigger: 'task_completed', action: 'complete_stage', project_id: projId })
 check('règle créée', r.status === 201)
