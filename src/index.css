@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* ProjectLead — visuel « Trait net » v1, 23.09.2026, commun à toutes les applications Lead.
+   Source : ~/partage/Quantum Liquid LLC/Trait-net/ (TRAIT-NET.md). Angles vifs, aucune ombre,
+   une seule police (Archivo), une seule couleur d'action : celle de l'app. Format HSL sans fonction. */
+
+:root {
+  /* Fonds et encres */
+  --background:        36 12% 92%;   /* #eceae7 fond d'application, derrière le panneau */
+  --foreground:        30 4% 10%;    /* #1b1a19 */
+  --card:              0 0% 100%;
+  --card-foreground:   30 4% 10%;
+  --popover:           0 0% 100%;
+  --popover-foreground:30 4% 10%;
+  --muted:             30 13% 94%;   /* #f2f0ee */
+  --muted-foreground:  33 5% 38%;    /* #67625c — 4,5:1 même sur fonds teintés (bêta-test D11, D4-4) */
+  --border:            34 13% 89%;   /* #e7e4e0 trait de cellule */
+  --input:             33 10% 79%;   /* #cfcac4 trait marqué : champs, panneau */
+  --head:              30 20% 96%;   /* #f7f5f3 en-tête de tableau, pied */
+
+  /* Action : la couleur de l'app. Scanlead agit en bleu, CRMlead en vert canard, InvoiceLead en prune, ProjectLead en ocre
+     (complémentaire du bleu de Scanlead ; l'orange plus rouge et le rouge restent aux statuts). */
+  --primary:           41 100% 30%;  /* #9a6a00 ocre — 4,7:1 sur blanc */
+  --primary-foreground:0 0% 100%;
+  --accent:            41 100% 30%;  /* #9a6a00 */
+  --accent-foreground: 0 0% 100%;
+  --accent-dark:       41 100% 24%;  /* #7a5300, survol */
+  --accent-light:      39 59% 63%;   /* #d9b36a */
+  --accent-veil:       41 71% 95%;   /* #fbf5e8 */
+  --ring:              41 100% 30%;
+
+  /* Marque : même couleur, dans le carré « CL » */
+  --brand:             41 100% 30%;  /* #9a6a00 */
+
+  /* Voile des fenêtres */
+  --marine:            30 4% 10%;
+  --marine-deep:       30 4% 10%;
+
+  /* Statuts. Le rouge dit l'urgence, jamais l'issue. */
+  --won:               142 72% 29%;  /* #15803d */
+  --late:              0 74% 42%;    /* #b91c1c */
+  --soon:              17 88% 40%;   /* #c2410c — 4,5:1 minimum (bêta-test D11) */
+  --idle:              33 5% 32%;    /* #57534e — texte « Perdu », « En veille » (bêta-test D5-5) */
+  --won-foreground:    0 0% 100%;
+  --late-foreground:   0 0% 100%;
+
+  /* Typographie : Archivo partout, titres en 800 serrés */
+  --font-display: Archivo, system-ui, sans-serif;
+  --font-sans:    Archivo, system-ui, sans-serif;
+  --font-mono:    Menlo, ui-monospace, monospace;
+  --tracking-display: -0.025em;
+
+  /* Formes : aucune */
+  --radius:    0px;
+  --radius-sm: 0px;
+  --radius-lg: 0px;
+  --spacing:   0.25rem;
+
+  /* Mouvement */
+  --ease:      cubic-bezier(.2,.8,.3,1);
+  --dur-micro: 120ms;
+  --dur-panel: 200ms;
+}
+
+/* Etiquettes libres : palette Notion, identique a Scanlead */
+:root {
+  --tag-red-bg:#FBE4E4;    --tag-red-text:#C4554D;
+  --tag-orange-bg:#FAEBDD; --tag-orange-text:#D9730D;
+  --tag-yellow-bg:#FBF3DB; --tag-yellow-text:#CB912F;
+  --tag-green-bg:#DDEDEA;  --tag-green-text:#448361;
+  --tag-blue-bg:#DDEBF1;   --tag-blue-text:#337EA9;
+  --tag-purple-bg:#EAE4F2; --tag-purple-text:#9065B0;
+  --tag-pink-bg:#F4DFEB;   --tag-pink-text:#C14C8A;
+  --tag-brown-bg:#EEE0DA;  --tag-brown-text:#9F6B53;
+}
+
+@layer base {
+  * { border-color: hsl(var(--border)); }
+  html, body, #root { height: 100%; }
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2 { letter-spacing: var(--tracking-display); font-weight: 800; }
+  h3 { font-weight: 700; }
+  ::selection { background: hsl(var(--accent-veil)); }
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+  /* Sur iPhone, un champ écrit en dessous de 16 px fait zoomer toute la page au
+     moment où on le touche, et elle ne revient pas d'elle-même. */
+  /* Au doigt, quelle que soit la largeur : un iPhone en paysage fait 844 px. */
+  @media (max-width: 640px), (pointer: coarse) {
+    :is(input, select, textarea):is(.text-xs, .text-sm) { font-size: 16px !important; }
+  }
+  @media (max-width: 640px) {
+
+    /* Voir TableStack : chaque ligne devient une fiche, chaque cellule une ligne
+       « colonne … valeur ». */
+    .table-stack table { min-width: 0 !important; }
+    .table-stack thead { display: none; }
+    .table-stack tbody tr {
+      display: block; margin-bottom: 0.5rem; padding: 0.5rem 0.75rem;
+      border: 1px solid hsl(var(--border)); border-radius: 0.5rem; background: hsl(var(--card));
+    }
+    .table-stack tbody td {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+      max-width: none !important; white-space: normal !important;
+      padding: 0.2rem 0 !important; text-align: right !important; border: 0 !important;
+    }
+    .table-stack tbody td::before {
+      content: attr(data-label); flex-shrink: 0; text-align: left;
+      font-size: 0.75rem; color: hsl(var(--muted-foreground));
+    }
+    .table-stack tbody td[data-label=""] { justify-content: flex-start; font-weight: 600; text-align: left !important; }
+    .table-stack tbody td[data-label=""]::before { content: none; }
+  }
+  @media (max-width: 1024px) {
+
+    /* Le Tableau des leads s'empile dès la tablette : ses colonnes éditables ne tiennent pas
+       en 820 px sans couper étapes et montants (bêta-test D5-2). */
+    .table-stack-wide table { min-width: 0 !important; }
+    .table-stack-wide thead { display: none; }
+    .table-stack-wide tbody tr {
+      display: block; margin-bottom: 0.5rem; padding: 0.5rem 0.75rem;
+      border: 1px solid hsl(var(--border)); border-radius: 0.5rem; background: hsl(var(--card));
+    }
+    .table-stack-wide tbody td {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+      max-width: none !important; white-space: normal !important;
+      padding: 0.2rem 0 !important; text-align: right !important; border: 0 !important;
+    }
+    .table-stack-wide tbody td::before {
+      content: attr(data-label); flex-shrink: 0; text-align: left;
+      font-size: 0.75rem; color: hsl(var(--muted-foreground));
+    }
+    .table-stack-wide tbody td[data-label=""] { justify-content: flex-start; font-weight: 600; text-align: left !important; }
+    .table-stack-wide tbody td[data-label=""]::before { content: none; }
+  }
+}
+
+@layer components {
+  /* L'ocre est réservé à ce qui fait avancer un projet. Jamais un statut. */
+  .btn-accent  { @apply bg-accent text-accent-foreground hover:brightness-110; }
+  .btn-primary { @apply bg-primary text-primary-foreground hover:brightness-125; }
+  .card-lead   { @apply bg-card border border-border; }
+  /* Titres « display » : Archivo 800 serré, comme le h1 de l'exemple Trait net. */
+  .font-display { font-weight: 800; letter-spacing: var(--tracking-display); }
+}
+
+/* Bandeau de retard : rouge = urgence, jamais l'issue d'un lead. */
+.stripe-late  { box-shadow: inset 3px 0 0 0 hsl(var(--late)); }
+.stripe-today { box-shadow: inset 3px 0 0 0 hsl(var(--soon)); }
+.stripe-ok    { box-shadow: inset 3px 0 0 0 hsl(var(--accent-light)); }
+
+/* Tablette et téléphone : un champ à moins de 16 px fait zoomer Safari au moindre toucher (bêta-test D10). */
+@media (pointer: coarse), (max-width: 1024px) {
+  /* Seulement les champs plus petits : le titre de la fiche (text-3xl) gardait 16 px (bêta-test A3-4). */
+  :is(input, select, textarea):not(.text-base, .text-lg, .text-xl, .text-2xl, .text-3xl, .text-4xl) { font-size: 16px !important; }
+}
+
+/* Trait net : les tableaux sont des grilles de cellules. En-têtes en petites capitales
+   espacées sur fond clair, traits verticaux discrets. Sélecteurs sous `.table-stack` :
+   ils l'emportent sur les utilitaires des <th> sans toucher chaque tableau. */
+@media (min-width: 641px) {
+  .table-stack thead th {
+    background: hsl(var(--head)); border-bottom: 1px solid hsl(var(--input));
+    border-right: 1px solid #eeebe7; padding-top: 10px; padding-bottom: 10px;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+  .table-stack thead th:first-child, .table-stack tbody td:first-child { padding-left: 14px; }
+  .table-stack thead th:last-child { border-right: 0; }
+  .table-stack tbody td { border-bottom: 1px solid #eeebe7; border-right: 1px solid #f4f1ee; }
+  .table-stack tbody td:last-child { border-right: 0; }
+  .table-stack tbody tr:hover { background: hsl(var(--accent-veil)); }
+}
+
+/* Tableau (kanban) : colonnes qui défilent à l'horizontale, sans faire déborder la page. */
+.board-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+.clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
