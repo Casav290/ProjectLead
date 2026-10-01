@@ -156,7 +156,7 @@ export default function Portal() {
               <span className="text-sm font-semibold">Avancement</span>
               <span className="font-display text-2xl font-extrabold tabular-nums">{data.progress} %</span>
             </div>
-            <div className="mt-1.5 h-2.5 bg-muted" role="progressbar" aria-valuenow={data.progress} aria-valuemin={0} aria-valuemax={100}>
+            <div className="mt-1.5 h-2.5 bg-muted" role="progressbar" aria-label="Avancement du projet" aria-valuenow={data.progress} aria-valuemin={0} aria-valuemax={100}>
               <div className="h-full bg-accent" style={{ width: `${data.progress}%` }} />
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">

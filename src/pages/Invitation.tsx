@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Button, Field, Input, Spinner } from '../components/ui'
 import { errorText } from '../lib/api'
 import { ROLE_LABEL } from '../lib/format'
-import { AuthShell } from './Signup'
+import { AuthShell } from '../components/AuthShell'
 
 type Invite = { email: string; role: string; account: string; hasUser: boolean }
 

@@ -242,7 +242,7 @@ function Portfolio({ currency }: { currency: string }) {
                         <div className="w-full min-w-[140px] max-w-[220px]">
                           <div className="mb-1 flex justify-between text-xs"><span className="tabular-nums">{hours(p.minutes_spent)} / {hours(p.budget_minutes)} h</span>
                             <span className={clsx('font-bold tabular-nums', used > 100 && 'text-late')}>{used} %</span></div>
-                          <Progress value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
+                          <Progress label="Budget d'heures consommé" value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
                         </div>
                       )}
                     </td>

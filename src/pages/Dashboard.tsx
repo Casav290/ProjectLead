@@ -157,7 +157,7 @@ export default function Dashboard() {
                             <span className={clsx('tabular-nums', used !== null && used > 100 && 'font-bold text-late')}>
                               {hours(p.minutes_spent)} h{p.budget_minutes ? ` / ${hours(p.budget_minutes)} h` : ''}</span>
                           </div>
-                          {used !== null ? <Progress value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
+                          {used !== null ? <Progress label="Budget d'heures consommé" value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
                             : <div className="text-[11px] text-muted-foreground">Sans budget d'heures</div>}
                         </div>
                       </Link>
@@ -230,7 +230,7 @@ function WeekCard({ week, capacity }: { week: Dashboard['week']; capacity: numbe
       <div className="px-4 py-3">
         <p className="text-sm"><span className="font-display text-2xl font-extrabold tabular-nums">{hours(total)} h</span>
           <span className="text-muted-foreground"> sur {hours(capacity)} h</span></p>
-        <Progress className="mt-2" value={capacity ? (total / capacity) * 100 : 0} tone={total > capacity ? 'warn' : 'accent'} />
+        <Progress label="Heures de la semaine sur la capacité" className="mt-2" value={capacity ? (total / capacity) * 100 : 0} tone={total > capacity ? 'warn' : 'accent'} />
         <div className="relative mt-4 flex h-24 items-end gap-1.5">
           <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-input" style={{ bottom: `${(perDay / max) * 100}%` }}
                title={`Capacité : ${fmtMinutes(perDay)} par jour`} />

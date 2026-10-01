@@ -136,7 +136,7 @@ function WeekSheet() {
             <thead className="bg-head text-xs text-muted-foreground">
               <tr>
                 <th className="sticky left-0 z-10 bg-head px-3 py-2 text-left font-semibold">Projet / tâche</th>
-                {days.map((d) => <th key={d} className={clsx('w-[74px] px-1 py-2 text-center font-semibold first-letter:uppercase', d === today() && 'text-accent')}>{dayHead(d)}</th>)}
+                {days.map((d) => <th key={d} className={clsx('w-[74px] px-1 py-2 text-center font-semibold first-letter:uppercase', d === today() && 'text-accent-dark')}>{dayHead(d)}</th>)}
                 <th className="w-[70px] px-3 py-2 text-right font-semibold">Total</th>
               </tr>
             </thead>
