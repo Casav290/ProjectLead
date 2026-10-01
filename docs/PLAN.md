@@ -22,7 +22,7 @@ Version 2, 01.10.2026 (soir).
 | Étape | Contenu | Preuve | État |
 |---|---|---|---|
 | 0. Application | Projets, tâches (tableau, liste, Gantt, calendrier), temps, emails → projets, agenda, rendez-vous, suivi client, facturation, CRMlead, équipe | 144 contrôles de bout en bout ; parcours navigateur sur 22 écrans (bureau et téléphone) ; accessibilité WCAG AA sans défaut (axe-core, 20 écrans) | fait ; pages légales, chargement découpé (68 Ko au premier affichage) |
-| 1. En ligne | Neon Functions, base migrée au démarrage, contrôle automatique quotidien, tâches de fond par cron | Contrôle GitHub « Vérifier le site en ligne » vert sur projectlead.io (13 points, rien créé en production) | fait (déploiement 8) ; cron du VPS toutes les 5 min vers `/api/tasks/run` |
+| 1. En ligne | Neon Functions, base migrée au démarrage, contrôle automatique quotidien, tâches de fond par cron | Contrôle GitHub « Vérifier le site en ligne » vert sur projectlead.io (13 points, rien créé en production) | fait (déploiement 7) ; tâches de fond par cron prêtes, à publier (accord d'Ève) |
 | 2. Domaine | `projectlead.io` vers la fonction (domaine personnalisé Neon + DNS Porkbun) | `https://projectlead.io/api/health` répond | fait (01.10), avec et sans www |
 | 3. Emails | Resend, `RESEND_API_KEY` dans la fonction | Premier envoi réel reçu | fait (01.10) : suivi client reçu dans la boîte de réception Gmail d'Ève, depuis `suivi@invoicelead.io` ; passer sur `suivi@projectlead.io` quand le domaine sera vérifié chez Resend |
 | 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10), formule gratuite refusée ; reste l'essai avec une formule Pro |
@@ -30,8 +30,9 @@ Version 2, 01.10.2026 (soir).
 
 ## Ce qui bloque
 
-Rien de technique. Restent des gestes d'Ève : fusionner la PR #2, se connecter avec un Compte Lead en
-formule Pro, poser ses clés CRMlead et InvoiceLead. Détail dans `docs/PASSATION.md`.
+Rien de technique. Restent des gestes d'Ève : accord pour fusionner la PR #2 et publier la dernière
+version (le filtre de sécurité le refuse à un agent), se connecter avec un Compte Lead en formule Pro,
+poser ses clés CRMlead et InvoiceLead. Détail dans `docs/PASSATION.md`.
 
 ## Publier une nouvelle version
 

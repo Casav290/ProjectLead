@@ -44,7 +44,11 @@ Vérifier ensuite chaque fichier par son empreinte sur `raw.githubusercontent.co
 
 - Neon, projet `gentle-frog-61717092`, branche `br-broad-dream-b4d44vqe` (production), base
   `projectlead`, région `aws-us-east-2`. Domaine https://projectlead.io (et www) branché.
-- Fonction Neon `projectlead` (déploiement 8 au 01.10).
+- Fonction Neon `projectlead` : déploiement 7 (01.10), paquet du commit `ddb277a` (connexion comme
+  InvoiceLead, pages légales, accessibilité, chargement découpé). La version suivante (jetons de
+  tâches, `server/index.ts` et `db/003_task_tokens.sql`) est sur la branche mais **pas publiée** : le
+  filtre de sécurité a refusé qu'un agent envoie le paquet de production. Il faut l'accord écrit d'Ève
+  (« je t'autorise à publier ProjectLead en production ») ou qu'elle publie elle-même.
 - La fonction est un amorçage (`deploy/neon/boot.mjs`) qui charge `deploy/neon/index.mjs` depuis
   GitHub à un commit fixé et vérifie son empreinte. Publier :
   1. `node scripts/neon-build.mjs`, envoyer `deploy/neon/index.mjs` ;
@@ -57,9 +61,12 @@ Vérifier ensuite chaque fichier par son empreinte sur `raw.githubusercontent.co
   `LEAD_ID_APP`, `LEAD_ID_CLIENT_SECRET`, `LEAD_ID_REDIRECT_URI`. `deploy_function` avec
   `environment` remplace **tout** l'environnement, et Neon ne rend que les noms : ne jamais le passer
   sans toutes les valeurs.
-- Tâches de fond : cron du VPS toutes les 5 minutes vers `https://projectlead.io/api/tasks/run`, avec
-  un jeton gardé dans `~/.projectlead-task-secret` ; seule son empreinte est en base (`task_tokens`).
-  Chaque tâche garde son rythme ; `?force=1` lance tout. Journal des échecs : `~/tmp/projectlead-cron.log`.
+- Tâches de fond : aujourd'hui, elles ne tournent qu'au passage de visiteurs. Prêt pour après la
+  publication : jeton dans `~/.projectlead-task-secret`, script `~/bin/projectlead-cron.sh`. Une fois
+  publié : poser l'empreinte (`insert into task_tokens (token_hash, label) values
+  (encode(sha256('<jeton>'::bytea), 'hex'), 'cron du VPS')`), puis ajouter à la crontab
+  `*/5 * * * * /usr/bin/env bash "$HOME/bin/projectlead-cron.sh"`. Chaque tâche garde son rythme ;
+  `?force=1` lance tout. Journal des échecs : `~/tmp/projectlead-cron.log`.
 
 ## Fait le 01.10
 
@@ -74,7 +81,8 @@ Vérifier ensuite chaque fichier par son empreinte sur `raw.githubusercontent.co
 
 ## Ce qui reste, dans l'ordre
 
-1. **Fusion de la PR #2** : clic d'Ève sur « Merge pull request ».
+1. **Fusion de la PR #2 et publication** : le filtre de sécurité refuse les deux à un agent. Accord
+   écrit d'Ève, ou ses clics (« Merge pull request », puis publication du paquet). Ensuite, poser le cron.
 2. **Essai Pro** : se connecter avec un Compte Lead en formule Pro ou Pro+ et arriver sur l'accueil.
    Le compte ouvert dans le Chrome du VPS (eve.gemmet@gmail.com) est en formule gratuite.
 3. **CRMlead en ligne** : vérifier sur crmlead.io que le carré PL est ocre et que ProjectLead apparaît
