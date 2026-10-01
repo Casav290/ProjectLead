@@ -13,9 +13,14 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, loc
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-const shot = (n) => page.screenshot({ path: `captures/${n}.png`, fullPage: true })
+// Le texte visible de chaque écran, aussi en annotation GitHub (lisible par l'API, contrairement aux fichiers).
+const shot = async (n) => {
+  await page.screenshot({ path: `captures/${n}.png`, fullPage: true })
+  const text = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').slice(0, 900)
+  console.log(`::notice title=${n}::${page.url()} | ${text}`)
+}
 let ko = 0
-const check = (n, c) => { console.log(`${c ? '✓' : '✗'} ${n}`); if (!c) ko++ }
+const check = (n, c) => { console.log(`${c ? '::notice title=ok::' : '::error title=échec::'}${n}`); if (!c) ko++ }
 
 await page.goto(URL + '/login'); await page.waitForTimeout(3000); await shot('1-connexion')
 check('écran de connexion', await page.getByRole('button', { name: 'Se connecter' }).isVisible().catch(() => false))
@@ -31,6 +36,6 @@ await page.goto(URL + '/projets'); await page.waitForTimeout(2500); await shot('
 await page.goto(URL + '/modeles'); await page.waitForTimeout(2500); await shot('4-modeles')
 check('modèle de départ présent', await page.getByText('Projet client (modèle)').first().isVisible().catch(() => false))
 check('aucune erreur JavaScript', errors.length === 0)
-if (errors.length) console.log(errors.join('\n'))
+for (const e of errors.slice(0, 10)) console.log(`::error title=erreur JavaScript::${e.slice(0, 500)}`)
 await browser.close()
 process.exit(ko ? 1 : 0)
