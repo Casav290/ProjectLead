@@ -21,19 +21,19 @@
   --input:             33 10% 79%;   /* #cfcac4 trait marqué : champs, panneau */
   --head:              30 20% 96%;   /* #f7f5f3 en-tête de tableau, pied */
 
-  /* Action : la couleur de l'app. Scanlead et InvoiceLead agissent en bleu, CRMlead en vert canard, ProjectLead en prune
-     (complémentaire décalé du vert de CRMlead : le rouge et l'orange restent aux statuts). */
-  --primary:           321 54% 36%;  /* #8e2a6b prune — 7,8:1 sur blanc */
+  /* Action : la couleur de l'app. Scanlead agit en bleu, CRMlead en vert canard, InvoiceLead en prune, ProjectLead en ocre
+     (complémentaire du bleu de Scanlead ; l'orange plus rouge et le rouge restent aux statuts). */
+  --primary:           41 100% 30%;  /* #9a6a00 ocre — 4,7:1 sur blanc */
   --primary-foreground:0 0% 100%;
-  --accent:            321 54% 36%;  /* #8e2a6b */
+  --accent:            41 100% 30%;  /* #9a6a00 */
   --accent-foreground: 0 0% 100%;
-  --accent-dark:       321 56% 28%;  /* #6f1f53, survol */
-  --accent-light:      321 38% 67%;  /* #c98bb4 */
-  --accent-veil:       323 47% 95%;  /* #f8eef4 */
-  --ring:              321 54% 36%;
+  --accent-dark:       41 100% 24%;  /* #7a5300, survol */
+  --accent-light:      39 59% 63%;   /* #d9b36a */
+  --accent-veil:       41 71% 95%;   /* #fbf5e8 */
+  --ring:              41 100% 30%;
 
   /* Marque : même couleur, dans le carré « CL » */
-  --brand:             321 54% 36%;  /* #8e2a6b */
+  --brand:             41 100% 30%;  /* #9a6a00 */
 
   /* Voile des fenêtres */
   --marine:            30 4% 10%;
@@ -143,7 +143,7 @@
 }
 
 @layer components {
-  /* Le prune est réservé à ce qui fait avancer un projet. Jamais un statut. */
+  /* L'ocre est réservé à ce qui fait avancer un projet. Jamais un statut. */
   .btn-accent  { @apply bg-accent text-accent-foreground hover:brightness-110; }
   .btn-primary { @apply bg-primary text-primary-foreground hover:brightness-125; }
   .card-lead   { @apply bg-card border border-border; }

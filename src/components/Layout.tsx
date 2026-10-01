@@ -112,8 +112,8 @@ function AppSwitcher() {
   const ref = useClickOutside(open, () => setOpen(false))
   const apps = [
     { name: 'CRMlead', mark: 'CL', color: '#0f6e70', url: 'https://crmlead.io', desc: 'Leads, contacts et adresses' },
-    { name: 'ProjectLead', mark: 'PL', color: '#8e2a6b', url: null, desc: 'Mener le projet une fois l’affaire signée' },
-    { name: 'InvoiceLead', mark: 'IL', color: '#2563eb', url: 'https://invoicelead.io', desc: 'Facturer et encaisser' },
+    { name: 'ProjectLead', mark: 'PL', color: '#9a6a00', url: null, desc: 'Mener le projet une fois l’affaire signée' },
+    { name: 'InvoiceLead', mark: 'IL', color: '#7a2e67', url: 'https://invoicelead.io', desc: 'Facturer et encaisser' },
     { name: 'Scanlead', mark: 'SL', color: '#1d4ed8', url: 'https://scanlead.io', desc: 'Scanner les cartes de visite' },
   ]
   return (

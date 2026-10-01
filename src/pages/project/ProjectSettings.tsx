@@ -7,7 +7,7 @@ import type { Client, Column, ProjectDetail } from '../../lib/types'
 
 type Props = { project: ProjectDetail; onChanged: () => void }
 
-const COLORS = ['#8e2a6b', '#0f6e70', '#15803d', '#ca8a04', '#c2410c', '#b91c1c', '#be185d', '#7c3aed', '#0284c7', '#57534e']
+const COLORS = ['#9a6a00', '#0f6e70', '#15803d', '#ca8a04', '#c2410c', '#b91c1c', '#be185d', '#7c3aed', '#0284c7', '#57534e']
 const VAT: Record<string, string> = { normal: 'Taux normal', reduced: 'Taux réduit', lodging: 'Hébergement', exempt: 'Exonéré', export: 'Exportation' }
 const amount = (c: number | null) => (c == null ? '' : String(c / 100))
 

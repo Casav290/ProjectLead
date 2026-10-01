@@ -90,10 +90,10 @@ export function layout(title: string, bodyHtml: string, action?: { label: string
   return `<!doctype html><html><body style="margin:0;background:#eceae7;font-family:Archivo,Arial,sans-serif;color:#1b1a19">
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border:1px solid #cfcac4">
-<tr><td style="padding:20px 24px;border-bottom:1px solid #e7e4e0"><span style="display:inline-block;background:#8e2a6b;color:#fff;font-weight:800;padding:4px 7px">PL</span>
+<tr><td style="padding:20px 24px;border-bottom:1px solid #e7e4e0"><span style="display:inline-block;background:#9a6a00;color:#fff;font-weight:800;padding:4px 7px">PL</span>
 <span style="font-weight:800;margin-left:8px">ProjectLead</span></td></tr>
 <tr><td style="padding:24px"><h1 style="font-size:20px;margin:0 0 16px;font-weight:800;letter-spacing:-.02em">${esc(title)}</h1>${bodyHtml}
-${action ? `<p style="margin:24px 0 0"><a href="${esc(action.url)}" style="background:#8e2a6b;color:#fff;text-decoration:none;font-weight:700;padding:10px 16px;display:inline-block">${esc(action.label)}</a></p>` : ''}
+${action ? `<p style="margin:24px 0 0"><a href="${esc(action.url)}" style="background:#9a6a00;color:#fff;text-decoration:none;font-weight:700;padding:10px 16px;display:inline-block">${esc(action.label)}</a></p>` : ''}
 </td></tr></table></td></tr></table></body></html>`
 }
 

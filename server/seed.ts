@@ -59,7 +59,7 @@ const weber = (await call('POST', '/api/clients', { name: 'Weber Sàrl', email: 
 const tpl = (await call('GET', '/api/projects?template=1'))[0].id
 const p1 = (await call('POST', '/api/projects', { name: 'Refonte de l’atelier mécanique', client_id: favre, template_id: tpl, start_date: day(-30),
   due_date: day(40), member_ids: people, billing_mode: 'hourly', hourly_rate_cents: 14000, budget_minutes: 120 * 60, budget_cents: 1800000,
-  update_frequency: 'weekly', portal_enabled: true, portal_show_tasks: true, color: '#8e2a6b' })).id
+  update_frequency: 'weekly', portal_enabled: true, portal_show_tasks: true, color: '#9a6a00' })).id
 const p2 = (await call('POST', '/api/projects', { name: 'Site vitrine Rochat', client_id: rochat, template_id: tpl, start_date: day(-10),
   due_date: day(25), member_ids: [people[1]], billing_mode: 'milestone', color: '#be185d', portal_enabled: true })).id
 const p3 = (await call('POST', '/api/projects', { name: 'Maintenance mensuelle', client_id: weber, billing_mode: 'retainer', retainer_cents: 80000,
