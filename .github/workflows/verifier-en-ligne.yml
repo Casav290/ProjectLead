@@ -10,23 +10,27 @@ on:
 jobs:
   verifier:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
       URL: https://br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Santé de l'API
         run: |
           for i in 1 2 3 4 5 6; do
-            body=$(curl -s -m 60 "$URL/api/health") && echo "$body" && echo "$body" | grep -q '"ok":true' && exit 0
+            body=$(curl -s -m 60 "$URL/api/health") && echo "$body" | grep -q '"ok":true' && echo "$body" && exit 0
             echo "essai $i : $body"; sleep 10
           done
           exit 1
-      - name: Page de connexion
-        run: curl -s -m 30 "$URL/login" | tee page.html | grep -q "<title>ProjectLead</title>"
-      - name: Fichier de l'interface
-        run: |
-          js=$(grep -o 'assets/index-[^"]*\.js' page.html | head -1)
-          test -n "$js"
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL/$js"); echo "$js → $code"; test "$code" = 200
-      - name: Session refusée sans connexion
-        run: test "$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/me")" = 401
+      - name: Navigateur
+        run: npm install --no-save --no-package-lock playwright@1.56.1 && npx playwright install --with-deps chromium
+      - name: Parcours réel dans le navigateur
+        run: node scripts/e2e-prod.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captures
+          path: captures/
