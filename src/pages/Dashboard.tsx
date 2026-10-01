@@ -86,8 +86,8 @@ export default function Dashboard() {
       <PageHeader title={`Bonjour ${me.user.name.split(' ')[0]}`} subtitle={<span className="first-letter:uppercase inline-block">{longDate(new Date())}</span>} />
 
       <div className="mb-5 grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3 lg:grid-cols-5">
-        {tiles.map((t) => (
-          <Link key={t.label} to={t.to} className="group bg-card px-4 py-3 hover:bg-head">
+        {tiles.map((t, i) => (
+          <Link key={t.label} to={t.to} className={clsx('group bg-card px-4 py-3 hover:bg-head', i === 4 && 'col-span-2 lg:col-span-1')}>
             <div className={clsx('font-display text-3xl font-extrabold tabular-nums',
               t.tone === 'warn' && 'text-soon', t.tone === 'late' && 'text-late', t.tone === 'accent' && 'text-accent')}>{t.value}</div>
             <div className="text-xs font-semibold text-muted-foreground group-hover:text-foreground">{t.label}</div>
@@ -97,7 +97,7 @@ export default function Dashboard() {
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
-          <Card title="Mes tâches" action={<Link to="/taches" className="text-xs font-bold text-accent hover:underline">Toutes mes tâches</Link>}>
+          <Card title="Mes tâches" action={<Link to="/taches" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Toutes mes tâches</Link>}>
             {data.myTasks.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground">Rien d'ouvert à votre nom. Belle journée.</p>
             ) : groups.filter((g) => g.tasks.length).map((g) => (
@@ -126,7 +126,7 @@ export default function Dashboard() {
             ))}
           </Card>
 
-          <Card title="Projets suivis" action={<Link to="/projets" className="text-xs font-bold text-accent hover:underline">Tous les projets</Link>}>
+          <Card title="Projets suivis" action={<Link to="/projets" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Tous les projets</Link>}>
             {data.projects.length === 0 ? <p className="px-4 py-6 text-sm text-muted-foreground">Aucun projet en cours.</p> : (
               <ul>
                 {data.projects.map((p) => {
@@ -172,12 +172,12 @@ export default function Dashboard() {
         <div className="min-w-0 space-y-5">
           <WeekCard week={data.week} capacity={me.user.capacity_minutes} />
 
-          <Card title="Prochains rendez-vous" action={<Link to="/agenda" className="text-xs font-bold text-accent hover:underline">Agenda</Link>}>
+          <Card title="Rendez-vous" action={<Link to="/agenda" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Agenda</Link>}>
             {data.events.length === 0 ? <p className="px-4 py-5 text-sm text-muted-foreground">Rien de prévu ces sept prochains jours.</p> : (
               <ul>
                 {data.events.map((e) => (
                   <li key={e.id} className="flex gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
-                    <div className="w-[72px] shrink-0 text-xs">
+                    <div className="w-[92px] shrink-0 text-xs">
                       <div className="font-bold first-letter:uppercase">{dayLabel(e.starts_at)}</div>
                       <div className="tabular-nums text-muted-foreground">{fmtTime(e.starts_at)}–{fmtTime(e.ends_at)}</div>
                     </div>
@@ -194,7 +194,7 @@ export default function Dashboard() {
           <Card title="Activité récente">
             {data.activity.length === 0 ? <div className="p-4"><Empty title="Pas encore d'activité" /></div> : (
               <ul>
-                {data.activity.slice(0, 12).map((a, i) => (
+                {data.activity.slice(0, 8).map((a, i) => (
                   <li key={i} className="border-b border-border px-4 py-2 text-sm last:border-b-0">
                     <p className="[overflow-wrap:anywhere]">
                       {a.actor_name && !['email_in', 'stage_done', 'booking'].includes(a.kind) && <span className="font-semibold">{a.actor_name} </span>}
@@ -226,7 +226,7 @@ function WeekCard({ week, capacity }: { week: Dashboard['week']; capacity: numbe
   const total = days.reduce((s, x) => s + x.minutes, 0)
   const max = Math.max(perDay, ...days.map((x) => x.minutes)) || 1
   return (
-    <Card title="Mon temps cette semaine" action={<Link to="/temps" className="text-xs font-bold text-accent hover:underline">Feuille de temps</Link>}>
+    <Card title="Ma semaine" action={<Link to="/temps" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Feuille de temps</Link>}>
       <div className="px-4 py-3">
         <p className="text-sm"><span className="font-display text-2xl font-extrabold tabular-nums">{hours(total)} h</span>
           <span className="text-muted-foreground"> sur {hours(capacity)} h</span></p>

@@ -303,7 +303,8 @@ app.delete('/columns/:cid', async (c) => {
 
 app.post('/:id/columns/order', async (c) => {
   const b = await body(c, z.object({ ids: z.array(uuid).max(50) }))
-  await tx(c, async (db) => {
+  await tx(c, async (db, ctx) => {
+    await assertCanEdit(db, ctx, c.req.param('id'))
     for (const [i, id] of b.ids.entries()) await db.query('update board_columns set position = $2 where id = $1 and project_id = $3', [id, i, c.req.param('id')])
   })
   return c.json({ ok: true })
@@ -370,7 +371,8 @@ app.delete('/stages/:sid', async (c) => {
 
 app.post('/:id/stages/order', async (c) => {
   const b = await body(c, z.object({ ids: z.array(uuid).max(100) }))
-  await tx(c, async (db) => {
+  await tx(c, async (db, ctx) => {
+    await assertCanEdit(db, ctx, c.req.param('id'))
     for (const [i, id] of b.ids.entries()) await db.query('update stages set position = $2 where id = $1 and project_id = $3', [id, i, c.req.param('id')])
   })
   return c.json({ ok: true })

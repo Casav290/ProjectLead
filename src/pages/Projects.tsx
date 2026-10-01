@@ -17,7 +17,7 @@ function TimeBudget({ p, bar }: { p: ProjectSummary; bar?: boolean }) {
   if (!p.budget_minutes) return <span className="tabular-nums">{fmtMinutes(p.minutes_spent)}</span>
   const over = p.minutes_spent > p.budget_minutes
   return (
-    <span className="inline-block min-w-[7rem]">
+    <span className="inline-block whitespace-nowrap">
       <span className={clsx('tabular-nums', over && 'font-bold text-late')}>{fmtMinutes(p.minutes_spent)}</span>
       <span className="text-muted-foreground"> / {fmtMinutes(p.budget_minutes)}</span>
       {bar && <Progress className="mt-1" value={pct(p.minutes_spent, p.budget_minutes)} tone={over ? 'late' : p.minutes_spent > p.budget_minutes * 0.85 ? 'warn' : 'accent'} />}
@@ -25,12 +25,12 @@ function TimeBudget({ p, bar }: { p: ProjectSummary; bar?: boolean }) {
   )
 }
 
-function Advance({ p }: { p: ProjectSummary }) {
+function Advance({ p, wide }: { p: ProjectSummary; wide?: boolean }) {
   return (
-    <span className="block min-w-[8rem]">
-      <span className="flex justify-between gap-3 text-xs tabular-nums">
+    <span className={clsx('block w-full min-w-[7rem]', !wide && 'max-w-[12rem]')}>
+      <span className="flex justify-between gap-2 whitespace-nowrap text-xs tabular-nums">
         <span>{p.tasks_done}/{p.tasks_total} tâches</span>
-        {p.stages_total > 0 && <span className="text-muted-foreground">{p.stages_done}/{p.stages_total} étapes</span>}
+        {p.stages_total > 0 && <span className="text-muted-foreground" title="Étapes terminées">{p.stages_done}/{p.stages_total} ét.</span>}
       </span>
       <Progress className="mt-1" value={pct(p.tasks_done, p.tasks_total)} tone={p.tasks_total && p.tasks_done === p.tasks_total ? 'ok' : 'accent'} />
     </span>
@@ -45,41 +45,42 @@ function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
   const nav = useNavigate()
   return (
     <TableStack>
-      <table className="w-full min-w-[1100px] text-sm">
+      <table className="w-full min-w-[900px] text-sm">
         <thead className="bg-head text-left text-[11px] font-extrabold uppercase tracking-[.05em] text-muted-foreground">
           <tr>
-            <th className="w-6 px-3 py-2" aria-label="Couleur" />
-            <th className="px-3 py-2">Projet</th>
+            {/* Libellé dessiné en CSS : au téléphone, le nom du projet devient le titre de la fiche. */}
+            <th className="px-3 py-2 before:content-['Projet']" aria-label="Projet" />
             <th className="px-3 py-2">Client</th>
             <th className="px-3 py-2">Statut</th>
-            <th className="px-3 py-2">Santé</th>
             <th className="px-3 py-2">Étape en cours</th>
             <th className="px-3 py-2">Avancement</th>
-            <th className="px-3 py-2">Temps / budget</th>
+            <th className="px-3 py-2">Temps</th>
             <th className="px-3 py-2">Échéance</th>
-            <th className="px-3 py-2">Intervenants</th>
+            <th className="px-3 py-2">Équipe</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((p) => (
             <tr key={p.id} className="cursor-pointer border-t border-border align-middle hover:bg-[#faf9f7]" onClick={() => nav(`/projets/${p.id}`)}>
-              <td className="px-3 py-2.5"><ColorDot color={p.color} className="h-3 w-3" /></td>
-              <td className="max-w-[18rem] px-3 py-2.5">
-                <Link to={`/projets/${p.id}`} className="font-bold hover:text-accent" onClick={(e) => e.stopPropagation()}>{p.name}</Link>
-                {p.code && <span className="block font-mono text-[11px] text-muted-foreground">{p.code}</span>}
-                {p.archived_at && <span className="text-[11px] font-semibold text-muted-foreground">Archivé</span>}
+              <td className="max-w-[16rem] px-3 py-2.5">
+                <span className="flex items-start gap-2">
+                  <ColorDot color={p.color} className="mt-1.5 h-3 w-3" />
+                  <span className="min-w-0">
+                    <Link to={`/projets/${p.id}`} className="font-bold hover:text-accent" onClick={(e) => e.stopPropagation()}>{p.name}</Link>
+                    <span className="block font-mono text-[11px] font-normal text-muted-foreground">{p.code}{p.archived_at && ' · archivé'}</span>
+                  </span>
+                </span>
               </td>
-              <td className="px-3 py-2.5">{p.client_name ?? <span className="text-muted-foreground">Interne</span>}</td>
-              <td className="px-3 py-2.5"><StatusBadge status={p.status} /></td>
-              <td className="px-3 py-2.5"><HealthBadge health={p.health} /></td>
+              <td className="max-w-[10rem] px-3 py-2.5">{p.client_name ?? <span className="text-muted-foreground">Interne</span>}</td>
+              <td className="px-3 py-2.5"><span className="inline-flex flex-col items-end gap-1 sm:items-start"><StatusBadge status={p.status} /><HealthBadge health={p.health} /></span></td>
               <td className="px-3 py-2.5">
-                {p.current_stage ? <span className="flex flex-col items-end gap-1 sm:items-start"><span className="font-semibold">{p.current_stage.name}</span><StageBadge status={p.current_stage.status} /></span>
+                {p.current_stage ? <span className="flex flex-col items-end gap-1 sm:items-start"><span className="font-semibold leading-tight">{p.current_stage.name}</span><StageBadge status={p.current_stage.status} /></span>
                   : <span className="text-muted-foreground">{p.stages_total ? 'Toutes terminées' : '—'}</span>}
               </td>
               <td className="px-3 py-2.5"><Advance p={p} /></td>
               <td className="px-3 py-2.5"><TimeBudget p={p} bar /></td>
               <td className="px-3 py-2.5"><Due p={p} /></td>
-              <td className="px-3 py-2.5"><AvatarStack people={p.members} /></td>
+              <td className="px-3 py-2.5"><AvatarStack people={p.members} max={3} /></td>
             </tr>
           ))}
         </tbody>
@@ -106,7 +107,7 @@ function ProjectCards({ rows }: { rows: ProjectSummary[] }) {
             <HealthBadge health={p.health} />
             {p.current_stage && <span className="text-xs text-muted-foreground">Étape : <b className="text-foreground">{p.current_stage.name}</b></span>}
           </div>
-          <div className="mt-4"><Advance p={p} /></div>
+          <div className="mt-4"><Advance p={p} wide /></div>
           <div className="mt-4 flex items-end justify-between gap-3 border-t border-border pt-3 text-xs">
             <div className="space-y-0.5">
               <p><span className="text-muted-foreground">Temps </span><TimeBudget p={p} /></p>

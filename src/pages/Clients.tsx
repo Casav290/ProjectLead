@@ -30,7 +30,7 @@ export default function Clients() {
         </>} />
 
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rechercher un nom, un email, une localité…"
+        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, email ou localité…"
           aria-label="Rechercher un client" className="w-full sm:w-80" />
       </div>
       <Tabs active={tab} onChange={(id) => setTab(id as typeof tab)}
@@ -64,13 +64,13 @@ export default function Clients() {
                 <tr key={c.id}>
                   <td className="px-3 py-2" data-label="">
                     <span className="flex flex-wrap items-center gap-2">
-                      <Link to={`/clients/${c.id}`} className="font-bold hover:text-accent [overflow-wrap:anywhere]">{c.name}</Link>
+                      <Link to={`/clients/${c.id}`} className="font-bold hover:text-accent break-words">{c.name}</Link>
                       {isFromCrmlead(c) && <Badge tone="info">CRMlead</Badge>}
                     </span>
                   </td>
                   <td className="px-3 py-2">{c.contact_person ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-3 py-2">{[c.postal_code, c.town].filter(Boolean).join(' ') || <span className="text-muted-foreground">—</span>}</td>
-                  <td className="px-3 py-2 [overflow-wrap:anywhere]">
+                  <td className="px-3 py-2 break-words">
                     {c.email ? <a href={`mailto:${c.email}`} className="hover:text-accent">{c.email}</a> : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{c.active_projects ?? 0}</td>
@@ -180,9 +180,9 @@ function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onCl
                 {results.map((r) => (
                   <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
-                      <p className="font-bold [overflow-wrap:anywhere]">{r.company || r.title}</p>
-                      {r.company && r.title !== r.company && <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{r.title}</p>}
-                      <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{r.address || 'Sans adresse'}</p>
+                      <p className="font-bold break-words">{r.company || r.title}</p>
+                      {r.company && r.title !== r.company && <p className="text-xs text-muted-foreground break-words">{r.title}</p>}
+                      <p className="text-xs text-muted-foreground break-words">{r.address || 'Sans adresse'}</p>
                     </div>
                     {LEAD_STATUS[r.status] && <Badge>{LEAD_STATUS[r.status]}</Badge>}
                     {r.imported ? (

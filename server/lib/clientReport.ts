@@ -53,7 +53,8 @@ export async function buildReport(db: Db, projectId: string, message?: string | 
   if (p.due_date) lines.push(`Échéance prévue : ${fmtDate(p.due_date)}.`)
   lines.push('', 'Étapes :')
   for (const s of stages) {
-    const when = s.status === 'done' && s.completed_on ? ` le ${fmtDate(s.completed_on)}` : s.due_date ? `, prévue pour le ${fmtDate(s.due_date)}` : ''
+    const when = s.status === 'done' ? (s.completed_on ? ` le ${fmtDate(s.completed_on)}` : '')
+      : s.due_date ? `, prévue pour le ${fmtDate(s.due_date)}` : ''
     lines.push(`- ${s.name} : ${STAGE_LABEL[s.status]}${when}${s.total ? ` (${s.done}/${s.total} tâches)` : ''}`)
     if (s.client_note) lines.push(`  ${s.client_note}`)
   }
