@@ -65,12 +65,21 @@ app.route('/api/v1', v1Routes)
 
 app.get('/api/health', (c) => c.json({ ok: true }))
 
-/** Tâches planifiées appelables de l'extérieur : cron Vercel (GET, `CRON_SECRET`) ou autre (`TASKS_SECRET`). */
+/**
+ * Tâches planifiées appelables de l'extérieur : cron Vercel (GET, `CRON_SECRET`), autre (`TASKS_SECRET`),
+ * ou jeton enregistré en base (`task_tokens`, empreinte seule : cron du VPS).
+ */
 const runTasks = async (c: any) => {
-  const auth = c.req.header('authorization')
-  const ok = [process.env.TASKS_SECRET, process.env.CRON_SECRET].some((s) => s && auth === `Bearer ${s}`)
+  const auth = c.req.header('authorization') ?? ''
+  let ok = [process.env.TASKS_SECRET, process.env.CRON_SECRET].some((s) => s && auth === `Bearer ${s}`)
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  if (!ok && bearer.length >= 32) {
+    ok = Boolean(await anon(async (db) => (await db.query(
+      'update task_tokens set last_used_at = now() where token_hash = $1 returning 1', [hashToken(bearer)])).rowCount))
+  }
   if (!ok) return c.json({ error: 'unauthenticated' }, 401)
-  return c.json(await runJobs(true))
+  // Chaque tâche garde son rythme (boîtes : 1 min, suivis : 15 min, facturation : 1 h…) ; `?force=1` lance tout.
+  return c.json(await runJobs(c.req.query('force') === '1'))
 }
 app.post('/api/tasks/run', runTasks)
 app.get('/api/tasks/run', runTasks)
