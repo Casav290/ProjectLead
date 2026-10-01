@@ -4,6 +4,7 @@ import { sendReport } from './clientReport.js'
 import { calendarsOnce } from './extcal.js'
 import { mailboxesOnce } from './mailbox/index.js'
 import { localDay } from './time.js'
+import { entitlementsOf } from './leadId.js'
 
 /**
  * Tâches de fond. Comme dans CRMlead, elles profitent du trafic (une instance en veille n'a pas de
@@ -91,7 +92,29 @@ export async function runJobs(force = false) {
   if (await due('due_reminders', 60 * 60_000, force)) out.dueReminders = await dueReminders().catch((e) => String(e))
   if (await due('monthly_billing', 60 * 60_000, force)) out.monthlyBilling = await monthlyBilling().catch((e) => String(e))
   if (await due('triage_purge', 6 * 60 * 60_000, force)) out.triagePurged = await purgeTriage().catch((e) => String(e))
+  if (await due('lead_plans', 24 * 60 * 60_000, force)) out.leadPlans = await refreshLeadPlans().catch((e) => String(e))
   return out
+}
+
+/**
+ * La formule de la famille, relue chaque jour au Compte Lead : une entreprise qui n'a plus accès à
+ * ProjectLead (formule résiliée) voit ses sessions fermées, la prochaine connexion la refuse. Un
+ * Compte Lead injoignable ne ferme rien.
+ */
+export async function refreshLeadPlans() {
+  if (!process.env.LEAD_ID_CLIENT_SECRET || !process.env.LEAD_ID_ISSUER) return { checked: 0, closed: 0 }
+  const accounts = await anon(async (db) => (await db.query('select id, lead_org from accounts where lead_org is not null')).rows)
+  let checked = 0, closed = 0
+  for (const a of accounts) {
+    let rights
+    try { rights = await entitlementsOf({ org: a.lead_org }) } catch { continue }
+    checked++
+    await anon((db) => db.query('update accounts set plan = coalesce($2, plan) where id = $1', [a.id, rights.plan?.code ?? null]))
+    if (rights.apps?.projectlead?.access === false) {
+      closed += await anon(async (db) => (await db.query('delete from sessions where account_id = $1', [a.id])).rowCount ?? 0)
+    }
+  }
+  return { checked, closed }
 }
 
 /**
