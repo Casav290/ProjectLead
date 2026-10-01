@@ -98,9 +98,17 @@ const ilPort = await listen(il)
 // ------------------------------------------------------------------ faux Compte Lead (JWKS) pour l'échange
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }
+// Ce que le faux Compte Lead mettra dans le prochain jeton d'identité (connexion de bout en bout).
+let nextIdClaims: Record<string, unknown> = {}
 const issuerSrv = createServer((req, res) => {
   res.setHeader('content-type', 'application/json')
   if (req.url === '/oauth/jwks') return res.end(JSON.stringify({ keys: [jwk] }))
+  if (req.url === '/oauth/token' && req.method === 'POST') {
+    const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', exp: Math.floor(Date.now() / 1000) + 300, ...nextIdClaims })
+    const idToken = `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+    return res.end(JSON.stringify({ id_token: idToken, access_token: 'a', token_type: 'Bearer', expires_in: 300 }))
+  }
   res.statusCode = 404; res.end('{}')
 })
 const issPort = await listen(issuerSrv)
@@ -504,6 +512,57 @@ const before = (await pool.query(`select count(*)::int as n from client_reports 
 const jobs = await runJobs(true)
 const after = (await pool.query(`select count(*)::int as n from client_reports where project_id = $1 and automatic`, [projId])).rows[0].n
 check('suivi hebdomadaire automatique envoyé', after >= 1 && (jobs as any).clientUpdates >= 1, { before, after, jobs })
+
+section('File « À trier » : 30 jours au plus')
+await pool.query(`insert into email_messages (account_id, message_id, from_email, subject, received_at) values
+  ($1, $2, 'vieux@exemple.test', 'Ancien', now() - interval '31 days'), ($1, $3, 'recent@exemple.test', 'Récent', now() - interval '2 days')`,
+  [accountId, `triage:x:vieux-${stamp}`, `triage:x:recent-${stamp}`])
+const { purgeTriage } = await import('../server/lib/jobs.js')
+await purgeTriage()
+r = await pool.query('select subject from email_messages where message_id = any($1)', [[`triage:x:vieux-${stamp}`, `triage:x:recent-${stamp}`]])
+check('entrée de plus de 30 jours effacée, la récente gardée', r.rows.length === 1 && r.rows[0].subject === 'Récent', r.rows)
+
+section('Connexion par le Compte Lead, de bout en bout')
+process.env.LEAD_ID_CLIENT_ID = 'projectlead'
+process.env.LEAD_ID_CLIENT_SECRET = 'lid_essai'
+process.env.LEAD_ID_REDIRECT_URI = 'http://localhost/auth/lead/callback'
+r = await new Client().post('/api/auth/signup', { name: 'X', email: `x-${stamp}@exemple.test`, password: 'motdepasse-solide', company: 'X' })
+check('Compte Lead branché : pas d’inscription locale', r.status === 403 && r.body.error === 'signup_via_lead', r.body)
+r = await new Client().get('/api/auth/options')
+check('options : Compte Lead annoncé', r.body.leadId === true, r.body)
+/** Départ, passage chez le faux Compte Lead, retour : rend la redirection finale et le cookie de session. */
+async function leadLogin(claims: (nonce: string) => Record<string, unknown>, query = '') {
+  const start = await app.request(`http://localhost/auth/lead/start${query}`)
+  const to = new URL(start.headers.get('location') ?? 'http://x/')
+  const jar = (start.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+  nextIdClaims = claims(to.searchParams.get('nonce') ?? '')
+  const back = await app.request(`http://localhost/auth/lead/callback?code=c&state=${to.searchParams.get('state')}`, { headers: { cookie: jar } })
+  const session = (back.headers.get('set-cookie') ?? '').match(/projectlead_session=[^;]+/)?.[0] ?? ''
+  return { authorize: to, location: back.headers.get('location'), session }
+}
+const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
+  sub: `sub-${org}`, nonce, email: `${org}@exemple.test`, email_verified: true, name: 'Léa Lead', locale: 'fr',
+  org, org_name: `Entreprise ${org}`, org_role: 'admin',
+  lead: { plan: { code: access ? 'pro' : 'free', name: access ? 'Pro' : 'Gratuit', rank: access ? 10 : 0, seats: 1 },
+          apps: { projectlead: { access, name: 'ProjectLead', url: null, status: 'live', upgrade_url: access ? null : 'https://scanlead.io/billing' } }, subscriptions: [] },
+})
+let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
+check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
+check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('l’entreprise Lead devient l’espace ProjectLead', r.status === 200 && r.body.account?.name === `Entreprise lead-org-${stamp}`, r.body)
+const freeOrg = `free-org-${stamp}`
+ll = await leadLogin((n) => lead(n, false, freeOrg))
+check('formule gratuite : refus, lien vers la mise à niveau', ll.location?.startsWith('/login?erreur=formule&upgrade=') && !ll.session, ll)
+r = await pool.query('select count(*)::int as n from accounts where lead_org = $1', [freeOrg])
+check('formule gratuite : aucun espace créé', r.rows[0].n === 0, r.rows[0])
+ll = await leadLogin((n) => lead(n, true), '?signup=1')
+check('« Créer un compte » : le Compte Lead ouvre son inscription (prompt=create)', ll.authorize.searchParams.get('prompt') === 'create', ll.authorize.href)
+ll = await leadLogin((n) => ({ ...lead(n, true), nonce: 'autre' }))
+check('jeton d’un autre départ (nonce) → erreur, pas de session', ll.location === '/login?erreur=lead' && !ll.session, ll)
+r = await app.request('http://localhost/auth/lead/callback?code=c&state=x')
+check('retour sans départ → erreur de session', r.headers.get('location') === '/login?erreur=session')
+delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
 crm.close(); il.close(); issuerSrv.close()
