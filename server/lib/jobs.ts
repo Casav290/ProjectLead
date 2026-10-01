@@ -90,7 +90,17 @@ export async function runJobs(force = false) {
   if (await due('client_updates', 15 * 60_000, force)) out.clientUpdates = await clientUpdates().catch((e) => String(e))
   if (await due('due_reminders', 60 * 60_000, force)) out.dueReminders = await dueReminders().catch((e) => String(e))
   if (await due('monthly_billing', 60 * 60_000, force)) out.monthlyBilling = await monthlyBilling().catch((e) => String(e))
+  if (await due('triage_purge', 6 * 60 * 60_000, force)) out.triagePurged = await purgeTriage().catch((e) => String(e))
   return out
+}
+
+/**
+ * La file « À trier » ne garde que l'expéditeur, l'objet et la date d'un inconnu (pas le contenu),
+ * et 30 jours au plus quand personne ne la traite (promesse de la politique de confidentialité).
+ */
+export async function purgeTriage() {
+  return anon(async (db) => (await db.query(
+    `delete from email_messages where status = 'new' and message_id like 'triage:%' and received_at < now() - interval '30 days'`)).rowCount ?? 0)
 }
 
 let running = false
