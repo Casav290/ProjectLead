@@ -59,6 +59,9 @@ export default function NewProjectDialog({ open, onClose, templateId, clientId }
   }, [template, templates])
 
   const people = team.filter((m) => m.active)
+  // Formule pleine (server/lib/plans.ts) : le projet naît « à qualifier » plutôt que d'être refusé.
+  const plan = me?.plan
+  const full = Boolean(plan && plan.projectLimit !== null && plan.openProjects >= plan.projectLimit)
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setBusy(true); setError(null)
@@ -74,7 +77,7 @@ export default function NewProjectDialog({ open, onClose, templateId, clientId }
       const r = await api.post<{ id: string }>('/projects', {
         name: name.trim(), client_id, template_id: template || null, start_date: start || null, due_date: due || null,
         owner_id: owner || null, member_ids: members.filter((m) => m !== owner), billing_mode: billing,
-        ...(field ? { [field]: cents } : {}),
+        ...(field ? { [field]: cents } : {}), ...(full ? { status: 'lead' } : {}),
       })
       onClose()
       nav(`/projets/${r.id}`)
@@ -90,6 +93,13 @@ export default function NewProjectDialog({ open, onClose, templateId, clientId }
         <Button variant="primary" type="submit" form="new-project" disabled={busy || !name.trim()}>{busy ? 'Création…' : 'Créer le projet'}</Button>
       </>}>
       <form id="new-project" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+        {full && plan && (
+          <p className="border border-soon/40 bg-soon/5 px-3 py-2 text-sm sm:col-span-2">
+            Votre formule gratuite a déjà {plan.projectLimit} projets en cours. Celui-ci sera créé « à qualifier » : vous le passerez
+            en cours quand un projet sera terminé ou archivé.{' '}
+            <a href={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Passer à Pro</a>
+          </p>
+        )}
         <Field label="Nom du projet" className="sm:col-span-2">
           <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex. Refonte du site, Agrandissement…" />
         </Field>
