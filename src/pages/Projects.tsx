@@ -6,7 +6,8 @@ import { AvatarStack, Button, Checkbox, ColorDot, Empty, ErrorNote, HealthBadge,
          StageBadge, StatusBadge, TableStack } from '../components/ui'
 import { api } from '../lib/api'
 import { fmtDate, fmtMinutes, STATUS_LABEL, today } from '../lib/format'
-import { useLoad } from '../lib/store'
+import { useApp, useLoad } from '../lib/store'
+import { PlanLine } from '../components/PlanCard'
 import type { Client, ProjectSummary } from '../lib/types'
 
 const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0)
@@ -151,12 +152,16 @@ export default function Projects() {
   const { data, error, loading } = useLoad<ProjectSummary[]>(`/projects?${query}`)
   const [clients, setClients] = useState<Client[]>([])
   useEffect(() => { api.get<Client[]>('/clients').then(setClients).catch(() => {}) }, [])
+  // Le compte des projets en cours de la formule, à jour à chaque visite.
+  const { me, refresh } = useApp()
+  useEffect(() => { refresh() }, [])
   const filtered = Boolean(status || client || debounced || mine || archived)
 
   return (
     <>
       <PageHeader title="Projets" subtitle={data ? `${data.length} projet${data.length > 1 ? 's' : ''}` : undefined}
         actions={<Button variant="primary" onClick={() => setCreating(true)}>Nouveau projet</Button>} />
+      {me && <div className="-mt-3 mb-4"><PlanLine plan={me.plan} /></div>}
 
       <div className="mb-4 flex flex-wrap items-center gap-2 border border-border bg-card p-3">
         <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, code ou client…" aria-label="Rechercher" className="w-full sm:w-64" />

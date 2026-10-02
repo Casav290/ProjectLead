@@ -13,7 +13,8 @@ Version 2, 01.10.2026 (soir).
 | Hébergement | Neon Functions, fonction `projectlead` sur la branche `production` (un seul paquet : serveur, interface, migrations) |
 | Domaine | `projectlead.io` (Porkbun) |
 | Emails sortants | Resend, domaine `projectlead.io`, comme InvoiceLead |
-| Connexion | Compte Lead (CRMlead), bouton unique comme InvoiceLead ; email et mot de passe en secours |
+| Connexion | Compte Lead (CRMlead), tout droit comme InvoiceLead ; email et mot de passe en secours |
+| Formules | Tout compte entre, même gratuit (Ève, 02.10) ; Gratuit 3 projets en cours et 1 personne, Pro sans limite de projets, Pro+ 5 personnes (`server/lib/plans.ts`) |
 | Facturation | Brouillons mensuels dans InvoiceLead par son API (clé `il_live_…`, Pro+) |
 | Adresses | CRMlead par son API (clé `crm_…`) ; affaires gagnées reçues par l'échange du Compte Lead |
 
@@ -30,9 +31,8 @@ Version 2, 01.10.2026 (soir).
 
 ## Ce qui bloque
 
-Rien de technique. Restent des décisions et gestes d'Ève : accord écrit pour publier la version de
-`main` ; une formule Pro ou Pro+ pour son Compte Lead (eve.gemmet@gmail.com est en Free, ProjectLead
-la refuse) ; puis ses clés CRMlead et InvoiceLead, qu'elle colle elle-même. Détail dans
+Rien de technique. Restent des gestes d'Ève : ses clés CRMlead et InvoiceLead, qu'elle colle
+elle-même dans ProjectLead. Détail dans
 `docs/PASSATION.md`.
 
 ## Publier une nouvelle version

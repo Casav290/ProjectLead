@@ -8,7 +8,12 @@ export type Me = {
   running: { id: string; started_at: string; project_id: string; project_name: string; task_id: string | null; task_title: string | null } | null
   features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean }
   inboundAddress: string | null; inboundUrl: string; icalUrl: string
+  plan: Plan
 }
+
+/** La formule de la famille Lead et ce qu'en utilise l'entreprise (server/lib/plans.ts). */
+export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: string; upgradeUrl: string; seats: number | null
+  openProjects: number; projectLimit: number | null; members: number; invited: number }
 
 export type Person = { id: string; name: string; color: string; email?: string; role?: string }
 

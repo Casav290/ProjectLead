@@ -27,10 +27,19 @@ ne jamais lui demander d'autorisation.
 Comme InvoiceLead : `/login` et `/signup` partent tout droit vers le Compte Lead (crmlead.io),
 `/signup` avec `prompt=create`. L'écran ProjectLead ne reste que pour une erreur (gabarit commun
 Trait net, ocre). L'inscription locale est fermée quand le Compte Lead est branché (`403
-signup_via_lead`). Formule gratuite : refus avant de créer quoi que ce soit. L'e-mail et le mot de
+signup_via_lead`).
+
+**Règle d'Ève (02.10.2026) : tout compte, même gratuit, entre dans toutes les applications, en
+formule gratuite.** ProjectLead ne refuse donc personne : la formule du Compte Lead fixe seulement les
+quantités (`server/lib/plans.ts`) : Gratuit 3 projets en cours à la fois et 1 personne, Pro projets sans
+limite (1 personne), Pro+ 5 personnes. Les demandes à qualifier, projets terminés, archivés et modèles ne
+comptent pas. Une limite bloque une action (402 `plan_limit_projects` ou `plan_limit_seats`, avec le lien
+de mise à niveau), jamais les données déjà créées. Une affaire gagnée reçue quand la formule est pleine
+arrive « à qualifier ». Les entreprises sans Compte Lead (anciens accès locaux) n'ont pas de limite.
+Réglages → Entreprise montre la formule et son usage ; la page Projets le rappelle en gratuit. L'e-mail et le mot de
 passe restent en secours sur `/login?acces=email` pour les accès créés avant le Compte Lead.
 Chaque jour, la formule de chaque entreprise liée est relue au Compte Lead (`refreshLeadPlans`) :
-sans accès, ses sessions sont fermées. Un Compte Lead injoignable ne ferme rien.
+une formule prise ou résiliée ailleurs change les limites le jour même ; personne n'est mis dehors.
 
 ## Accès à GitHub depuis le VPS
 
@@ -84,11 +93,9 @@ production.
 1. **Publication** de la version de `main` (jetons de tâches, formule relue chaque jour) : accord écrit
    d'Ève, puis paquet, amorçage, `deploy_function` (zip seul), empreinte du jeton dans `task_tokens` et
    crontab du VPS.
-2. **Formule Pro pour Ève** : son Compte Lead eve.gemmet@gmail.com est en Free, ProjectLead la refuse
-   (vérifié le 02.10 par Claude Desktop). Trois voies : payer Pro (CRMlead, 19 €/mois), se connecter avec
-   un compte déjà Pro ou Pro+ (eve@scanlead.io a l'équipe offerte de Scanlead : à vérifier qu'elle est
-   déclarée au Compte Lead), ou offrir la formule par migration ciblée dans CRMlead (session CRMlead).
-3. **Clés d'Ève** : une fois la formule Pro en place, Ève crée la clé CRMlead
+2. **Essai réel en formule gratuite** : Ève (eve.gemmet@gmail.com, Free) doit entrer dans ProjectLead et
+   voir « Gratuit : 3 projets en cours ». Ne pas lui offrir de formule : elle veut vérifier le gratuit.
+3. **Clés d'Ève** : Ève crée la clé CRMlead
    (https://crmlead.io/integrations) et la clé InvoiceLead (https://invoicelead.io/fr/app/settings/api,
    Pro+) et les colle elle-même dans https://projectlead.io/reglages/integrations (adresses déjà
    remplies). Ni Claude Desktop ni un agent ne saisissent une clé dans un site.

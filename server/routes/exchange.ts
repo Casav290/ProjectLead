@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { anonTx } from '../db.js'
 import { createDefaultColumns } from '../lib/defaults.js'
 import { incomingSender } from '../lib/leadId.js'
+import { planOf } from '../lib/plans.js'
 
 /**
  * L'échange de la famille Lead (crmlead/docs/LEAD-ID.md, étape 9). ProjectLead reçoit :
@@ -68,12 +69,15 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
                   budget_cents = coalesce($4, budget_cents), updated_at = now() where id = $1`,
           [projectId, d.title ? String(d.title).slice(0, 200) : null, d.description ?? null, amount])
       } else {
+        // Formule pleine (lib/plans.ts) : l'affaire n'est pas perdue, elle arrive « à qualifier ».
+        const p = await planOf(acc.id)
+        const projectStatus = p.projectLimit !== null && p.openProjects >= p.projectLimit ? 'lead' : 'planned'
         projectId = (await db.query(
           `insert into projects (account_id, name, description, client_id, owner_id, status, source, source_ref, budget_cents,
                                  fixed_cents, billing_mode, currency, created_by)
-           values ($1,$2,$3,$4,$5,'planned','crmlead',$6,$7,$7,$8,$9,$5) returning id`,
+           values ($1,$2,$3,$4,$5,$10,'crmlead',$6,$7,$7,$8,$9,$5) returning id`,
           [acc.id, String(d.title || `Projet ${clientName}`).slice(0, 200), d.description ?? '', clientId, fallbackOwner,
-           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', ['CHF', 'EUR', 'USD', 'GBP'].includes(d.currency) ? d.currency : 'CHF'])).rows[0].id
+           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', ['CHF', 'EUR', 'USD', 'GBP'].includes(d.currency) ? d.currency : 'CHF', projectStatus])).rows[0].id
         await createDefaultColumns(db, acc.id, projectId!)
         if (fallbackOwner) {
           await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead') on conflict do nothing`, [projectId, fallbackOwner, acc.id])

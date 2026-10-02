@@ -6,6 +6,7 @@ import { anon, anonTx, type Db } from '../db.js'
 import { isProduction } from '../lib/env.js'
 import { body, email, HttpError, type Env } from '../lib/http.js'
 import { finishLogin, logoutUrl, startLogin, type LeadClaims } from '../lib/leadId.js'
+import { savePlan } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
 
 /**
@@ -172,10 +173,10 @@ export async function attachLeadPerson(claims: LeadClaims) {
     await db.query(
       `insert into account_users (account_id, user_id, role) values ($1,$2,$3) on conflict (account_id, user_id) do nothing`,
       [acc.id, user.id, role])
-    // La formule vient du Compte Lead : elle ouvre ou ferme ProjectLead.
-    if (claims.lead?.plan?.code) await db.query('update accounts set plan = $1 where id = $2', [claims.lead.plan.code, acc.id])
-    const access = claims.lead?.apps?.projectlead?.access
-    return { userId: user.id as string, accountId: acc.id as string, access: access !== false }
+    // La formule vient du Compte Lead. Elle n'ouvre ni ne ferme ProjectLead (tout le monde entre, même en
+    // gratuit) : elle fixe les limites (lib/plans.ts).
+    await savePlan(db, acc.id, claims.lead)
+    return { userId: user.id as string, accountId: acc.id as string }
   })
 }
 
@@ -186,11 +187,7 @@ app.get('/auth/lead/callback', async (c) => {
   try {
     const saved = JSON.parse(raw) as Saved
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
-    // La formule d'abord : sans accès, rien n'est créé ici (ni personne, ni entreprise).
-    if (claims.lead?.apps?.projectlead?.access === false) {
-      const up = claims.lead.apps.projectlead.upgrade_url
-      return c.redirect(`/login?erreur=formule${up ? `&upgrade=${encodeURIComponent(up)}` : ''}`)
-    }
+    // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026).
     const who = await attachLeadPerson(claims)
     await openSession(c, who.userId, who.accountId, tokens.id_token)
     return c.redirect(saved.next ?? '/')

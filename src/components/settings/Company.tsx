@@ -3,6 +3,7 @@ import { Button, Card, ErrorNote, Field, Input, Select, Spinner, Textarea, toast
 import { api } from '../../lib/api'
 import { useApp, useLoad } from '../../lib/store'
 import { SettingsHeader } from './kit'
+import { PlanCard } from '../PlanCard'
 
 const ZONES = ['Europe/Zurich', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Vienna', 'Europe/Brussels', 'Europe/Luxembourg',
   'Europe/Amsterdam', 'Europe/Madrid', 'Europe/Lisbon', 'Europe/London', 'America/New_York', 'America/Montreal', 'UTC']
@@ -31,6 +32,7 @@ export default function Company() {
     <>
       <SettingsHeader title="Entreprise">Ces réglages valent pour toute l'équipe.</SettingsHeader>
       <div className="max-w-2xl space-y-5">
+        <PlanCard plan={me.plan} />
         <Card title="Identité et calendrier">
           <form onSubmit={save} className="grid gap-3 p-4 sm:grid-cols-2">
             <Field label="Nom de l'entreprise" className="sm:col-span-2">

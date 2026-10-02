@@ -570,10 +570,47 @@ r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 check('l’entreprise Lead devient l’espace ProjectLead', r.status === 200 && r.body.account?.name === `Entreprise lead-org-${stamp}`, r.body)
 const proSession = ll.session
 const freeOrg = `free-org-${stamp}`
-ll = await leadLogin((n) => lead(n, false, freeOrg))
-check('formule gratuite : refus, lien vers la mise à niveau', ll.location?.startsWith('/login?erreur=formule&upgrade=') && !ll.session, ll)
-r = await pool.query('select count(*)::int as n from accounts where lead_org = $1', [freeOrg])
-check('formule gratuite : aucun espace créé', r.rows[0].n === 0, r.rows[0])
+ll = await leadLogin((n) => lead(n, false, freeOrg), '?next=/projets')
+check('formule gratuite : on entre quand même (règle d’Ève du 02.10)', ll.location === '/projets' && ll.session.length > 30, ll)
+const free = new Client(); free.cookie = ll.session
+r = await free.get('/api/me')
+check('formule gratuite : espace créé, formule notée « Gratuit », 3 projets en cours, 1 personne',
+  r.status === 200 && r.body.plan?.linked && r.body.plan.tier === 'free' && r.body.plan.projectLimit === 3 && r.body.plan.seats === 1
+  && r.body.plan.upgradeUrl === 'https://scanlead.io/billing', r.body.plan)
+const freeProjects: string[] = []
+for (const n of [1, 2, 3]) freeProjects.push((await free.post('/api/projects', { name: `Projet gratuit ${n}` })).body.id)
+check('gratuit : trois projets en cours', freeProjects.every(Boolean), freeProjects)
+r = await free.post('/api/projects', { name: 'Projet de trop' })
+check('gratuit : le quatrième est refusé (402), avec la limite et le lien de mise à niveau',
+  r.status === 402 && r.body.error === 'plan_limit_projects' && r.body.limit === 3 && r.body.upgrade_url === 'https://scanlead.io/billing', r)
+r = await free.post('/api/projects', { name: 'Demande', status: 'lead' })
+check('gratuit : une demande à qualifier ne compte pas', r.status === 201, r)
+const freeLead = r.body.id
+r = await free.post('/api/projects', { name: 'Modèle maison', is_template: true })
+check('gratuit : un modèle ne compte pas', r.status === 201, r)
+r = await free.patch(`/api/projects/${freeLead}`, { status: 'active' })
+check('gratuit : passer une demande en cours, formule pleine → 402', r.status === 402 && r.body.error === 'plan_limit_projects', r)
+r = await free.patch(`/api/projects/${freeProjects[0]}`, { status: 'done' })
+check('gratuit : terminer un projet libère sa place…', r.status === 200, r)
+r = await free.patch(`/api/projects/${freeLead}`, { status: 'active' })
+check('… et la demande peut passer en cours', r.status === 200, r)
+r = await free.patch(`/api/projects/${freeProjects[0]}`, { status: 'active' })
+check('gratuit : rouvrir un projet terminé, formule pleine → 402', r.status === 402, r)
+r = await free.patch(`/api/projects/${freeProjects[1]}`, { name: 'Projet gratuit renommé' })
+check('gratuit : un projet existant reste modifiable (la limite porte sur les actions, pas sur les données)', r.status === 200, r)
+r = await free.del(`/api/projects/${freeProjects[1]}`)
+check('gratuit : archiver libère une place', r.status === 200 && (await free.get('/api/me')).body.plan.openProjects === 2, r)
+await free.post('/api/projects', { name: 'Projet gratuit 4' })
+r = await free.del(`/api/projects/${freeProjects[1]}`)
+check('gratuit : désarchiver, formule pleine → 402', r.status === 402 && r.body.error === 'plan_limit_projects', r)
+r = await free.post('/api/team/invite', { email: `collegue-${stamp}@exemple.test` })
+check('gratuit : 1 personne, une invitation de plus → 402', r.status === 402 && r.body.error === 'plan_limit_seats' && r.body.limit === 1, r)
+const freeAcc = (await pool.query('select id from accounts where lead_org = $1', [freeOrg])).rows[0].id
+r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { id: randomUUID(), type: 'deal', org: freeOrg, occurred_at: new Date().toISOString(),
+  source: { app: 'crmlead', id: `lead-gratuit-${stamp}` }, data: { title: 'Affaire en gratuit', company: 'Client gratuit' } }, { authorization: `Bearer ${exchangeJwt()}` })
+const dealStatus = (await pool.query('select status from projects where id = $1', [r.body?.id])).rows[0]?.status
+check('gratuit, formule pleine : l’affaire gagnée arrive « à qualifier », rien n’est perdu', r.status === 201 && dealStatus === 'lead', { r: r.body, dealStatus })
+void freeAcc
 ll = await leadLogin((n) => lead(n, true), '?signup=1')
 check('« Créer un compte » : le Compte Lead ouvre son inscription (prompt=create)', ll.authorize.searchParams.get('prompt') === 'create', ll.authorize.href)
 ll = await leadLogin((n) => ({ ...lead(n, true), nonce: 'autre' }))
@@ -581,15 +618,19 @@ check('jeton d’un autre départ (nonce) → erreur, pas de session', ll.locati
 r = await app.request('http://localhost/auth/lead/callback?code=c&state=x')
 check('retour sans départ → erreur de session', r.headers.get('location') === '/login?erreur=session')
 const { refreshLeadPlans } = await import('../server/lib/jobs.js')
-entitlementsByOrg[`lead-org-${stamp}`] = { plan: { code: 'pro', name: 'Pro', rank: 10, seats: 1 }, apps: { projectlead: { access: true } }, subscriptions: [] }
+entitlementsByOrg[freeOrg] = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, upgrade_url: null } }, subscriptions: [] }
 let plans = await refreshLeadPlans()
-r = await new Client().req('GET', '/api/me', undefined, { cookie: proSession })
-check('formule relue chaque jour : Pro, la session reste ouverte', r.status === 200 && plans.checked >= 1 && plans.closed === 0, { plans, status: r.status })
-entitlementsByOrg[`lead-org-${stamp}`] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
+r = await free.get('/api/me')
+check('formule relue chaque jour : Pro+ prise ailleurs, limites levées le jour même', plans.checked >= 1 && r.body.plan.tier === 'pro_plus'
+  && r.body.plan.projectLimit === null && r.body.plan.seats === 5, { plans, plan: r.body.plan })
+r = await free.post('/api/projects', { name: 'Projet en Pro+' })
+check('Pro+ : un projet de plus passe', r.status === 201, r)
+entitlementsByOrg[freeOrg] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
 plans = await refreshLeadPlans()
-r = await new Client().req('GET', '/api/me', undefined, { cookie: proSession })
-const planNow = (await pool.query('select plan from accounts where lead_org = $1', [`lead-org-${stamp}`])).rows[0]?.plan
-check('formule résiliée : sessions fermées, formule notée', r.status === 401 && plans.closed >= 1 && planNow === 'free', { plans, status: r.status, planNow })
+r = await free.get('/api/me')
+check('formule résiliée : on garde l’accès en gratuit, rien n’est effacé', r.status === 200 && r.body.plan.tier === 'free'
+  && r.body.plan.openProjects > 3, { status: r.status, plan: r.body.plan })
+void proSession
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)

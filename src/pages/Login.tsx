@@ -8,7 +8,8 @@ import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthSh
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
   session: 'La connexion a expiré en chemin. Réessayez.',
-  formule: "Votre formule n'inclut pas ProjectLead : il faut la formule Pro ou Pro+, prise dans n'importe quelle application Lead.",
+  // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
+  formule: 'La connexion doit être refaite. Réessayez.',
   lead_non_configure: "Le Compte Lead n'est pas encore branché sur ce serveur.",
 }
 
@@ -52,20 +53,13 @@ export default function Login() {
 
   if (leadId === null || direct) return <AuthShell><Spinner label="Connexion au Compte Lead…" /></AuthShell>
 
-  const upgrade = params.get('upgrade')
   if (leadId && !withEmail) {
     return (
       <AuthShell title="Connexion">
         {error && <p role="alert" className="mb-6 border border-late bg-late/5 px-3 py-2 text-sm text-late">{error}</p>}
-        {upgrade && code === 'formule' && (
-          <a href={upgrade} className="mb-3 flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
-            Passer à Pro</a>
-        )}
         <a href={leadStart(next)} data-testid="lead-login"
-          className={upgrade && code === 'formule'
-            ? 'flex h-10 w-full items-center justify-center border border-input bg-card px-3 text-sm font-bold hover:bg-[#f4f2ef]'
-            : 'flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark'}>
-          {code === 'formule' ? 'Me connecter avec un autre compte' : 'Réessayer avec mon Compte Lead'}</a>
+          className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
+          Réessayer avec mon Compte Lead</a>
         <p className="mt-3 text-center text-sm text-muted-foreground">Le même compte pour Scanlead, CRMlead, ProjectLead et InvoiceLead.</p>
         <AuthSwitch><Link to="/login?acces=email" className={authLink}>Se connecter avec un e-mail et un mot de passe</Link></AuthSwitch>
       </AuthShell>

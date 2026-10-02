@@ -50,6 +50,8 @@ const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Email ou mot de passe incorrect.',
   email_taken: 'Cette adresse a déjà un compte.',
   signup_via_lead: "L'inscription se fait avec le Compte Lead.",
+  plan_limit_projects: 'La formule gratuite mène 3 projets en cours à la fois. Terminez ou archivez un projet, ou passez à Pro (Réglages → Entreprise).',
+  plan_limit_seats: 'Toutes les places de votre formule sont prises. Passez à une formule supérieure (Réglages → Entreprise) pour inviter quelqu\'un de plus.',
   invalid_input: 'Une valeur est refusée : vérifiez les champs.',
   forbidden: "Votre rôle ne permet pas cette action.",
   not_found: 'Introuvable, ou vous n\'y avez pas accès.',

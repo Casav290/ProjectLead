@@ -37,5 +37,7 @@ Code repris de CRMlead, à garder aligné : `server/lib/mailbox/*` (Gmail, Micro
 - Montants en centimes entiers, durées en minutes entières, dates `AAAA-MM-JJ`.
 - Rien n'est émis dans InvoiceLead : ProjectLead n'y crée que des brouillons, un par projet et par mois.
 - Le temps facturé ne se modifie plus.
+- Tout compte du Compte Lead entre, même en formule gratuite : la formule ne fixe que des quantités
+  (`server/lib/plans.ts`), et une limite bloque une action, jamais des données déjà créées.
 - Les pages publiques (`/suivi`, `/rdv`, `/demande`) ne rendent que ce qui est destiné au client : ni compte,
   ni jeton, ni email interne, ni ce qui n'est pas coché « visible par le client ».

@@ -8,7 +8,7 @@ import { Link } from 'react-router-dom'
  * publiques : server/routes/portal.ts…) ; le modifier, c'est modifier une promesse.
  */
 
-const UPDATED = '01.10.2026'
+const UPDATED = '02.10.2026'
 // Le contact de Quantum Liquid LLC, commun aux applications Lead.
 const CONTACT = 'support@scanlead.io'
 const PUBLISHER = 'Quantum Liquid LLC, société de droit du Wyoming, 30 N Gould St, Sheridan, WY 82801, États-Unis'
@@ -73,7 +73,7 @@ const TERMS: typeof PRIVACY = {
   intro: `ProjectLead est édité par ${PUBLISHER}. En utilisant ProjectLead, vous acceptez les présentes conditions. Contact : ${CONTACT}.`,
   sections: [
     { h: '1. Le service', p: ['ProjectLead permet de mener les projets après la signature : étapes, tâches, temps, suivi des clients et préparation de la facturation. Le service évolue et peut être modifié, amélioré ou interrompu en partie.'] },
-    { h: '2. Compte et formule', p: ['L\'accès se fait avec le Compte Lead. ProjectLead est compris dans les formules Pro et Pro+ de la famille Lead, quelle que soit l\'application où elles ont été prises ; la formule gratuite ne l\'ouvre pas. Vous êtes responsable de l\'exactitude des informations du compte, de la confidentialité de vos accès et de l\'usage fait par les membres que vous invitez.'] },
+    { h: '2. Compte et formule', p: ['L\'accès se fait avec le Compte Lead, ouvert à tous, gratuitement. La formule de la famille Lead, prise une fois dans n\'importe quelle application, fixe seulement les quantités : en gratuit, 3 projets en cours à la fois et 1 personne ; en Pro, projets sans limite ; en Pro+, jusqu\'à 5 personnes. Une limite porte sur les actions, jamais sur les données déjà créées. Vous êtes responsable de l\'exactitude des informations du compte, de la confidentialité de vos accès et de l\'usage fait par les membres que vous invitez.'] },
     { h: '3. Vos données', p: ['Les données que vous saisissez, importez ou synchronisez restent les vôtres. Vous garantissez avoir le droit de les traiter, notamment les coordonnées de vos clients et contacts. Leur traitement est décrit dans la politique de confidentialité.'] },
     { h: '4. Facturation dans InvoiceLead', p: ['ProjectLead ne crée dans InvoiceLead que des brouillons de facture. Rien n\'est émis ni envoyé à vos clients sans que vous le fassiez vous-même dans InvoiceLead : vous restez responsable des factures émises.'] },
     { h: '5. Usage acceptable', p: [[

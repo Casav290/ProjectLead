@@ -5,6 +5,7 @@ import { calendarsOnce } from './extcal.js'
 import { mailboxesOnce } from './mailbox/index.js'
 import { localDay } from './time.js'
 import { entitlementsOf } from './leadId.js'
+import { savePlan } from './plans.js'
 
 /**
  * Tâches de fond. Comme dans CRMlead, elles profitent du trafic (une instance en veille n'a pas de
@@ -97,24 +98,21 @@ export async function runJobs(force = false) {
 }
 
 /**
- * La formule de la famille, relue chaque jour au Compte Lead : une entreprise qui n'a plus accès à
- * ProjectLead (formule résiliée) voit ses sessions fermées, la prochaine connexion la refuse. Un
- * Compte Lead injoignable ne ferme rien.
+ * La formule de la famille, relue chaque jour au Compte Lead : une formule prise ou résiliée ailleurs
+ * change les limites ici le jour même (lib/plans.ts). Personne n'est mis dehors : en gratuit, on garde
+ * l'accès. Un Compte Lead injoignable ne change rien.
  */
 export async function refreshLeadPlans() {
-  if (!process.env.LEAD_ID_CLIENT_SECRET || !process.env.LEAD_ID_ISSUER) return { checked: 0, closed: 0 }
+  if (!process.env.LEAD_ID_CLIENT_SECRET || !process.env.LEAD_ID_ISSUER) return { checked: 0 }
   const accounts = await anon(async (db) => (await db.query('select id, lead_org from accounts where lead_org is not null')).rows)
-  let checked = 0, closed = 0
+  let checked = 0
   for (const a of accounts) {
     let rights
     try { rights = await entitlementsOf({ org: a.lead_org }) } catch { continue }
     checked++
-    await anon((db) => db.query('update accounts set plan = coalesce($2, plan) where id = $1', [a.id, rights.plan?.code ?? null]))
-    if (rights.apps?.projectlead?.access === false) {
-      closed += await anon(async (db) => (await db.query('delete from sessions where account_id = $1', [a.id])).rowCount ?? 0)
-    }
+    await anon((db) => savePlan(db, a.id, rights))
   }
-  return { checked, closed }
+  return { checked }
 }
 
 /**

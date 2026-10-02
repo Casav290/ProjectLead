@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { hashToken, newToken } from '../auth.js'
 import { body, email, HttpError, notFound, requireRole, router, tx, uuid } from '../lib/http.js'
 import { htmlParagraphs, layout, sendMail } from '../lib/email.js'
+import { assertSeatFree } from '../lib/plans.js'
 
 /** L'équipe : les personnes de l'entreprise, leurs rôles, leurs taux, leurs équipes. */
 const app = router()
@@ -30,6 +31,8 @@ app.post('/invite', async (c) => {
     const already = (await db.query(
       `select 1 from account_users au join users u on u.id = au.user_id where lower(u.email) = $1 and au.active`, [b.email])).rowCount
     if (already) throw new HttpError(409, 'already_member')
+    // Une place de la formule par personne (invitations en attente comprises).
+    await assertSeatFree(ctx.accountId)
     await db.query('insert into invitations (account_id, email, role, token_hash, invited_by) values ($1,$2,$3,$4,$5)',
       [ctx.accountId, b.email, b.role, hashToken(token), ctx.userId])
     return (await db.query('select name from accounts where id = app_account()')).rows[0].name as string

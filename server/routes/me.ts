@@ -4,6 +4,7 @@ import { anon } from '../db.js'
 import { leadIdConfigured } from './auth.js'
 import { body, HttpError, requireRole, router, tx } from '../lib/http.js'
 import { mailboxSecretConfigured } from '../lib/mailbox/secret.js'
+import { planOf } from '../lib/plans.js'
 
 const app = router()
 
@@ -24,8 +25,9 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
        from time_entries t join projects p on p.id = t.project_id left join tasks k on k.id = t.task_id
       where t.user_id = app_user() and t.minutes is null`)).rows[0] ?? null
   const inbox = (await db.query(`select count(*)::int as n from email_messages where status = 'new'`)).rows[0].n
+  const plan = await planOf(ctx.accountId)
   return c.json({
-    user: me, account, integrations: settings, unread, running, inbox,
+    user: me, account, integrations: settings, unread, running, inbox, plan,
     features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead },
     // L'adresse de capture n'existe que si un domaine de réception est vraiment branché (MX vers un relais).
     inboundAddress: process.env.INBOUND_DOMAIN ? `${account.inbound_token}@${process.env.INBOUND_DOMAIN}` : null,
