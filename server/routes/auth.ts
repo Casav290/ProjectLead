@@ -24,13 +24,13 @@ export const leadIdConfigured = () => Boolean(process.env.LEAD_ID_CLIENT_SECRET 
 export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null) {
   const token = newToken()
   await anon((db) => db.query(
-    `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent)
-     values ($1,$2,$3, now() + make_interval(days => $4), $5)`,
-    [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300)]))
+    `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token)
+     values ($1,$2,$3, now() + make_interval(days => $4), $5, $6)`,
+    [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null]))
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: SESSION_DAYS * 86400,
   })
-  if (idToken) setCookie(c, 'pl_lead_idt', idToken, { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/' })
+  // Un seul cookie par réponse : Neon Functions ne garde que le dernier (db/006_session_lead_token.sql).
   return token
 }
 
@@ -76,10 +76,10 @@ app.post('/api/auth/login', async (c) => {
 
 app.post('/api/auth/logout', async (c) => {
   const t = getCookie(c, SESSION_COOKIE)
-  if (t) await anon((db) => db.query('delete from sessions where token_hash = $1', [hashToken(t)]))
+  // Le jeton d'identité du Compte Lead est gardé avec la session (un seul cookie par réponse).
+  const gone = t ? await anon(async (db) => (await db.query('delete from sessions where token_hash = $1 returning lead_id_token', [hashToken(t)])).rows[0]) : null
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
-  const idt = getCookie(c, 'pl_lead_idt')
-  deleteCookie(c, 'pl_lead_idt', { path: '/' })
+  const idt = gone?.lead_id_token ?? null
   const back = `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/login`
   return c.json({ ok: true, redirect: idt && leadIdConfigured() ? logoutUrl(idt, back) : null })
 })
@@ -205,7 +205,8 @@ export async function attachLeadPerson(claims: LeadClaims) {
 
 app.get('/auth/lead/callback', async (c) => {
   const raw = await getSignedCookie(c, cookieSecret(), 'pl_lead_login')
-  deleteCookie(c, 'pl_lead_login', { path: '/' })
+  // Pas de suppression du cookie de départ ici : la réponse pose déjà le cookie de session, et Neon Functions
+  // ne garde que le dernier Set-Cookie. Il expire seul en 10 minutes ; son `state` ne sert qu'une fois.
   if (!raw) return c.redirect('/login?erreur=session')
   try {
     const saved = JSON.parse(raw) as Saved

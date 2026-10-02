@@ -556,7 +556,7 @@ async function leadLogin(claims: (nonce: string) => Record<string, unknown>, que
   nextIdClaims = claims(to.searchParams.get('nonce') ?? '')
   const back = await app.request(`http://localhost/auth/lead/callback?code=c&state=${to.searchParams.get('state')}`, { headers: { cookie: jar } })
   const session = (back.headers.get('set-cookie') ?? '').match(/projectlead_session=[^;]+/)?.[0] ?? ''
-  return { authorize: to, location: back.headers.get('location'), session }
+  return { authorize: to, location: back.headers.get('location'), session, cookies: back.headers.getSetCookie().length }
 }
 const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
   sub: `sub-${org}`, nonce, email: `${org}@exemple.test`, email_verified: true, name: 'Léa Lead', locale: 'fr',
@@ -567,9 +567,18 @@ const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
 let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
 check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
+// Neon Functions ne garde que le dernier Set-Cookie d'une réponse : au retour, la session doit être le seul cookie.
+check('retour du Compte Lead : un seul cookie posé, celui de la session', ll.cookies === 1, ll)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 check('l’entreprise Lead devient l’espace ProjectLead', r.status === 200 && r.body.account?.name === `Entreprise lead-org-${stamp}`, r.body)
 const proSession = ll.session
+{
+  const out = await app.request('http://localhost/api/auth/logout', { method: 'POST', headers: { cookie: ll.session } })
+  const body: any = await out.json()
+  check('déconnexion : un seul cookie, et la session du Compte Lead se ferme aussi (id_token_hint)',
+    out.headers.getSetCookie().length === 1 && String(body.redirect ?? '').includes('/oauth/logout?') && String(body.redirect).includes('id_token_hint='), body)
+}
+ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 const freeOrg = `free-org-${stamp}`
 ll = await leadLogin((n) => lead(n, false, freeOrg), '?next=/projets')
 check('formule gratuite : on entre quand même (règle d’Ève du 02.10)', ll.location === '/projets' && ll.session.length > 30, ll)
