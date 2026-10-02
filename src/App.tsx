@@ -1,29 +1,33 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import { Spinner, Toaster } from './components/ui'
 import { AppProvider, useApp } from './lib/store'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
-import Invitation from './pages/Invitation'
-import Portal from './pages/Portal'
-import Booking from './pages/Booking'
-import BookingManage from './pages/BookingManage'
-import IntakeForm from './pages/IntakeForm'
-import Dashboard from './pages/Dashboard'
-import MyTasks from './pages/MyTasks'
-import Projects from './pages/Projects'
-import ProjectDetail from './pages/ProjectDetail'
-import Templates from './pages/Templates'
-import Inbox from './pages/Inbox'
-import Agenda from './pages/Agenda'
-import Time from './pages/Time'
-import Workload from './pages/Workload'
-import Reports from './pages/Reports'
-import Clients from './pages/Clients'
-import ClientDetail from './pages/ClientDetail'
-import Billing from './pages/Billing'
-import Settings from './pages/Settings'
-import Search from './pages/Search'
+
+/** Chaque page se charge à l'ouverture : l'écran de connexion et l'accueil partent plus vite. */
+const Invitation = lazy(() => import('./pages/Invitation'))
+const Portal = lazy(() => import('./pages/Portal'))
+const Booking = lazy(() => import('./pages/Booking'))
+const BookingManage = lazy(() => import('./pages/BookingManage'))
+const IntakeForm = lazy(() => import('./pages/IntakeForm'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const MyTasks = lazy(() => import('./pages/MyTasks'))
+const Projects = lazy(() => import('./pages/Projects'))
+const ProjectDetail = lazy(() => import('./pages/ProjectDetail'))
+const Templates = lazy(() => import('./pages/Templates'))
+const Inbox = lazy(() => import('./pages/Inbox'))
+const Agenda = lazy(() => import('./pages/Agenda'))
+const Time = lazy(() => import('./pages/Time'))
+const Workload = lazy(() => import('./pages/Workload'))
+const Reports = lazy(() => import('./pages/Reports'))
+const Clients = lazy(() => import('./pages/Clients'))
+const ClientDetail = lazy(() => import('./pages/ClientDetail'))
+const Billing = lazy(() => import('./pages/Billing'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Search = lazy(() => import('./pages/Search'))
+const Legal = lazy(() => import('./pages/Legal'))
 
 /** Les pages publiques s'ouvrent avec ou sans session : le client n'a pas de compte. */
 const PUBLIC = [
@@ -32,12 +36,14 @@ const PUBLIC = [
   { path: '/rdv/:slug', el: <Booking /> },
   { path: '/demande/:slug', el: <IntakeForm /> },
   { path: '/invitation/:token', el: <Invitation /> },
+  { path: '/confidentialite', el: <Legal kind="privacy" /> },
+  { path: '/conditions', el: <Legal kind="terms" /> },
 ]
 
 function Routed() {
   const { me, loading } = useApp()
   const loc = useLocation()
-  const isPublic = /^\/(suivi|rdv|demande|invitation)\//.test(loc.pathname)
+  const isPublic = /^\/(suivi|rdv|demande|invitation)\/|^\/(confidentialite|conditions)$/.test(loc.pathname)
   if (isPublic) return <Routes>{PUBLIC.map((p) => <Route key={p.path} path={p.path} element={p.el} />)}</Routes>
   if (loading) return <Spinner />
   if (!me) {
@@ -50,6 +56,8 @@ function Routed() {
   }
   return (
     <Layout>
+      {/* Le cadre reste en place pendant le chargement d'une page. */}
+      <Suspense fallback={<Spinner />}>
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/taches" element={<MyTasks />} />
@@ -70,6 +78,7 @@ function Routed() {
         <Route path="/signup" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </Layout>
   )
 }
@@ -77,7 +86,9 @@ function Routed() {
 export default function App() {
   return (
     <AppProvider>
-      <Routed />
+      <Suspense fallback={<Spinner />}>
+        <Routed />
+      </Suspense>
       <Toaster />
     </AppProvider>
   )

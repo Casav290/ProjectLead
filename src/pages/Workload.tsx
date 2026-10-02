@@ -52,7 +52,7 @@ export default function WorkloadPage() {
                   <th className="sticky left-0 z-10 w-40 bg-head sm:w-52 px-3 py-2 text-left">Personne</th>
                   <th className="w-24 border-l border-[#eeebe7] px-2 py-2 text-center">En retard</th>
                   {weekStarts.map((w) => (
-                    <th key={w} className={clsx('border-l border-[#eeebe7] px-2 py-2 text-center', w === thisMonday && 'text-accent')}>
+                    <th key={w} className={clsx('border-l border-[#eeebe7] px-2 py-2 text-center', w === thisMonday && 'text-accent-dark')}>
                       <span className="block">{w === thisMonday ? 'Cette semaine' : 'Semaine du'}</span>
                       <span className="block font-semibold normal-case tracking-normal">{fmtShortDate(w)}</span>
                     </th>
@@ -92,7 +92,7 @@ export default function WorkloadPage() {
                             <button type="button" disabled={!l} onClick={() => setCell({ person: p, week: i, from: w, to: addDays(w, 6) })}
                               aria-label={`${p.name}, semaine du ${fmtShortDate(w)} : ${hours(minutes)} h estimées sur ${hours(p.capacity_minutes)}`}
                               className={clsx('w-full px-2 py-1.5 text-center enabled:hover:outline enabled:hover:outline-1 enabled:hover:outline-accent', tone(pct))}>
-                              <span className="block text-[13px] font-bold">{minutes ? `${hours(minutes)} h` : '—'}{minutes ? <span className="font-semibold opacity-80"> · {Math.round(pct)} %</span> : null}</span>
+                              <span className="block text-[13px] font-bold">{minutes ? `${hours(minutes)} h` : '—'}{minutes ? <span className="font-semibold"> · {Math.round(pct)} %</span> : null}</span>
                               {minutes > 0 && <span className="mt-1 block h-1 w-full bg-black/5"><span className={clsx('block h-full', bar(pct))} style={{ width: `${Math.min(100, pct)}%` }} /></span>}
                               <span className="mt-0.5 block text-[11px] text-muted-foreground">{logged ? `${hours(logged)} h saisies` : ' '}</span>
                             </button>

@@ -20,7 +20,7 @@ function TimeBudget({ p, bar }: { p: ProjectSummary; bar?: boolean }) {
     <span className="inline-block whitespace-nowrap">
       <span className={clsx('tabular-nums', over && 'font-bold text-late')}>{fmtMinutes(p.minutes_spent)}</span>
       <span className="text-muted-foreground"> / {fmtMinutes(p.budget_minutes)}</span>
-      {bar && <Progress className="mt-1" value={pct(p.minutes_spent, p.budget_minutes)} tone={over ? 'late' : p.minutes_spent > p.budget_minutes * 0.85 ? 'warn' : 'accent'} />}
+      {bar && <Progress label="Budget d'heures consommé" className="mt-1" value={pct(p.minutes_spent, p.budget_minutes)} tone={over ? 'late' : p.minutes_spent > p.budget_minutes * 0.85 ? 'warn' : 'accent'} />}
     </span>
   )
 }

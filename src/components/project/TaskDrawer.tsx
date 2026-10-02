@@ -271,7 +271,7 @@ function Checklist({ t, run }: { t: TaskDetail; run: Run }) {
   const doneCount = t.checklist.filter((c) => c.done).length
   return (
     <Section title="Liste de contrôle" aside={t.checklist.length ? <span className="text-xs text-muted-foreground">{doneCount}/{t.checklist.length}</span> : null}>
-      {t.checklist.length > 0 && <Progress value={(doneCount / t.checklist.length) * 100} tone={doneCount === t.checklist.length ? 'ok' : 'accent'} className="mb-2" />}
+      {t.checklist.length > 0 && <Progress label="Liste de contrôle" value={(doneCount / t.checklist.length) * 100} tone={doneCount === t.checklist.length ? 'ok' : 'accent'} className="mb-2" />}
       <ul className="space-y-0.5">
         {t.checklist.map((c) => (
           <li key={c.id} className="group flex items-center gap-2 py-0.5">
@@ -377,7 +377,7 @@ function TimeSection({ t, run, running, refreshMe }: { t: TaskDetail; run: Run; 
   return (
     <Section title="Temps" aside={
       <span className="text-xs text-muted-foreground">{fmtMinutes(total)}{t.estimate_minutes ? ` sur ${fmtMinutes(t.estimate_minutes)} estimées` : ''}</span>}>
-      {t.estimate_minutes ? <Progress value={(total / t.estimate_minutes) * 100} tone={total > t.estimate_minutes ? 'late' : 'accent'} className="mb-3" /> : null}
+      {t.estimate_minutes ? <Progress label="Temps passé sur l'estimation" value={(total / t.estimate_minutes) * 100} tone={total > t.estimate_minutes ? 'late' : 'accent'} className="mb-3" /> : null}
       <Button size="sm" variant={running ? 'danger' : 'primary'} onClick={timer}>{running ? 'Arrêter le chronomètre' : 'Lancer le chronomètre'}</Button>
       <form onSubmit={submit} className="mt-3 grid grid-cols-[5.5rem_1fr] gap-1.5 sm:grid-cols-[5.5rem_9.5rem_1fr_auto]">
         <Input value={minutes} onChange={(e) => setMinutes(e.target.value)} placeholder="1h30" aria-label="Durée" className="px-2 py-1.5 text-sm" />

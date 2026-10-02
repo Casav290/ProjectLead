@@ -49,6 +49,7 @@ export const api = {
 const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Email ou mot de passe incorrect.',
   email_taken: 'Cette adresse a déjà un compte.',
+  signup_via_lead: "L'inscription se fait avec le Compte Lead.",
   invalid_input: 'Une valeur est refusée : vérifiez les champs.',
   forbidden: "Votre rôle ne permet pas cette action.",
   not_found: 'Introuvable, ou vous n\'y avez pas accès.',

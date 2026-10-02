@@ -111,10 +111,11 @@ function AppSwitcher() {
   const [open, setOpen] = useState(false)
   const ref = useClickOutside(open, () => setOpen(false))
   const apps = [
+    // L'ordre et les couleurs de la famille, comme l'écran du Compte Lead (CRMlead, SuiteBrand).
+    { name: 'Scanlead', mark: 'SL', color: '#2563eb', url: 'https://scanlead.io', desc: 'Scanner les cartes de visite' },
     { name: 'CRMlead', mark: 'CL', color: '#0f6e70', url: 'https://crmlead.io', desc: 'Leads, contacts et adresses' },
     { name: 'ProjectLead', mark: 'PL', color: '#9a6a00', url: null, desc: 'Mener le projet une fois l’affaire signée' },
     { name: 'InvoiceLead', mark: 'IL', color: '#7a2e67', url: 'https://invoicelead.io', desc: 'Facturer et encaisser' },
-    { name: 'Scanlead', mark: 'SL', color: '#1d4ed8', url: 'https://scanlead.io', desc: 'Scanner les cartes de visite' },
   ]
   return (
     <div ref={ref} className="relative">

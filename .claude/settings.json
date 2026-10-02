@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Neon",
+      "mcp__github",
+      "mcp__claude-code-remote"
+    ]
+  }
+}

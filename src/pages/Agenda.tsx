@@ -167,12 +167,14 @@ function MonthView({ cursor, from, byDay, selected, onSelect, onOpen }:
         {days.map((d, i) => {
           const list = byDay.get(d) ?? []
           return (
-            <div key={d} role="button" tabIndex={0} onClick={() => onSelect(d)} onKeyDown={(e) => e.key === 'Enter' && onSelect(d)}
-              aria-label={`${fmt(d, { weekday: 'long', day: 'numeric', month: 'long' })}, ${list.length} élément(s)`}
+            // La case entière choisit le jour à la souris ; au clavier, c'est son numéro (un bouton) : pas de bouton dans un bouton.
+            <div key={d} onClick={() => onSelect(d)}
               className={clsx('min-h-[64px] min-w-0 cursor-pointer border-border p-1 sm:min-h-[104px]', i % 7 !== 6 && 'border-r', i >= 7 && 'border-t',
                 d.slice(0, 7) !== month && 'bg-head/70 text-muted-foreground', d === selected && 'outline outline-2 -outline-offset-2 outline-accent')}>
-              <div className={clsx('mb-1 inline-grid h-6 min-w-6 place-items-center px-1 text-xs font-bold tabular-nums', d === today() && 'bg-accent text-white')}>
-                {+d.slice(8)}</div>
+              <button type="button" onClick={(e) => { e.stopPropagation(); onSelect(d) }} aria-pressed={d === selected}
+                aria-label={`${fmt(d, { weekday: 'long', day: 'numeric', month: 'long' })}, ${list.length} élément(s)`}
+                className={clsx('mb-1 inline-grid h-6 min-w-6 place-items-center px-1 text-xs font-bold tabular-nums', d === today() && 'bg-accent text-white')}>
+                {+d.slice(8)}</button>
               <div className="hidden space-y-0.5 sm:block">
                 {list.slice(0, 3).map((it) => <Chip key={it.key} it={it} onOpen={onOpen} />)}
                 {list.length > 3 && <span className="block px-1 text-[11px] font-bold text-muted-foreground">+{list.length - 3} de plus</span>}

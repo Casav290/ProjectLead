@@ -63,15 +63,23 @@ eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Co
 `GOOGLE_*` et `MICROSOFT_*` (boîtes en un clic, mêmes applications OAuth que CRMlead ;
 `GOOGLE_MAILBOX_OAUTH=1` pour rallumer Gmail par OAuth), `TASKS_SECRET` (protège
 `POST /api/tasks/run`, à appeler par un cron : boîtes mail, agendas, suivis automatiques, rappels
-d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine affiché de l'adresse de capture).
+d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine de l'adresse de capture : à poser seulement quand son MX mène à un relais qui poste sur
+`/api/inbound/<jeton>` ; sans lui, aucune adresse n'est affichée, seul le point d'entrée du relais l'est).
 
 ## Mise en ligne
 
-Comme InvoiceLead : Vercel (région `cle1`) et Neon (projet `gentle-frog-61717092`, branche `production`,
-base `projectlead`, `aws-us-east-2`). `scripts/vercel-build.mjs` migre la base (production seulement),
-construit l'interface et empaquette le serveur en une fonction (Build Output API). Une tâche Vercel
-appelle `/api/tasks/run` chaque matin avec `CRON_SECRET`. Variables Vercel : `DATABASE_URL` (chaîne
-« pooled » de Neon), `APP_SECRET`, `CRON_SECRET` ; `PUBLIC_URL` est déduite de l'adresse Vercel si absente.
+En ligne sur Neon Functions, à côté de la base (projet Neon `gentle-frog-61717092`, branche `production`,
+base `projectlead`, `aws-us-east-2`) : **https://projectlead.io** (domaine personnalisé Neon ; adresse
+technique de la fonction : `br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech`).
+
+`node scripts/neon-build.mjs` produit `deploy/neon/index.mjs` (serveur, interface et migrations en un
+fichier, la base est migrée au démarrage). La fonction Neon `projectlead` est un petit amorçage
+(`deploy/neon/boot.mjs`) qui télécharge ce paquet depuis GitHub à un commit fixé et vérifie son empreinte :
+pour publier, construire, pousser, mettre le commit et l'empreinte dans `boot.mjs`, puis redéployer
+l'amorçage. Variables de la fonction : `PL_DATABASE_URL`, `APP_SECRET`, `TASKS_SECRET`, `PUBLIC_URL`.
+Le contrôle `.github/workflows/verifier-en-ligne.yml` vérifie projectlead.io à chaque envoi et chaque matin, sans
+rien créer en production (`scripts/e2e-prod.mjs` : connexion par le Compte Lead, inscription fermée, pages publiques).
+Une configuration Vercel (`vercel.json`, `scripts/vercel-build.mjs`) reste prête si l'on y passe un jour.
 
 ## Recevoir des emails sans boîte branchée
 

@@ -1,0 +1,36 @@
+name: Vérifier le site en ligne
+
+on:
+  push:
+    branches: [main, claude/gracious-goldberg-in79y0]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+jobs:
+  verifier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      URL: https://projectlead.io
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Santé de l'API
+        run: |
+          for i in 1 2 3 4 5 6; do
+            body=$(curl -s -m 60 "$URL/api/health") && echo "$body" | grep -q '"ok":true' && echo "$body" && exit 0
+            echo "essai $i : $body"; sleep 10
+          done
+          exit 1
+      - name: Navigateur
+        run: npm install --no-save --no-package-lock playwright@1.56.1 && npx playwright install --with-deps chromium
+      - name: Parcours réel dans le navigateur
+        run: node scripts/e2e-prod.mjs
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: captures
+          path: captures/

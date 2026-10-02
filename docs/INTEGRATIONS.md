@@ -56,3 +56,10 @@ Code : `server/lib/invoicelead.ts`, `server/lib/billing.ts`, routes `server/rout
 
 `npm test` joue ces deux intégrations contre un faux CRMlead, un faux InvoiceLead et un faux
 Compte Lead (clés JWKS) lancés en local (`scripts/smoke.ts`).
+
+## Contacts InvoiceLead repris comme clients
+
+Clients, « Importer depuis InvoiceLead » : la liste des contacts clients d'InvoiceLead (`GET /api/v1/contacts`,
+fournisseurs exclus), à reprendre un par un ou tous d'un coup. Le client garde le lien
+(`invoicelead_contact_id`) : un contact déjà repris est mis à jour, jamais dupliqué, et la facturation du mois
+l'utilise directement.

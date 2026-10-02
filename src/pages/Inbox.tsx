@@ -100,13 +100,16 @@ function CaptureHelp() {
     <div className="mb-5 border border-border border-l-[3px] border-l-accent bg-card px-4 py-3 text-sm">
       <p className="font-bold">Aucune boîte mail n'est encore branchée</p>
       <p className="mt-1 text-muted-foreground">
-        Branchez votre messagerie (Gmail, Microsoft 365 ou IMAP) dans <Link to="/reglages/emails" className="font-semibold text-accent hover:underline">Réglages → Emails</Link>,
-        ou transférez vos demandes à l'adresse de capture de l'entreprise : elles arriveront ici, prêtes à devenir des projets.
+        Branchez votre messagerie (Gmail, Microsoft 365 ou IMAP) dans <Link to="/reglages/emails" className="font-semibold text-accent hover:underline">Réglages → Emails</Link>
+        {me.inboundAddress ? ", ou transférez vos demandes à l'adresse de capture de l'entreprise" : ''} : les demandes de vos clients arriveront ici,
+        prêtes à devenir des projets.
       </p>
-      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-        <code className="min-w-0 max-w-full truncate bg-muted px-2 py-1 font-mono text-xs">{me.inboundAddress}</code>
-        <Button size="sm" onClick={() => copy(me.inboundAddress)}>Copier l'adresse</Button>
-      </div>
+      {me.inboundAddress && (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+          <code className="min-w-0 max-w-full truncate bg-muted px-2 py-1 font-mono text-xs">{me.inboundAddress}</code>
+          <Button size="sm" onClick={() => copy(me.inboundAddress!)}>Copier l'adresse</Button>
+        </div>
+      )}
       <details className="mt-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer font-semibold">Pour un script ou un relais de messagerie</summary>
         <p className="mt-1">Envoyez le message (JSON ou brut) en POST à :</p>

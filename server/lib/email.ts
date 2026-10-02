@@ -9,7 +9,7 @@ import { sendVia } from './mailbox/index.js'
  *
  * Ordre de préférence : la boîte de la personne qui envoie (le client reçoit un email de son
  * interlocuteur, pas d'un robot), puis la boîte par défaut de l'entreprise, puis le SMTP
- * système (`SMTP_URL`). Sans rien de tout cela, le message est seulement journalisé : rien ne
+ * système (Resend par `RESEND_API_KEY`, sinon `SMTP_URL`). Sans rien de tout cela, le message est seulement journalisé : rien ne
  * se perd, et les contrôles le relisent dans `sent_emails`.
  */
 
@@ -62,7 +62,25 @@ export async function sendMail(m: Mail): Promise<{ via: string }> {
       console.error('[email] boîte', mb.email, r.error)
     }
   }
-  // 2. Le SMTP système.
+  // 2. Resend, comme InvoiceLead (domaine projectlead.io vérifié chez Resend).
+  if (process.env.RESEND_API_KEY) {
+    const address = systemFrom().match(/<(.+)>/)?.[1] ?? systemFrom()
+    const res = await fetch(process.env.RESEND_API_URL || 'https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: m.fromName ? `${m.fromName.replace(/[<>"]/g, '')} via ProjectLead <${address}>` : systemFrom(),
+        to: m.to, subject: m.subject, text: m.text, html: m.html, reply_to: m.replyTo,
+        attachments: m.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })),
+      }),
+      signal: AbortSignal.timeout(20_000),
+    }).catch((e) => ({ ok: false, status: 0, text: async () => String(e) }) as const)
+    if (res.ok) { await log(m, 'resend', null); return { via: 'resend' } }
+    const err = (await res.text()).slice(0, 300)
+    await log(m, 'resend', `${res.status} ${err}`)
+    throw new Error('send_failed')
+  }
+  // 3. Le SMTP système.
   const t = systemTransport()
   if (t) {
     try {
@@ -77,7 +95,7 @@ export async function sendMail(m: Mail): Promise<{ via: string }> {
       throw new Error('send_failed')
     }
   }
-  // 3. Rien de branché : journalisé seulement.
+  // 4. Rien de branché : journalisé seulement.
   await log(m, 'log', null)
   if (process.env.NODE_ENV !== 'production') console.log(`[email] (journal) à ${m.to.join(', ')} : ${m.subject}`)
   return { via: 'log' }

@@ -215,8 +215,11 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
               </div>
               <div className="relative shrink-0 border-b border-input" style={{ width }}>
                 {top.map((m, i) => (
-                  <div key={i} className="absolute top-0 h-[22px] overflow-hidden whitespace-nowrap border-l border-input px-1.5 text-[11px] font-bold capitalize leading-[22px]"
-                       style={{ left: m.x, width: m.w }}>{m.label}</div>
+                  // `overflow: clip` (et non hidden) : le nom du mois reste collé au bord, lisible, quand le début du mois défile sous la colonne des tâches.
+                  <div key={i} className="absolute top-0 h-[22px] whitespace-nowrap border-l border-input text-[11px] font-bold capitalize leading-[22px] [overflow:clip]"
+                       style={{ left: m.x, width: m.w }}>
+                    <span className="sticky inline-block px-1.5" style={{ left: 'var(--gantt-left)' }}>{m.label}</span>
+                  </div>
                 ))}
                 {bottom.map((b, i) => (
                   <div key={i} className={clsx('absolute top-[22px] h-[22px] overflow-hidden border-l border-border text-center text-[10.5px] leading-[22px] text-muted-foreground',

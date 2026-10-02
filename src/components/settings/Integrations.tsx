@@ -40,14 +40,14 @@ export default function Integrations() {
         <LinkCard app="crmlead" data={data} onChange={changed}
           title="CRMlead" intro="Le carnet d'adresses : reprenez l'adresse et les contacts des entreprises de vos leads, et gardez-les à jour."
           keyHint={<>Créez une clé <code className="font-mono">crm_…</code> dans CRMlead → Intégrations, puis collez-la ici.</>}
-          keyPlaceholder="crm_…" urlPlaceholder="https://app.crmlead.ch">
+          keyPlaceholder="crm_…" defaultUrl="https://crmlead.io">
           <CrmleadRefresh />
         </LinkCard>
 
         <LinkCard app="invoicelead" data={data} onChange={changed}
           title="InvoiceLead" intro="La facturation : chaque mois, un brouillon de facture par projet, que vous relisez et émettez dans InvoiceLead."
           keyHint={<>Créez une clé <code className="font-mono">il_live_…</code> dans InvoiceLead → Réglages → API (formule Pro+), puis collez-la ici.</>}
-          keyPlaceholder="il_live_…" urlPlaceholder="https://app.invoicelead.ch" language>
+          keyPlaceholder="il_live_…" defaultUrl="https://invoicelead.io" language>
           <BillingSchedule data={data} onChange={reload} />
         </LinkCard>
 
@@ -56,8 +56,8 @@ export default function Integrations() {
             <p className="flex flex-wrap items-center gap-2">
               {data.lead_exchange.configured ? <Badge tone="ok">Disponible</Badge> : <Badge>Non configuré sur ce serveur</Badge>}
             </p>
-            <p>Les affaires gagnées dans CRMlead arrivent ici en projets « à qualifier », avec leur client. Dans CRMlead, indiquez cette adresse
-              de réception pour ProjectLead :</p>
+            <p>Les affaires gagnées dans CRMlead arrivent ici d'elles-mêmes, en projets « à qualifier » avec leur client, pour toute
+              entreprise connectée à ProjectLead avec son Compte Lead. Rien à régler : CRMlead connaît l'adresse de réception.</p>
             <CopyField value={inbox} label="Adresse de réception" />
             {!data.lead_exchange.configured && (
               <p className="text-xs text-muted-foreground">L'échange passe par le Compte Lead : la personne qui administre le serveur doit
@@ -70,19 +70,20 @@ export default function Integrations() {
   )
 }
 
-function LinkCard({ app, data, title, intro, keyHint, keyPlaceholder, urlPlaceholder, language, onChange, children }: {
-  app: App; data: Settings; title: string; intro: string; keyHint: ReactNode; keyPlaceholder: string; urlPlaceholder: string
+function LinkCard({ app, data, title, intro, keyHint, keyPlaceholder, defaultUrl, language, onChange, children }: {
+  app: App; data: Settings; title: string; intro: string; keyHint: ReactNode; keyPlaceholder: string; defaultUrl: string
   language?: boolean; onChange: () => void; children?: ReactNode
 }) {
   const savedUrl = data[`${app}_url`]
   const connected = Boolean(savedUrl && data[`${app}_key`])
-  const [url, setUrl] = useState(savedUrl ?? '')
+  // L'adresse de l'application de la famille, déjà remplie : seule la clé est à coller.
+  const [url, setUrl] = useState(savedUrl ?? defaultUrl)
   const [key, setKey] = useState('')
   const [lang, setLang] = useState(data.invoice_language)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [disconnecting, setDisconnecting] = useState(false)
-  useEffect(() => { setUrl(savedUrl ?? ''); setLang(data.invoice_language) }, [savedUrl, data.invoice_language])
+  useEffect(() => { setUrl(savedUrl ?? defaultUrl); setLang(data.invoice_language) }, [savedUrl, defaultUrl, data.invoice_language])
 
   const save = async (e: FormEvent) => {
     e.preventDefault()
@@ -103,7 +104,7 @@ function LinkCard({ app, data, title, intro, keyHint, keyPlaceholder, urlPlaceho
         <form onSubmit={save} className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Adresse">
-              <Input type="url" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={urlPlaceholder} />
+              <Input type="url" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={defaultUrl} />
             </Field>
             <Field label="Clé d'API" hint={connected ? 'Une clé est enregistrée : laissez vide pour la garder.' : undefined}>
               <Input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} required={!connected}

@@ -42,6 +42,9 @@ async function createAccount(db: Db, a: { company: string; leadOrg?: string | nu
 }
 
 app.post('/api/auth/signup', async (c) => {
+  // Avec le Compte Lead, on s'inscrit là-bas : la formule de la famille ouvre ou ferme ProjectLead.
+  // Une inscription locale passerait à côté (espace ouvert sans formule).
+  if (leadIdConfigured()) throw new HttpError(403, 'signup_via_lead')
   const b = await body(c, z.object({
     name: z.string().trim().min(1).max(120), email, password: z.string().min(10).max(200),
     company: z.string().trim().min(1).max(200),
@@ -124,11 +127,13 @@ type Saved = { state: string; nonce: string; verifier: string; next?: string }
 app.get('/auth/lead/start', async (c) => {
   if (!leadIdConfigured()) return c.redirect('/login?erreur=lead_non_configure')
   const s = startLogin({ locale: 'fr' })
+  // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
+  const url = c.req.query('signup') === '1' ? `${s.url}&prompt=create` : s.url
   const next = c.req.query('next')
   await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state: s.state, nonce: s.nonce, verifier: s.verifier,
     next: next?.startsWith('/') && !next.startsWith('//') ? next : undefined } satisfies Saved), cookieSecret(),
     { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: 600 })
-  return c.redirect(s.url)
+  return c.redirect(url)
 })
 
 /**
@@ -181,11 +186,12 @@ app.get('/auth/lead/callback', async (c) => {
   try {
     const saved = JSON.parse(raw) as Saved
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
-    const who = await attachLeadPerson(claims)
-    if (!who.access) {
-      const up = claims.lead?.apps?.projectlead?.upgrade_url
+    // La formule d'abord : sans accès, rien n'est créé ici (ni personne, ni entreprise).
+    if (claims.lead?.apps?.projectlead?.access === false) {
+      const up = claims.lead.apps.projectlead.upgrade_url
       return c.redirect(`/login?erreur=formule${up ? `&upgrade=${encodeURIComponent(up)}` : ''}`)
     }
+    const who = await attachLeadPerson(claims)
     await openSession(c, who.userId, who.accountId, tokens.id_token)
     return c.redirect(saved.next ?? '/')
   } catch (e) {
