@@ -50,8 +50,9 @@ const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Email ou mot de passe incorrect.',
   email_taken: 'Cette adresse a déjà un compte.',
   signup_via_lead: "L'inscription se fait avec le Compte Lead.",
-  plan_limit_projects: 'La formule gratuite mène 3 projets en cours à la fois. Terminez ou archivez un projet, ou passez à Pro (Réglages → Entreprise).',
-  plan_limit_seats: 'Toutes les places de votre formule sont prises. Passez à une formule supérieure (Réglages → Entreprise) pour inviter quelqu\'un de plus.',
+  plan_limit_projects: 'La formule gratuite mène 3 projets en cours à la fois : terminez ou archivez un projet. Pour davantage, un administrateur peut passer à Pro (Réglages → Entreprise).',
+  plan_limit_seats: 'Toutes les places de la formule sont prises. Pour une personne de plus, un administrateur peut passer à Pro+, jusqu\'à 5 personnes (Réglages → Entreprise).',
+  plan_limit_seats_full: 'Les 5 places de Pro+ sont prises : retirez une personne ou une invitation en attente pour en inviter une autre.',
   invalid_input: 'Une valeur est refusée : vérifiez les champs.',
   forbidden: "Votre rôle ne permet pas cette action.",
   not_found: 'Introuvable, ou vous n\'y avez pas accès.',
@@ -84,5 +85,7 @@ const MESSAGES: Record<string, string> = {
 }
 export const errorText = (e: unknown) => {
   const code = e instanceof ApiError ? e.code : String((e as Error)?.message ?? e)
+  // En Pro+, plus de formule au-dessus : on dit quoi faire plutôt que de renvoyer vers une mise à niveau.
+  if (code === 'plan_limit_seats' && e instanceof ApiError && e.body?.plan === 'pro_plus') return MESSAGES.plan_limit_seats_full
   return MESSAGES[code] ?? `Erreur : ${code}`
 }

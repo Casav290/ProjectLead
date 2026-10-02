@@ -8,6 +8,7 @@ import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthSh
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
   session: 'La connexion a expiré en chemin. Réessayez.',
+  places: "Toutes les places de cette entreprise sont prises. Un administrateur peut passer à Pro+ ou libérer une place ; vous pourrez alors entrer.",
   // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
   formule: 'La connexion doit être refaite. Réessayez.',
   lead_non_configure: "Le Compte Lead n'est pas encore branché sur ce serveur.",

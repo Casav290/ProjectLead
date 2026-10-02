@@ -10,6 +10,8 @@ const ZONES = ['Europe/Zurich', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 
 
 export default function Company() {
   const { me, refresh } = useApp()
+  // Les chiffres de la formule, à jour à chaque visite (invitations, projets ouverts ailleurs).
+  useEffect(() => { refresh() }, [])
   const [f, setF] = useState({ name: '', timezone: 'Europe/Zurich', currency: 'CHF', week_hours: '42' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)

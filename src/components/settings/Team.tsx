@@ -14,14 +14,14 @@ type TeamData = { members: Member[]; teams: TeamRow[]; invitations: InvitationRo
 const hoursText = (min: number) => (min / 60).toLocaleString('fr-CH', { maximumFractionDigits: 1 })
 
 export default function Team() {
-  const { me, refreshTeam } = useApp()
+  const { me, refreshTeam, refresh } = useApp()
   const { isAdmin, canManage } = useRole()
   const { data, error, loading, reload } = useLoad<TeamData>('/team')
   const [editing, setEditing] = useState<Member | null>(null)
   const [inviting, setInviting] = useState(false)
   const [team, setTeam] = useState<TeamRow | 'new' | null>(null)
   const [revoking, setRevoking] = useState<InvitationRow | null>(null)
-  const changed = () => { reload(); refreshTeam() }
+  const changed = () => { reload(); refreshTeam(); refresh() }
 
   if (loading && !data) return <Spinner />
   if (!data) return <ErrorNote error={error} />
@@ -29,7 +29,7 @@ export default function Team() {
   const active = data.members.filter((m) => m.active)
 
   const revoke = async (i: InvitationRow) => {
-    try { await api.del(`/team/invitations/${i.id}`); toast('Invitation révoquée'); reload() } catch (e) { toast(errorText(e)) }
+    try { await api.del(`/team/invitations/${i.id}`); toast('Invitation révoquée'); reload(); refresh() } catch (e) { toast(errorText(e)) }
   }
 
   return (
@@ -37,6 +37,13 @@ export default function Team() {
       <SettingsHeader title="Équipe" action={canManage && <Button variant="primary" onClick={() => setInviting(true)}>Inviter une personne</Button>}>
         Les personnes de {me?.account.name}, leurs rôles, leurs taux et leur disponibilité.
       </SettingsHeader>
+      {me?.plan.seats != null && me.plan.members + me.plan.invited >= me.plan.seats && (
+        <p className="-mt-2 mb-5 border border-border bg-card px-3 py-2 text-sm">
+          {me.plan.tier === 'pro_plus' ? 'Les 5 places de Pro+ sont prises : retirez une personne ou une invitation pour en inviter une autre.'
+            : <>Votre formule {me.plan.name} compte {me.plan.seats === 1 ? '1 personne' : `${me.plan.seats} personnes`}, et toutes les places sont prises.
+                {' '}<a href={me.plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Pro+ pour inviter jusqu'à 5 personnes</a></>}
+        </p>
+      )}
 
       <section className="mb-8">
         <h2 className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-muted-foreground">Membres ({active.length})</h2>

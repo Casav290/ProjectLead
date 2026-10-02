@@ -25,7 +25,7 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
        from time_entries t join projects p on p.id = t.project_id left join tasks k on k.id = t.task_id
       where t.user_id = app_user() and t.minutes is null`)).rows[0] ?? null
   const inbox = (await db.query(`select count(*)::int as n from email_messages where status = 'new'`)).rows[0].n
-  const plan = await planOf(ctx.accountId)
+  const plan = await planOf(db, ctx.accountId)
   return c.json({
     user: me, account, integrations: settings, unread, running, inbox, plan,
     features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead },

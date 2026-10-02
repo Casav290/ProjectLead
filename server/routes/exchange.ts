@@ -69,9 +69,10 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
                   budget_cents = coalesce($4, budget_cents), updated_at = now() where id = $1`,
           [projectId, d.title ? String(d.title).slice(0, 200) : null, d.description ?? null, amount])
       } else {
-        // Formule pleine (lib/plans.ts) : l'affaire n'est pas perdue, elle arrive « à qualifier ».
-        const p = await planOf(acc.id)
-        const projectStatus = p.projectLimit !== null && p.openProjects >= p.projectLimit ? 'lead' : 'planned'
+        // Formule pleine (lib/plans.ts) : l'affaire n'est pas perdue, elle arrive « à qualifier », et on le dit.
+        const p = await planOf(db, acc.id, true)
+        const planFull = p.projectLimit !== null && p.openProjects >= p.projectLimit
+        const projectStatus = planFull ? 'lead' : 'planned'
         projectId = (await db.query(
           `insert into projects (account_id, name, description, client_id, owner_id, status, source, source_ref, budget_cents,
                                  fixed_cents, billing_mode, currency, created_by)
@@ -82,7 +83,8 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
         if (fallbackOwner) {
           await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead') on conflict do nothing`, [projectId, fallbackOwner, acc.id])
           await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'deal',$3,$4)`,
-            [acc.id, fallbackOwner, `Affaire gagnée dans CRMlead : ${d.title ?? clientName}`, `/projets/${projectId}`])
+            [acc.id, fallbackOwner, `Affaire gagnée dans CRMlead : ${d.title ?? clientName}${planFull
+              ? ` (arrivée « à qualifier » : la formule ${p.name} a déjà ${p.projectLimit} projets en cours)` : ''}`, `/projets/${projectId}`])
         }
         await db.query(`insert into activities (account_id, project_id, kind, data) values ($1,$2,'from_crmlead',$3)`,
           [acc.id, projectId, JSON.stringify({ url: e.source.url ?? null })])

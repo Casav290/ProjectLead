@@ -540,6 +540,7 @@ r = await pool.query('select subject from email_messages where message_id = any(
 check('entrée de plus de 30 jours effacée, la récente gardée', r.rows.length === 1 && r.rows[0].subject === 'Récent', r.rows)
 
 section('Connexion par le Compte Lead, de bout en bout')
+const { refreshLeadPlans } = await import('../server/lib/jobs.js')
 process.env.LEAD_ID_CLIENT_ID = 'projectlead'
 process.env.LEAD_ID_CLIENT_SECRET = 'lid_essai'
 process.env.LEAD_ID_REDIRECT_URI = 'http://localhost/auth/lead/callback'
@@ -611,13 +612,72 @@ r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { id: randomUU
 const dealStatus = (await pool.query('select status from projects where id = $1', [r.body?.id])).rows[0]?.status
 check('gratuit, formule pleine : l’affaire gagnée arrive « à qualifier », rien n’est perdu', r.status === 201 && dealStatus === 'lead', { r: r.body, dealStatus })
 void freeAcc
+// Relecture contradictoire du 02.10 : chaque contournement trouvé a son contrôle.
+r = await free.post('/api/projects', { name: 'Modèle à rouvrir', is_template: true })
+const tpl = r.body.id
+r = await free.patch(`/api/projects/${tpl}`, { is_template: false })
+check('gratuit, formule pleine : un modèle repassé en projet → 402', r.status === 402 && r.body.error === 'plan_limit_projects', r)
+r = await free.patch(`/api/projects/${tpl}`, { is_template: false, status: 'active' })
+check('… même avec un statut en cours dans la même requête', r.status === 402, r)
+ll = await leadLogin((n) => { const c: any = lead(n, true, `sans-portee-${stamp}`); delete c.org; delete c.lead; return c })
+r = await pool.query('select count(*)::int as n from users where lower(email) = lower($1)', [`sans-portee-${stamp}@exemple.test`])
+check('portée « lead » retirée de l’adresse : connexion refusée, rien de créé', ll.location === '/login?erreur=lead' && !ll.session && r.rows[0].n === 0, { ll, n: r.rows[0].n })
+// Places : une deuxième personne de l'organisation gratuite (1 place) reste dehors, avec un message clair.
+ll = await leadLogin((n) => ({ ...lead(n, false, freeOrg), sub: `sub-collegue-${stamp}`, email: `collegue2-${stamp}@exemple.test`, org_role: 'user' }))
+check('gratuit (1 place) : une deuxième personne de l’organisation → « places prises »', ll.location === '/login?erreur=places' && !ll.session, ll)
+// Une organisation Pro+ (5 places) et un membre local venu d'une autre organisation, gratuite.
+const plusOrg = `plus-org-${stamp}`
+const plusLead = (n: string) => ({ ...lead(n, true, plusOrg), lead: { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true } }, subscriptions: [] } })
+ll = await leadLogin(plusLead)
+const plus = new Client(); plus.cookie = ll.session
+r = await plus.post('/api/team/invite', { email: `paul-${stamp}@exemple.test` })
+check('Pro+ : inviter passe', r.status === 201 || r.status === 200, r)
+const paulToken = String(r.body.link ?? '').split('/').pop()
+r = await new Client().post(`/api/auth/invitation/${paulToken}/accept`, { name: 'Paul', password: 'motdepasse-solide' })
+check('Pro+ : Paul accepte l’invitation', r.status === 200, r)
+ll = await leadLogin((n) => ({ ...lead(n, false, `paul-org-${stamp}`), sub: `sub-paul-${stamp}`, email: `paul-${stamp}@exemple.test`, org_role: 'admin' }))
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+const plusPlan = (await pool.query('select plan from accounts where lead_org = $1', [plusOrg])).rows[0]?.plan
+check('membre venu d’une organisation gratuite : il entre dans l’entreprise Pro+, dont la formule reste Pro+',
+  r.status === 200 && r.body.plan?.tier === 'pro_plus' && plusPlan === 'pro_plus', { plan: r.body.plan, plusPlan })
+// Une entreprise d'avant le Compte Lead ne se lie pas à l'organisation personnelle d'un simple membre.
+const localAcc = (await pool.query(`insert into accounts (name) values ('Atelier local ${stamp}') returning id`)).rows[0].id
+const localAdmin = (await pool.query(`insert into users (email, name) values ($1, 'Admin local') returning id`, [`admin-local-${stamp}@exemple.test`])).rows[0].id
+const localMember = (await pool.query(`insert into users (email, name) values ($1, 'Marc local') returning id`, [`marc-local-${stamp}@exemple.test`])).rows[0].id
+await pool.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin'), ($1,$3,'member')`, [localAcc, localAdmin, localMember])
+ll = await leadLogin((n) => ({ ...lead(n, false, `marc-org-${stamp}`), sub: `sub-marc-local-${stamp}`, email: `marc-local-${stamp}@exemple.test`, org_role: 'admin' }))
+r = await pool.query('select lead_org, plan from accounts where id = $1', [localAcc])
+check('entreprise locale : un simple membre ne la lie pas à son organisation gratuite', ll.session.length > 30 && r.rows[0].lead_org === null && r.rows[0].plan === 'pro', { row: r.rows[0], loc: ll.location })
+// Une invitation en attente quand la formule baisse : son acceptation est refusée, puis une réactivation aussi.
+r = await plus.post('/api/team/invite', { email: `yves-${stamp}@exemple.test` })
+const yvesToken = String(r.body.link ?? '').split('/').pop()
+entitlementsByOrg[plusOrg] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
+await refreshLeadPlans()
+r = await new Client().post(`/api/auth/invitation/${yvesToken}/accept`, { name: 'Yves', password: 'motdepasse-solide' })
+check('formule descendue en gratuit : une ancienne invitation ne fait plus entrer (402)', r.status === 402 && r.body.error === 'plan_limit_seats', r)
+const paulId = (await pool.query('select id from users where lower(email) = lower($1)', [`paul-${stamp}@exemple.test`])).rows[0].id
+r = await plus.patch(`/api/team/members/${paulId}`, { active: false })
+check('désactiver une personne passe', r.status === 200, r)
+r = await plus.patch(`/api/team/members/${paulId}`, { active: true })
+check('la réactiver quand toutes les places sont prises → 402', r.status === 402 && r.body.error === 'plan_limit_seats', r)
+// Course : trois ouvertures simultanées pour une seule place libre, une seule passe.
+const raceOrg = `course-org-${stamp}`
+ll = await leadLogin((n) => ({ ...lead(n, false, raceOrg), sub: `sub-course-${stamp}`, email: `course-${stamp}@exemple.test` }))
+const race = new Client(); race.cookie = ll.session
+await race.post('/api/projects', { name: 'Course 1' }); await race.post('/api/projects', { name: 'Course 2' })
+const tries = await Promise.all([1, 2, 3].map((n) => race.post('/api/projects', { name: `Course simultanée ${n}` })))
+const open = (await race.get('/api/me')).body.plan.openProjects
+check('trois créations simultanées pour une place : une seule passe, 3 projets en cours', tries.filter((t) => t.status === 201).length === 1 && open === 3,
+  { statuts: tries.map((t) => t.status), open })
+// Affaire reçue « à qualifier » faute de place : la notification le dit.
+const note = (await pool.query(`select n.title from notifications n join accounts a on a.id = n.account_id where a.lead_org = $1 and n.kind = 'deal' order by n.created_at desc limit 1`, [freeOrg])).rows[0]?.title ?? ''
+check('affaire arrivée à qualifier faute de place : la notification l’explique', /à qualifier/.test(note), note)
 ll = await leadLogin((n) => lead(n, true), '?signup=1')
 check('« Créer un compte » : le Compte Lead ouvre son inscription (prompt=create)', ll.authorize.searchParams.get('prompt') === 'create', ll.authorize.href)
 ll = await leadLogin((n) => ({ ...lead(n, true), nonce: 'autre' }))
 check('jeton d’un autre départ (nonce) → erreur, pas de session', ll.location === '/login?erreur=lead' && !ll.session, ll)
 r = await app.request('http://localhost/auth/lead/callback?code=c&state=x')
 check('retour sans départ → erreur de session', r.headers.get('location') === '/login?erreur=session')
-const { refreshLeadPlans } = await import('../server/lib/jobs.js')
 entitlementsByOrg[freeOrg] = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, upgrade_url: null } }, subscriptions: [] }
 let plans = await refreshLeadPlans()
 r = await free.get('/api/me')

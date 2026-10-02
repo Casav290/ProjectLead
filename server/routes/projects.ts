@@ -6,7 +6,7 @@ import { buildReport, sendReport } from '../lib/clientReport.js'
 import { createDefaultColumns } from '../lib/defaults.js'
 import { sendMail } from '../lib/email.js'
 import { newMessageId } from '../lib/mailbox/types.js'
-import { assertCanOpenProjects, isOpenStatus } from '../lib/plans.js'
+import { assertCanOpenProject, isOpenStatus } from '../lib/plans.js'
 import { body, cents, email, forbidden, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
 
 /**
@@ -125,7 +125,7 @@ export async function createProject(db: Db, ctx: Ctx, b: z.infer<typeof projectS
   template_id?: string | null; member_ids?: string[]; source?: string; source_ref?: string | null
 }) {
   // La formule compte les projets en cours (lib/plans.ts) ; un modèle ou une demande à qualifier ne comptent pas.
-  if (!b.is_template && isOpenStatus(b.status)) await assertCanOpenProjects(ctx.accountId)
+  if (!b.is_template && isOpenStatus(b.status)) await assertCanOpenProject(db, ctx.accountId)
   const fields = PROJECT_FIELDS.filter((k) => (b as any)[k] !== undefined)
   const p = (await db.query(
     `insert into projects (account_id, created_by, owner_id, source, source_ref ${fields.filter((f) => f !== 'owner_id').map((f) => ', ' + f).join('')})
@@ -196,10 +196,11 @@ app.patch('/:id', async (c) => {
     const id = c.req.param('id')
     await assertCanEdit(db, ctx, id)
     const before = (await db.query('select status, name, is_template, archived_at from projects where id = $1', [id])).rows[0]
-    // Rouvrir un projet (à qualifier, terminé ou abandonné → en cours) prend une place de la formule.
-    if (b.status && isOpenStatus(b.status) && !isOpenStatus(before.status) && !before.is_template && !before.archived_at) {
-      await assertCanOpenProjects(ctx.accountId)
-    }
+    if (!before) throw notFound()
+    // Tout passage vers « en cours » prend une place de la formule : statut rouvert, modèle redevenu projet.
+    const counted = (p: { status: string; is_template: boolean; archived_at: unknown }) => !p.is_template && !p.archived_at && isOpenStatus(p.status)
+    const after = { status: b.status ?? before.status, is_template: b.is_template ?? before.is_template, archived_at: before.archived_at }
+    if (!counted(before) && counted(after)) await assertCanOpenProject(db, ctx.accountId)
     const s = setClause(b, PROJECT_FIELDS, 2)
     if (!s.keys.length) return
     await db.query(`update projects set ${s.sql}, updated_at = now(),
@@ -221,7 +222,7 @@ app.delete('/:id', async (c) => {
     const p = (await db.query('select is_template, archived_at, status from projects where id = $1', [c.req.param('id')])).rows[0]
     if (!p) throw notFound()
     // Désarchiver un projet en cours reprend une place de la formule.
-    if (!p.is_template && p.archived_at && isOpenStatus(p.status)) await assertCanOpenProjects(ctx.accountId)
+    if (!p.is_template && p.archived_at && isOpenStatus(p.status)) await assertCanOpenProject(db, ctx.accountId)
     if (p.is_template) await db.query('delete from projects where id = $1', [c.req.param('id')])
     else await db.query('update projects set archived_at = case when archived_at is null then now() else null end where id = $1', [c.req.param('id')])
   })

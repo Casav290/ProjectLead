@@ -32,7 +32,7 @@ app.post('/invite', async (c) => {
       `select 1 from account_users au join users u on u.id = au.user_id where lower(u.email) = $1 and au.active`, [b.email])).rowCount
     if (already) throw new HttpError(409, 'already_member')
     // Une place de la formule par personne (invitations en attente comprises).
-    await assertSeatFree(ctx.accountId)
+    await assertSeatFree(db, ctx.accountId)
     await db.query('insert into invitations (account_id, email, role, token_hash, invited_by) values ($1,$2,$3,$4,$5)',
       [ctx.accountId, b.email, b.role, hashToken(token), ctx.userId])
     return (await db.query('select name from accounts where id = app_account()')).rows[0].name as string
@@ -59,7 +59,12 @@ app.patch('/members/:userId', async (c) => {
     cost_rate_cents: z.number().int().min(0).max(10_000_00).optional(),
     capacity_minutes: z.number().int().min(0).max(10080).optional(),
   }))
-  await tx(c, async (db) => {
+  await tx(c, async (db, ctx) => {
+    // Réactiver une personne reprend une place de la formule.
+    if (b.active === true) {
+      const was = (await db.query('select active from account_users where account_id = app_account() and user_id = $1', [c.req.param('userId')])).rows[0]
+      if (was && !was.active) await assertSeatFree(db, ctx.accountId, false)
+    }
     const r = await db.query(
       `update account_users set role = coalesce($2, role), active = coalesce($3, active),
               hourly_rate_cents = coalesce($4, hourly_rate_cents), cost_rate_cents = coalesce($5, cost_rate_cents),

@@ -70,6 +70,8 @@ export default function NewProjectDialog({ open, onClose, templateId, clientId }
       if (newClient !== null) {
         if (!newClient.trim()) throw new Error('Indiquez le nom du nouveau client.')
         client_id = (await api.post<{ id: string }>('/clients', { name: newClient.trim() })).id
+        // Le client existe désormais : un nouvel essai le reprend au lieu d'en créer un second.
+        setClients((cs) => [...cs, { id: client_id, name: newClient.trim() } as Client]); setClient(client_id); setNewClient(null)
       }
       const field = AMOUNT_FIELD[billing]
       const cents = field ? parseMoney(amount) : null

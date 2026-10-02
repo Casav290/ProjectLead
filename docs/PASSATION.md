@@ -80,8 +80,9 @@ production.
 ## Fait le 01.10
 
 - Domaine projectlead.io : répond (`/api/health`), contrôle en ligne et README dessus.
-- Connexion réelle par le Compte Lead : crmlead.io renvoie bien vers projectlead.io ; la formule
-  gratuite est refusée (essai avec le compte eve.gemmet@gmail.com, formule gratuite).
+- Connexion réelle par le Compte Lead : crmlead.io renvoie bien vers projectlead.io (essai avec le compte
+  eve.gemmet@gmail.com, formule gratuite). Le refus de la formule gratuite qu'on voyait alors est levé le
+  02.10 (règle d'Ève : tout compte entre).
 - Premier e-mail réel : suivi client envoyé par Resend depuis suivi@invoicelead.io, reçu dans la
   boîte de réception Gmail d'Ève (pas en spam).
 - CRMlead : la session CRMlead a préparé l'ocre du carré PL et la migration `114_projectlead_live.sql`
