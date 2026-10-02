@@ -530,6 +530,20 @@ check('jeton inconnu → 401', r.status === 401)
 r = await pool.query('select last_used_at from task_tokens where token_hash = encode(sha256($1::bytea), \'hex\')', [taskToken])
 check('dernier usage noté', r.rows[0]?.last_used_at !== null, r.rows)
 
+section('Secrets du serveur posés par le jeton d’exploitation')
+r = await new Client().req('PUT', '/api/ops/secrets/GLM_API_KEY', { value: 'cle-ia-de-controle-123' })
+check('sans jeton → 401', r.status === 401)
+r = await new Client().req('PUT', '/api/ops/secrets/AUTRE', { value: 'x'.repeat(20) }, { authorization: `Bearer ${taskToken}` })
+check('nom inconnu → 404', r.status === 404)
+const glmBefore = process.env.GLM_API_KEY
+r = await new Client().req('PUT', '/api/ops/secrets/GLM_API_KEY', { value: 'cle-ia-de-controle-123' }, { authorization: `Bearer ${taskToken}` })
+const stored = (await pool.query(`select value_enc from server_secrets where name = 'GLM_API_KEY'`)).rows[0]?.value_enc ?? ''
+check('clé IA posée : chiffrée en base, lue par le serveur', r.status === 200 && stored.startsWith('v1.') && !stored.includes('cle-ia-de-controle')
+  && process.env.GLM_API_KEY === 'cle-ia-de-controle-123', { status: r.status })
+r = await new Client().req('DELETE', '/api/ops/secrets/GLM_API_KEY', undefined, { authorization: `Bearer ${taskToken}` })
+check('clé IA retirée', r.status === 200 && !process.env.GLM_API_KEY && !(await pool.query(`select 1 from server_secrets`)).rowCount)
+if (glmBefore) process.env.GLM_API_KEY = glmBefore
+
 section('File « À trier » : 30 jours au plus')
 await pool.query(`insert into email_messages (account_id, message_id, from_email, subject, received_at) values
   ($1, $2, 'vieux@exemple.test', 'Ancien', now() - interval '31 days'), ($1, $3, 'recent@exemple.test', 'Récent', now() - interval '2 days')`,

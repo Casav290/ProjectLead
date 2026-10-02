@@ -14,6 +14,8 @@ process.env.NODE_ENV ||= 'production'
 const { migrate } = await import('./migrate.js')
 await migrate(console.log, migrations)
 const { default: app } = await import('./index.js')
+const { hydrateServerSecrets } = await import('./lib/secrets.js')
+await hydrateServerSecrets()
 
 const SERVER = /^\/(api|auth|\.well-known)(\/|$)/
 
