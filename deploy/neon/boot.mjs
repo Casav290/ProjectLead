@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
-const SRC = 'https://raw.githubusercontent.com/Casav290/ProjectLead/c7cd50f0e3770911be8be4ac18eba0530e26eb5f/deploy/neon/index.mjs'
-const SUM = '683a2279c62556f3fc746a7ea54a40273799f17c55735b74904e4bfbc01f36ab'
+const SRC = 'https://raw.githubusercontent.com/Casav290/ProjectLead/b9ce298e2b485c2afac4abd564b2c808a7c7812b/deploy/neon/index.mjs'
+const SUM = '25d8b0dfb9a959c2c4d596998cc72331bc179ff3b18519f7a8edc6182c3cdd2a'
 let app = null
 
 async function load() {
