@@ -8,7 +8,8 @@ import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthSh
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
   session: 'La connexion a expiré en chemin. Réessayez.',
-  places: "Toutes les places de cette entreprise sont prises. Un administrateur peut passer à Pro+ ou libérer une place ; vous pourrez alors entrer.",
+  email: 'Confirmez d\'abord votre adresse e-mail avec le lien envoyé par le Compte Lead (le lien peut se redemander dans votre compte, sur crmlead.io), puis revenez ici.',
+  portee: 'Le Compte Lead n\'a pas transmis votre organisation. Reprenez la connexion depuis projectlead.io, sans modifier l\'adresse.',
   // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
   formule: 'La connexion doit être refaite. Réessayez.',
   lead_non_configure: "Le Compte Lead n'est pas encore branché sur ce serveur.",
@@ -60,7 +61,7 @@ export default function Login() {
         {error && <p role="alert" className="mb-6 border border-late bg-late/5 px-3 py-2 text-sm text-late">{error}</p>}
         <a href={leadStart(next)} data-testid="lead-login"
           className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
-          Réessayer avec mon Compte Lead</a>
+          {code === 'email' ? 'J\'ai confirmé mon adresse, entrer' : 'Réessayer avec mon Compte Lead'}</a>
         <p className="mt-3 text-center text-sm text-muted-foreground">Le même compte pour Scanlead, CRMlead, ProjectLead et InvoiceLead.</p>
         <AuthSwitch><Link to="/login?acces=email" className={authLink}>Se connecter avec un e-mail et un mot de passe</Link></AuthSwitch>
       </AuthShell>

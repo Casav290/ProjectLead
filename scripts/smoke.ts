@@ -630,10 +630,28 @@ r = await free.patch(`/api/projects/${tpl}`, { is_template: false, status: 'acti
 check('… même avec un statut en cours dans la même requête', r.status === 402, r)
 ll = await leadLogin((n) => { const c: any = lead(n, true, `sans-portee-${stamp}`); delete c.org; delete c.lead; return c })
 r = await pool.query('select count(*)::int as n from users where lower(email) = lower($1)', [`sans-portee-${stamp}@exemple.test`])
-check('portée « lead » retirée de l’adresse : connexion refusée, rien de créé', ll.location === '/login?erreur=lead' && !ll.session && r.rows[0].n === 0, { ll, n: r.rows[0].n })
+check('portée « lead » retirée de l’adresse : connexion refusée, message précis, rien de créé', ll.location === '/login?erreur=portee' && !ll.session && r.rows[0].n === 0, { ll, n: r.rows[0].n })
 // Places : une deuxième personne de l'organisation gratuite (1 place) reste dehors, avec un message clair.
 ll = await leadLogin((n) => ({ ...lead(n, false, freeOrg), sub: `sub-collegue-${stamp}`, email: `collegue2-${stamp}@exemple.test`, org_role: 'user' }))
-check('gratuit (1 place) : une deuxième personne de l’organisation → « places prises »', ll.location === '/login?erreur=places' && !ll.session, ll)
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('gratuit (1 place) : une deuxième personne de l’organisation entre quand même, dans son propre espace gratuit',
+  ll.session.length > 30 && r.status === 200 && r.body.account?.name !== `Entreprise ${freeOrg}` && r.body.plan?.tier === 'free' && r.body.unread >= 1,
+  { loc: ll.location, account: r.body.account?.name, plan: r.body.plan, unread: r.body.unread })
+// Une adresse pas encore confirmée chez le Compte Lead : un message clair, pas de boucle, rien de créé.
+ll = await leadLogin((n) => ({ ...lead(n, false, `non-confirme-${stamp}`), email_verified: false }))
+check('adresse pas encore confirmée : écran « confirmez votre adresse », rien de créé', ll.location === '/login?erreur=email' && !ll.session, ll)
+// Une personne désactivée dans l'espace de son organisation n'y tourne pas en boucle : elle entre ailleurs.
+const annOrg = `ann-org-${stamp}`
+const annPlan = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true } }, subscriptions: [] }
+ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan }))
+const annAdmin = new Client(); annAdmin.cookie = ll.session
+ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
+const annId = (await pool.query('select id from users where lead_sub = $1', [`sub-ann-${stamp}`])).rows[0]?.id
+r = await annAdmin.patch(`/api/team/members/${annId}`, { active: false })
+check('l’administrateur désactive Ann', r.status === 200, r)
+ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('Ann désactivée se reconnecte : session valable dans son propre espace, pas de boucle', r.status === 200 && r.body.account?.name !== `Entreprise ${annOrg}`, { status: r.status, account: r.body?.account?.name })
 // Une organisation Pro+ (5 places) et un membre local venu d'une autre organisation, gratuite.
 const plusOrg = `plus-org-${stamp}`
 const plusLead = (n: string) => ({ ...lead(n, true, plusOrg), lead: { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true } }, subscriptions: [] } })

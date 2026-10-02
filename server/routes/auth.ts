@@ -187,19 +187,38 @@ export async function attachLeadPerson(claims: LeadClaims) {
     }
     if (ownOrg) await savePlan(db, acc.id, claims.lead)
     const role = claims.org_role === 'admin' ? 'admin' : claims.org_role === 'manager' ? 'manager' : 'member'
-    const already = (await db.query('select active from account_users where account_id = $1 and user_id = $2', [acc.id, user.id])).rows[0]
-    if (!already && !created) {
-      // Une personne de plus prend une place. Une invitation en attente à son adresse la lui tenait déjà.
+    /** Une place dans cette entreprise : déjà active, ou prise maintenant s'il en reste (invitation en attente comprise). */
+    const placeIn = async (accountId: string) => {
+      const already = (await db.query('select active from account_users where account_id = $1 and user_id = $2', [accountId, user.id])).rows[0]
+      if (already) return Boolean(already.active)
       const inv = (await db.query(
-        `update invitations set accepted_at = now()
-          where id = (select id from invitations where account_id = $1 and lower(email) = lower($2) and accepted_at is null
-                        and expires_at > now() order by created_at desc limit 1) returning role`, [acc.id, claims.email])).rows[0]
+        `select id, role from invitations where account_id = $1 and lower(email) = lower($2) and accepted_at is null and expires_at > now()
+          order by created_at desc limit 1`, [accountId, claims.email])).rows[0]
       // Avec une invitation, sa place est déjà comptée : on vérifie seulement que la formule n'a pas baissé depuis.
-      await assertSeatFree(db, acc.id, !inv)
+      try { await assertSeatFree(db, accountId, !inv) } catch (e) {
+        if (e instanceof HttpError && e.code === 'plan_limit_seats') return false
+        throw e
+      }
+      if (inv) await db.query('update invitations set accepted_at = now() where id = $1', [inv.id])
       await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,$3) on conflict (account_id, user_id) do nothing`,
-        [acc.id, user.id, inv?.role ?? role])
+        [accountId, user.id, inv?.role ?? role])
+      return true
     }
-    return { userId: user.id as string, accountId: acc.id as string }
+    // Toute personne entre (Ève, 02.10.2026). Si l'entreprise de son organisation est complète ou qu'elle y a été
+    // désactivée : une autre entreprise où elle est active, sinon son propre espace en formule gratuite.
+    let accountId = acc.id
+    if (!created && !(await placeIn(acc.id))) {
+      const other = (await db.query(
+        `select au.account_id from account_users au where au.user_id = $1 and au.active and au.account_id <> $2
+          order by au.joined_at limit 1`, [user.id, acc.id])).rows[0]
+      if (other) accountId = other.account_id
+      else {
+        accountId = await createAccount(db, { company: claims.name || claims.email, plan: 'free' }, user.id)
+        await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'plan',$3,'/reglages/entreprise')`,
+          [accountId, user.id, `L'espace de ${claims.org_name || 'votre organisation'} n'a plus de place pour vous : voici votre propre espace, en formule gratuite.`])
+      }
+    }
+    return { userId: user.id as string, accountId }
   })
 }
 
@@ -211,13 +230,14 @@ app.get('/auth/lead/callback', async (c) => {
   try {
     const saved = JSON.parse(raw) as Saved
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
-    // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026) ; seule une
-    // entreprise dont toutes les places sont prises peut la retenir dehors.
+    // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026).
     const who = await attachLeadPerson(claims)
     await openSession(c, who.userId, who.accountId, tokens.id_token)
     return c.redirect(saved.next ?? '/')
   } catch (e) {
-    if (e instanceof HttpError && e.code === 'plan_limit_seats') return c.redirect('/login?erreur=places')
+    // Des refus qui durent : un message précis, et pas de nouveau départ automatique (qui tournerait en boucle).
+    if ((e as Error).message === 'email_not_verified') return c.redirect('/login?erreur=email')
+    if ((e as Error).message === 'lead_scope_missing') return c.redirect('/login?erreur=portee')
     console.error('[compte lead]', (e as Error).message)
     return c.redirect('/login?erreur=lead')
   }
