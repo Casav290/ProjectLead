@@ -1,4 +1,4 @@
-# Passation ProjectLead (01.10.2026, soir)
+# Passation ProjectLead (02.10.2026)
 
 À lire en premier par la session qui reprend. Ensuite : `CLAUDE.md`, `docs/PLAN.md`, `README.md`.
 
@@ -12,10 +12,9 @@ ne jamais lui demander d'autorisation.
 
 ## Où en est le produit
 
-- Code : `Casav290/ProjectLead`, branche `claude/gracious-goldberg-in79y0` (PR #2). Tout le travail du
-  01.10 y est : connexion comme InvoiceLead, pages légales, accessibilité, chargement découpé, jetons
-  de tâches. La fusion dans `main` reste à faire (le filtre de sécurité refuse qu'un agent fusionne
-  sans relecture : c'est le clic d'Ève).
+- Code : `Casav290/ProjectLead`. PR #2 fusionnée le 02.10 par Ève (commit `ae16a58`) : tout le travail
+  du 01.10 est dans `main` (connexion comme InvoiceLead, pages légales, accessibilité, chargement
+  découpé, jetons de tâches, formule relue chaque jour).
 - Contrôles locaux : `npm run typecheck`, `npm test` (144 verts, sur `TEST_DATABASE_URL`), `npm run build`.
 - Contrôle en ligne : `.github/workflows/verifier-en-ligne.yml`, sur https://projectlead.io, à chaque
   envoi et chaque matin. `scripts/e2e-prod.mjs` ne crée plus rien en production (13 points :
@@ -35,12 +34,11 @@ sans accès, ses sessions sont fermées. Un Compte Lead injoignable ne ferme rie
 
 ## Accès à GitHub depuis le VPS
 
-Pas de jeton. Le filtre de sécurité refuse qu'un agent crée une clé de déploiement. Une clé est prête
-(`~/.ssh/projectlead_deploy`, hôte `github-projectlead` dans `~/.ssh/config`) : si Ève l'a ajoutée
-avec écriture, `git push git@github-projectlead:Casav290/ProjectLead.git` marche. Sinon, déposer les
-fichiers par la page « Upload files » de GitHub dans le Chrome du VPS (session d'Ève ouverte) : un
-commit par dossier, `file_upload` sur le champ fichier, message posé en JS, clic « Commit changes ».
-Vérifier ensuite chaque fichier par son empreinte sur `raw.githubusercontent.com`.
+Clé de déploiement avec écriture ajoutée par Ève le 02.10 : `~/.ssh/projectlead_deploy`, hôte
+`github-projectlead` (`git@github-projectlead:Casav290/ProjectLead.git`, remote `origin` du clone
+`~/projets/projectlead`). Le filtre de sécurité refuse encore à un agent, sans accord écrit d'Ève dans la
+session : fusionner une PR sans relecture, envoyer le paquet de production, effacer des données de
+production.
 
 ## Hébergement
 
@@ -83,18 +81,22 @@ Vérifier ensuite chaque fichier par son empreinte sur `raw.githubusercontent.co
 
 ## Ce qui reste, dans l'ordre
 
-1. **Fusion de la PR #2 et publication** : le filtre de sécurité refuse les deux à un agent. Accord
-   écrit d'Ève, ou ses clics (« Merge pull request », puis publication du paquet). Ensuite, poser le cron.
-2. **Essai Pro** : se connecter avec un Compte Lead en formule Pro ou Pro+ et arriver sur l'accueil.
-   Le compte ouvert dans le Chrome du VPS (eve.gemmet@gmail.com) est en formule gratuite.
-3. **CRMlead en ligne** : vérifier sur crmlead.io que le carré PL est ocre et que ProjectLead apparaît
-   dans le sélecteur d'applications (publication par la session CRMlead, accord d'Ève).
-4. **Clés d'Ève** dans ProjectLead, Réglages, Intégrations (adresses déjà remplies) : clé CRMlead
-   (`crm_…`) et clé InvoiceLead (`il_live_…`, formule Pro+). Ensuite, essai : un client repris de
-   CRMlead, un contact repris d'InvoiceLead, un brouillon de facture du mois.
+1. **Publication** de la version de `main` (jetons de tâches, formule relue chaque jour) : accord écrit
+   d'Ève, puis paquet, amorçage, `deploy_function` (zip seul), empreinte du jeton dans `task_tokens` et
+   crontab du VPS.
+2. **Formule Pro pour Ève** : son Compte Lead eve.gemmet@gmail.com est en Free, ProjectLead la refuse
+   (vérifié le 02.10 par Claude Desktop). Trois voies : payer Pro (CRMlead, 19 €/mois), se connecter avec
+   un compte déjà Pro ou Pro+ (eve@scanlead.io a l'équipe offerte de Scanlead : à vérifier qu'elle est
+   déclarée au Compte Lead), ou offrir la formule par migration ciblée dans CRMlead (session CRMlead).
+3. **Clés d'Ève** : une fois la formule Pro en place, Ève crée la clé CRMlead
+   (https://crmlead.io/integrations) et la clé InvoiceLead (https://invoicelead.io/fr/app/settings/api,
+   Pro+) et les colle elle-même dans https://projectlead.io/reglages/integrations (adresses déjà
+   remplies). Ni Claude Desktop ni un agent ne saisissent une clé dans un site.
+4. **CRMlead en ligne** : carré PL ocre et ProjectLead dans le sélecteur d'applications (migration
+   `114_projectlead_live.sql` prête par la session CRMlead, publication avec l'accord d'Ève).
 5. **Comptes de contrôle** : 14 comptes « Contrôle … » (`controle-…@exemple.test`) créés en production
-   par l'ancien contrôle en ligne, plus le projet « Essai d envoi ProjectLead » de l'un d'eux. À effacer
-   avec l'accord d'Ève (`delete from accounts where name like 'Contrôle %'`, la suppression suit en cascade ;
-   puis les `users` sans entreprise).
+   par l'ancien contrôle en ligne, et le projet « Essai d envoi ProjectLead » de l'un d'eux. À effacer
+   avec l'accord d'Ève (`delete from accounts where name like 'Contrôle %'`, puis les `users` sans
+   entreprise).
 6. **Expéditeur** : quand projectlead.io sera vérifié chez Resend, proposer `EMAIL_FROM` sur
    `suivi@projectlead.io` (aujourd'hui `suivi@invoicelead.io`, choix d'Ève).

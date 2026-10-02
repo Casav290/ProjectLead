@@ -25,14 +25,15 @@ Version 2, 01.10.2026 (soir).
 | 1. En ligne | Neon Functions, base migrée au démarrage, contrôle automatique quotidien, tâches de fond par cron | Contrôle GitHub « Vérifier le site en ligne » vert sur projectlead.io (13 points, rien créé en production) | fait (déploiement 7) ; tâches de fond par cron prêtes, à publier (accord d'Ève) |
 | 2. Domaine | `projectlead.io` vers la fonction (domaine personnalisé Neon + DNS Porkbun) | `https://projectlead.io/api/health` répond | fait (01.10), avec et sans www |
 | 3. Emails | Resend, `RESEND_API_KEY` dans la fonction | Premier envoi réel reçu | fait (01.10) : suivi client reçu dans la boîte de réception Gmail d'Ève, depuis `suivi@invoicelead.io` ; passer sur `suivi@projectlead.io` quand le domaine sera vérifié chez Resend |
-| 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10), formule gratuite refusée ; reste l'essai avec une formule Pro |
+| 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10), formule gratuite refusée (revérifié le 02.10 par Claude Desktop) ; reste l'essai avec une formule Pro |
 | 5. Liens famille | Clés CRMlead et InvoiceLead posées dans l'entreprise d'Ève ; `projectlead` en `live` dans `lead_apps` de CRMlead | Une adresse reprise de CRMlead, un brouillon dans InvoiceLead | migration CRMlead `114_projectlead_live.sql` prête (session CRMlead), publication à confirmer ; clés à poser par Ève |
 
 ## Ce qui bloque
 
-Rien de technique. Restent des gestes d'Ève : accord pour fusionner la PR #2 et publier la dernière
-version (le filtre de sécurité le refuse à un agent), se connecter avec un Compte Lead en formule Pro,
-poser ses clés CRMlead et InvoiceLead. Détail dans `docs/PASSATION.md`.
+Rien de technique. Restent des décisions et gestes d'Ève : accord écrit pour publier la version de
+`main` ; une formule Pro ou Pro+ pour son Compte Lead (eve.gemmet@gmail.com est en Free, ProjectLead
+la refuse) ; puis ses clés CRMlead et InvoiceLead, qu'elle colle elle-même. Détail dans
+`docs/PASSATION.md`.
 
 ## Publier une nouvelle version
 
