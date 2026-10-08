@@ -734,6 +734,64 @@ check('formule résiliée : on garde l’accès en gratuit, rien n’est effacé
 void proSession
 delete process.env.LEAD_ID_CLIENT_SECRET
 
+section('Page d’accueil et médias hors paquet')
+{
+  const { hasSession, sessionToken } = await import('../server/lib/landing.js')
+  const { mediaPath, mediaResponse, remoteMedia, etagOf } = await import('../server/lib/media.js')
+  const { createHash } = await import('node:crypto')
+  const { existsSync } = await import('node:fs')
+  check('cookie de session lu, cookie étranger ignoré', sessionToken(`a=1; ${marc.cookie}`) === marc.cookie.split('=')[1] && sessionToken('autre=xyz') === null)
+  check('sans cookie : visiteur, sans requête à la base', !(await hasSession(null)) && !(await hasSession('')))
+  check('session valide reconnue', await hasSession(marc.cookie))
+  check('session inconnue : visiteur', !(await hasSession('projectlead_session=' + 'x'.repeat(43))))
+  check('chemins de média : sous-dossiers simples seulement', mediaPath('/media/film/a-b.mp4') === '/media/film/a-b.mp4'
+    && mediaPath('/media/../server/db.ts') === null && mediaPath('/media/a.exe') === null && mediaPath('/media/.env') === null)
+  const body = new Uint8Array(1000).map((_, i) => i % 251)
+  const sum = createHash('sha256').update(body).digest('hex')
+  const file = { body, type: 'video/mp4', etag: etagOf(sum) }
+  const at = (h: Record<string, string> = {}, method = 'GET') => mediaResponse(new Request('http://x/media/f.mp4', { method, headers: h }), file)
+  let m = at()
+  check('média : 200, taille et plages annoncées', m.status === 200 && m.headers.get('content-length') === '1000' && m.headers.get('accept-ranges') === 'bytes')
+  m = at({ range: 'bytes=0-1' })
+  check('média : plage 0-1 → 206 de 2 octets (Safari)', m.status === 206 && m.headers.get('content-range') === 'bytes 0-1/1000' && (await m.arrayBuffer()).byteLength === 2)
+  m = at({ range: 'bytes=900-' })
+  check('média : plage ouverte → fin du fichier', m.status === 206 && m.headers.get('content-range') === 'bytes 900-999/1000')
+  m = at({ range: 'bytes=-100' })
+  check('média : 100 derniers octets', m.status === 206 && m.headers.get('content-range') === 'bytes 900-999/1000')
+  m = at({ range: 'bytes=2000-3000' })
+  check('média : plage impossible → 416', m.status === 416 && m.headers.get('content-range') === 'bytes */1000')
+  m = at({ 'if-none-match': file.etag })
+  check('média : déjà en cache → 304', m.status === 304)
+  m = at({}, 'HEAD')
+  check('média : HEAD sans corps', m.status === 200 && (await m.arrayBuffer()).byteLength === 0)
+  let calls = 0
+  const fake = (async () => { calls++; return new Response(body) }) as unknown as typeof fetch
+  const remote = remoteMedia({ base: 'https://exemple.test/media/', files: { '/media/f.mp4': { sha256: sum, size: 1000, type: 'video/mp4' } } }, fake)
+  const r1 = await remote('/media/f.mp4'); await remote('/media/f.mp4')
+  check('média distant : empreinte vérifiée, téléchargé une seule fois', r1?.body.byteLength === 1000 && calls === 1)
+  check('média distant : absent du manifeste → rien', (await remote('/media/autre.mp4')) === null)
+  const bad = remoteMedia({ base: 'https://exemple.test/media/', files: { '/media/f.mp4': { sha256: '0'.repeat(64), size: 1000, type: 'video/mp4' } } }, fake)
+  check('média distant : empreinte fausse → refusé', await bad('/media/f.mp4').then(() => false, (e) => /empreinte/.test(e.message)))
+  if (existsSync('media/accueil/gantt-800.avif')) {
+    let res = await app.request('http://localhost/media/accueil/gantt-800.avif')
+    check('serveur : image de l’accueil servie hors paquet', res.status === 200 && res.headers.get('content-type') === 'image/avif')
+    res = await app.request('http://localhost/media/accueil/gantt-800.avif', { headers: { range: 'bytes=0-9' } })
+    check('serveur : plage → 206', res.status === 206)
+    res = await app.request('http://localhost/media/accueil/inconnu.avif')
+    check('serveur : média inconnu → 404', res.status === 404)
+  }
+  if (existsSync('dist/accueil.html')) {
+    let res = await app.request('http://localhost/')
+    let html = await res.text()
+    check('« / » sans session : page d’accueil, jamais en cache partagé', /<title>ProjectLead, la gestion de projet/.test(html) && res.headers.get('vary') === 'Cookie')
+    res = await app.request('http://localhost/', { headers: { cookie: marc.cookie } })
+    html = await res.text()
+    check('« / » avec session : l’application', /id="root"/.test(html) && !/la gestion de projet des PME<\/title>/.test(html))
+    res = await app.request('http://localhost/', { headers: { cookie: 'projectlead_session=' + 'y'.repeat(43) } })
+    check('« / » avec une session périmée : page d’accueil', /<title>ProjectLead, la gestion de projet/.test(await res.text()))
+  }
+}
+
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
 crm.close(); il.close(); issuerSrv.close()
 await pool.end()

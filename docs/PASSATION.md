@@ -22,6 +22,20 @@ ne jamais lui demander d'autorisation.
   pages légales, lien de suivi inconnu, aucune erreur JavaScript). À la main :
   `URL=https://projectlead.io node scripts/e2e-prod.mjs`.
 
+## Page d'accueil (08.10.2026, branche `landing`)
+
+- `/` montre la page d'accueil à un visiteur sans session valide, l'application à une session valide
+  (`server/lib/landing.ts`, réponse `Vary: Cookie`, jamais en cache partagé). Boutons « Créer mon compte » et
+  « Se connecter » vers `https://projectlead.io/login` (qui part sur ERPlead).
+- Fichiers : `accueil.html` (entrée Vite à part), `src/landing/accueil.css` et `accueil.ts` (Trait net, ocre,
+  animations coupées par « réduire les animations »), `media/` (captures AVIF/WebP et film), `scripts/landing/`
+  (données fictives de Moraine Bâtiment SA, captures Playwright, images, image de partage).
+- Les médias restent **hors du paquet JS** : le serveur Node lit `media/`, la fonction Neon télécharge chaque fichier à
+  la première demande depuis GitHub au commit fixé par `neon-build.mjs` (empreinte SHA-256 vérifiée), avec Range/206
+  pour Safari. Publier : commit et push de `media/` AVANT `node scripts/neon-build.mjs` (le script refuse sinon).
+- Film, musique et sources : `partage/Quantum Liquid LLC/projectlead/landing/` (README, GATES.md, vérifications).
+- `scripts/e2e-prod.mjs` contrôle aussi l'accueil, une image et le film en 206.
+
 ## Connexion
 
 Comme InvoiceLead : `/login` et `/signup` partent tout droit vers le Compte Lead (crmlead.io),

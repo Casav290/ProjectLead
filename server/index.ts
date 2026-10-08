@@ -12,6 +12,8 @@ import { HttpError, type Env } from './lib/http.js'
 import { runJobsIfDue, runJobs } from './lib/jobs.js'
 import { hydrateServerSecrets, SERVER_SECRETS, setServerSecret, type ServerSecret } from './lib/secrets.js'
 import { mailboxSecretConfigured } from './lib/mailbox/secret.js'
+import { hasSession, PAGE_HEADERS } from './lib/landing.js'
+import { localMedia, mediaResponse } from './lib/media.js'
 import authRoutes from './routes/auth.js'
 import meRoutes from './routes/me.js'
 import teamRoutes from './routes/team.js'
@@ -147,11 +149,21 @@ app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404))
 
 // ------------------------------------------------------------------ application web
 
+// Images et film de la page d'accueil, hors du paquet (server/lib/media.ts). Sur Neon, server/neon.ts les sert.
+const media = localMedia(join(import.meta.dirname, '..', 'media'))
+app.on(['GET', 'HEAD'], '/media/*', (c) => {
+  const file = media(c.req.path)
+  return file ? mediaResponse(c.req.raw, file) : c.text('Introuvable', 404)
+})
+
 const dist = join(import.meta.dirname, '..', 'dist')
 if (existsSync(dist)) {
+  const index = readFileSync(join(dist, 'index.html'), 'utf8')
+  // « / » : la page d'accueil pour un visiteur, l'application pour une session valide.
+  const accueil = existsSync(join(dist, 'accueil.html')) ? readFileSync(join(dist, 'accueil.html'), 'utf8') : null
+  app.get('/', async (c) => new Response(accueil && !(await hasSession(c.req.header('cookie'))) ? accueil : index, { headers: PAGE_HEADERS }))
   app.use('/assets/*', serveStatic({ root: './dist' }))
   app.use('*', serveStatic({ root: './dist' }))
-  const index = readFileSync(join(dist, 'index.html'), 'utf8')
   app.get('*', (c) => c.html(index))
 }
 

@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /auth/
+Disallow: /suivi/
+Disallow: /invitation/
+Disallow: /rdv/gerer/
+
+Sitemap: https://projectlead.io/sitemap.xml

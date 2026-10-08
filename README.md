@@ -66,6 +66,31 @@ eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Co
 d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine de l'adresse de capture : à poser seulement quand son MX mène à un relais qui poste sur
 `/api/inbound/<jeton>` ; sans lui, aucune adresse n'est affichée, seul le point d'entrée du relais l'est).
 
+## Page d'accueil
+
+`/` montre la page d'accueil (`accueil.html`, styles et mouvements dans `src/landing/`) à un visiteur sans session
+valide, et l'application à une session valide (`server/lib/landing.ts` ; réponse `Vary: Cookie`, jamais en cache
+partagé). Les boutons « Créer mon compte » et « Se connecter » mènent à `/login`, qui part sur ERPlead.
+
+Les images et le film de la page sont dans `media/` et restent **hors du paquet JS** : le serveur Node les lit sur le
+disque, la fonction Neon les télécharge à la première demande depuis GitHub au commit fixé par `neon-build.mjs`
+(empreintes SHA-256 vérifiées), puis les garde en mémoire. Requêtes partielles (Range, 206) et ETag : voir
+`server/lib/media.ts`.
+
+Refaire les captures (données fictives de Moraine Bâtiment SA, aucune donnée réelle) :
+
+```bash
+createdb pl_landing_demo                      # base neuve
+DATABASE_URL=postgres://…/pl_landing_demo APP_SECRET=… npx tsx scripts/landing/demo-seed.ts
+npm run build && PORT=3412 PUBLIC_URL=https://projectlead.io DATABASE_URL=… APP_SECRET=… JOBS_DISABLED=1 npx tsx server/index.ts
+node scripts/landing/captures.mjs <dossier> http://localhost:3412   # 1440 px densité 2 et téléphone 430 px densité 3
+node scripts/landing/images.mjs <dossier>     # AVIF + WebP dans media/accueil/
+node scripts/landing/partage.mjs              # image de partage 1200 x 630
+```
+
+Le film (Remotion) et ses sources sont rangés dans `partage/Quantum Liquid LLC/projectlead/landing/` ; la version
+web est copiée dans `media/film/`.
+
 ## Mise en ligne
 
 En ligne sur Neon Functions, à côté de la base (projet Neon `gentle-frog-61717092`, branche `production`,
@@ -73,7 +98,8 @@ base `projectlead`, `aws-us-east-2`) : **https://projectlead.io** (domaine perso
 technique de la fonction : `br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech`).
 
 `node scripts/neon-build.mjs` produit `deploy/neon/index.mjs` (serveur, interface et migrations en un
-fichier, la base est migrée au démarrage). La fonction Neon `projectlead` est un petit amorçage
+fichier, la base est migrée au démarrage). Les fichiers de `media/` doivent être commités et poussés AVANT : le
+paquet n'en garde que le manifeste (commit et empreintes). La fonction Neon `projectlead` est un petit amorçage
 (`deploy/neon/boot.mjs`) qui télécharge ce paquet depuis GitHub à un commit fixé et vérifie son empreinte :
 pour publier, construire, pousser, mettre le commit et l'empreinte dans `boot.mjs`, puis redéployer
 l'amorçage. Variables de la fonction : `PL_DATABASE_URL`, `APP_SECRET`, `TASKS_SECRET`, `PUBLIC_URL`.

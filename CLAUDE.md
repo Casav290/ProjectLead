@@ -10,6 +10,8 @@ Langue de travail : français. Commits en français, courts.
 - `docs/PASSATION.md` : à lire en premier en reprenant le projet (état, hébergement, ce qui reste).
 - `docs/PLAN.md` : décisions, étapes, état, ce qui bloque. À tenir à jour.
 - `docs/INTEGRATIONS.md` : CRMlead (adresses, affaires gagnées) et InvoiceLead (facturation mensuelle).
+- Page d'accueil publique : `accueil.html` + `src/landing/` (servie sur `/` sans session), images et film dans
+  `media/` (hors paquet JS, `server/lib/media.ts`), captures fictives refaites par `scripts/landing/`.
 - Dépôts sœurs : `Casav290/crmlead` (fournisseur du Compte Lead, `docs/LEAD-ID.md`), `Casav290/InvoiceLead`
   (API v1 `il_live_…`, `docs/API.md`).
 

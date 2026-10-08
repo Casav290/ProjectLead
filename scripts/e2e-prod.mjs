@@ -1,6 +1,6 @@
 /**
  * Parcours réel sur le site en ligne (GitHub Actions, et à la main : `URL=https://projectlead.io
- * node scripts/e2e-prod.mjs`). Sans rien créer en production : connexion par le Compte Lead,
+ * node scripts/e2e-prod.mjs`). Sans rien créer en production : page d'accueil, connexion par le Compte Lead,
  * inscription fermée hors Compte Lead, écran d'erreur, pages publiques et légales, carte de visite
  * de l'application. Captures d'écran dans captures/.
  */
@@ -35,6 +35,15 @@ check('sans session : /api/me refuse', r.status === 401)
 r = await json('/api/auth/signup', { method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ name: 'Contrôle', email: 'controle@exemple.test', password: 'controle-automatique', company: 'Contrôle' }) })
 check('inscription locale fermée : on s’inscrit par le Compte Lead', r.status === 403 && r.body?.error === 'signup_via_lead')
+
+// 1 bis. Page d'accueil pour un visiteur (sans session) : boutons vers /login, images et film hors paquet
+await page.goto(URL + '/'); await page.waitForTimeout(2500); await shot('0-accueil')
+check('accueil : page d’accueil pour un visiteur', await page.getByRole('heading', { level: 1, name: /Le projet vendu/ }).isVisible().catch(() => false))
+check('accueil : « Créer mon compte » mène à /login', (await page.getByRole('link', { name: 'Créer mon compte' }).first().getAttribute('href').catch(() => '')) === 'https://projectlead.io/login')
+let media = await fetch(URL + '/media/accueil/accueil-1280.avif')
+check('accueil : image servie (AVIF)', media.status === 200 && media.headers.get('content-type') === 'image/avif')
+media = await fetch(URL + '/media/film/projectlead-film-720.mp4', { headers: { range: 'bytes=0-1' } })
+check('accueil : film servi par plages (206)', media.status === 206 && media.headers.get('content-type') === 'video/mp4')
 
 // 2. Connexion : tout droit vers le Compte Lead (crmlead.io), sans écran intermédiaire
 await page.goto(URL + '/projets'); await page.waitForURL(/crmlead\.io/, { timeout: 20000 }).catch(() => {})
