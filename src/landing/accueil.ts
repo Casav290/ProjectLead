@@ -142,6 +142,7 @@ if (video && film && play && toggle && sound) {
   const saveData = Boolean((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData)
   let userPaused = false
   let started = false
+  let heard = false
   const sync = () => {
     const playing = !video.paused && !video.ended
     film.classList.toggle('is-playing', playing || (started && !video.muted))
@@ -152,7 +153,8 @@ if (video && film && play && toggle && sound) {
     sound.setAttribute('aria-pressed', String(!video.muted))
   }
   const go = async (withSound: boolean) => {
-    if (withSound) { video.muted = false; if (!started) video.currentTime = 0 }
+    // La première fois qu'on met le son, le film repart du début : on l'entend en entier.
+    if (withSound) { video.muted = false; if (!heard) { heard = true; video.currentTime = 0 } }
     started = true
     try { await video.play() } catch { video.muted = true; try { await video.play() } catch { /* lecture refusée : l'affiche reste */ } }
     sync()
