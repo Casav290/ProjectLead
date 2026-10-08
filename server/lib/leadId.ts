@@ -51,17 +51,24 @@ export type Tokens = { access_token: string; id_token: string; refresh_token?: s
 
 // ------------------------------------------------------------------ clés publiques
 
-let jwksCache: { at: number; keys: any[] } | null = null
-async function publicKey(kid: string) {
+/**
+ * Transition vers ERPlead (08.10.2026) : tant que CRMlead n'est pas lui-même client d'ERPlead, ses envois
+ * d'échange portent un jeton signé par crmlead.io. On les accepte en réception, et seulement là.
+ */
+const LEGACY_EXCHANGE_ISSUERS = ['https://crmlead.io']
+
+const jwksCache = new Map<string, { at: number; keys: any[] }>()
+async function publicKey(kid: string, iss: string = issuer()) {
   const fresh = async () => {
-    const r = await fetch(`${issuer()}/oauth/jwks`)
+    const r = await fetch(`${iss}/oauth/jwks`)
     if (!r.ok) throw new Error(`jwks ${r.status}`)
-    jwksCache = { at: Date.now(), keys: (await r.json()).keys }
+    jwksCache.set(iss, { at: Date.now(), keys: (await r.json()).keys })
   }
-  if (!jwksCache || Date.now() - jwksCache.at > 3_600_000) await fresh()
-  let jwk = jwksCache!.keys.find((k) => k.kid === kid)
+  const hit = jwksCache.get(iss)
+  if (!hit || Date.now() - hit.at > 3_600_000) await fresh()
+  let jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid)
   // Clé inconnue : le compte Lead a peut-être tourné sa clé, on relit une fois.
-  if (!jwk) { await fresh(); jwk = jwksCache!.keys.find((k) => k.kid === kid) }
+  if (!jwk) { await fresh(); jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid) }
   return jwk ? createPublicKey({ key: jwk, format: 'jwk' }) : null
 }
 
@@ -69,16 +76,19 @@ async function publicKey(kid: string) {
  * Vérifie un JWT du compte Lead : signature RS256, émetteur, audience, expiration.
  * Rend les revendications, ou `null`. Ne jamais lire un jeton sans passer par ici.
  */
-export async function verifyLeadJwt(token: string, audience: string): Promise<Record<string, any> | null> {
+export async function verifyLeadJwt(token: string, audience: string, issuers: string[] = [issuer()]): Promise<Record<string, any> | null> {
   try {
     const [h, p, s] = token.split('.')
     const head = JSON.parse(Buffer.from(h, 'base64url').toString())
     if (head.alg !== 'RS256') return null
-    const key = await publicKey(head.kid)
+    // L'émetteur annoncé choisit la clé, mais seulement parmi ceux qu'on accepte ; la signature le confirme.
+    const iss = String(JSON.parse(Buffer.from(p, 'base64url').toString()).iss ?? '')
+    if (!issuers.includes(iss)) return null
+    const key = await publicKey(head.kid, iss)
     if (!key || !verify('sha256', Buffer.from(`${h}.${p}`), key, Buffer.from(s, 'base64url'))) return null
     const c = JSON.parse(Buffer.from(p, 'base64url').toString())
     const aud = Array.isArray(c.aud) ? c.aud : [c.aud]
-    if (c.iss !== issuer() || !aud.includes(audience) || typeof c.exp !== 'number' || c.exp * 1000 < Date.now() - 30_000) return null
+    if (!issuers.includes(c.iss) || !aud.includes(audience) || typeof c.exp !== 'number' || c.exp * 1000 < Date.now() - 30_000) return null
     return c
   } catch { return null }
 }
@@ -138,8 +148,8 @@ export function logoutUrl(idToken: string | null, backTo: string) {
   return `${issuer()}/oauth/logout?${q}`
 }
 
-async function tokenRequest(body: Record<string, string>): Promise<Tokens> {
-  const r = await fetch(`${issuer()}/oauth/token`, {
+async function tokenRequest(body: Record<string, string>, from: string = issuer()): Promise<Tokens> {
+  const r = await fetch(`${from}/oauth/token`, {
     method: 'POST', headers: { Authorization: basic(), 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(body),
   })
@@ -219,11 +229,19 @@ export async function send(target: { app: string; url: string }, e: Omit<Envelop
     id: crypto.randomUUID(), occurred_at: new Date().toISOString(), ...e,
     source: { app: env('LEAD_ID_APP'), ...e.source },
   }
-  const r = await fetch(await inboxOf(target.url), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${await appToken('exchange', target.app)}`, 'Content-Type': 'application/json' },
+  const inbox = await inboxOf(target.url)
+  const post = (token: string) => fetch(inbox, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(envelope),
   })
+  let r = await post(await appToken('exchange', target.app))
+  // Transition : une application pas encore cliente d'ERPlead (CRMlead) refuse son jeton ; on demande alors
+  // le jeton à l'application elle-même, qui connaît encore notre client (même secret).
+  const base = target.url.replace(/\/+$/, '')
+  if (r.status === 401 && LEGACY_EXCHANGE_ISSUERS.includes(base) && base !== issuer()) {
+    const t = await tokenRequest({ grant_type: 'client_credentials', scope: 'exchange', audience: target.app }, base)
+    r = await post(t.access_token)
+  }
   const out = await r.json().catch(() => ({}))
   if (!r.ok) throw Object.assign(new Error(`lead_exchange:${out.error ?? r.status}`), { status: r.status, body: out })
   return out as { id: string; url: string; status: 'created' | 'updated' }
@@ -236,6 +254,6 @@ export async function send(target: { app: string; url: string }, e: Omit<Envelop
 export async function incomingSender(authorization: string | undefined): Promise<string | null> {
   const m = authorization?.match(/^Bearer\s+(.+)$/i)
   if (!m) return null
-  const c = await verifyLeadJwt(m[1], env('LEAD_ID_APP'))
+  const c = await verifyLeadJwt(m[1], env('LEAD_ID_APP'), [...new Set([issuer(), ...LEGACY_EXCHANGE_ISSUERS])])
   return c && String(c.scope ?? '').split(' ').includes('exchange') ? String(c.app ?? '') || null : null
 }
