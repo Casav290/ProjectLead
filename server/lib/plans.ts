@@ -27,7 +27,7 @@ export const LIMITS: Record<Tier, { openProjects: number; seats: number }> = {
 export const TIER_NAME: Record<Tier, string> = { free: 'Gratuit', pro: 'Pro', pro_plus: 'Pro+' }
 
 /** Où passer à une formule supérieure : la facturation de la famille, chez CRMlead. */
-export const DEFAULT_UPGRADE_URL = 'https://crmlead.io/settings#billing'
+export const DEFAULT_UPGRADE_URL = 'https://erplead.io/account'
 
 /** Les statuts d'un projet « en cours » : c'est ce que la formule compte. */
 export const OPEN_STATUSES = ['planned', 'active', 'on_hold'] as const

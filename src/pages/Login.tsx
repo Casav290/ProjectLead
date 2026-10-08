@@ -8,7 +8,7 @@ import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthSh
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
   session: 'La connexion a expiré en chemin. Réessayez.',
-  email: 'Confirmez d\'abord votre adresse e-mail avec le lien envoyé par le Compte Lead (le lien peut se redemander dans votre compte, sur crmlead.io), puis revenez ici.',
+  email: 'Confirmez d\'abord votre adresse e-mail avec le lien envoyé par ERPlead (le lien peut se redemander dans votre compte, sur erplead.io), puis revenez ici.',
   portee: 'Le Compte Lead n\'a pas transmis votre organisation. Reprenez la connexion depuis projectlead.io, sans modifier l\'adresse.',
   // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
   formule: 'La connexion doit être refaite. Réessayez.',

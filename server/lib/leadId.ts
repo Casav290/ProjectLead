@@ -5,7 +5,7 @@
  * quel dans le serveur de l'application (ex. `server/leadId.ts`). Mode d'emploi : LEAD-ID.md.
  *
  * Variables d'environnement attendues :
- *   LEAD_ID_ISSUER         https://crmlead.io
+ *   LEAD_ID_ISSUER         https://erplead.io
  *   LEAD_ID_CLIENT_ID      scanlead
  *   LEAD_ID_CLIENT_SECRET  lid_…   (Réglages CRMlead → Mon compte Lead → Applications reliées)
  *   LEAD_ID_REDIRECT_URI   https://scanlead.io/auth/lead/callback
@@ -18,7 +18,16 @@ const env = (k: string) => {
   if (!v) throw new Error(`${k} manquant`)
   return v
 }
-const issuer = () => env('LEAD_ID_ISSUER').replace(/\/+$/, '')
+/**
+ * L'émetteur des connexions. CRMlead ne l'est plus depuis le 08.10.2026 : ERPlead (erplead.io) a repris
+ * les comptes avec les mêmes identifiants. Une fonction encore réglée sur crmlead.io passe donc sur
+ * erplead.io sans qu'il faille réécrire toutes ses variables.
+ */
+const RETIRED_ISSUERS: Record<string, string> = { 'https://crmlead.io': 'https://erplead.io' }
+const issuer = () => {
+  const v = env('LEAD_ID_ISSUER').replace(/\/+$/, '')
+  return RETIRED_ISSUERS[v] ?? v
+}
 const b64url = (b: Buffer) => b.toString('base64url')
 const basic = () => 'Basic ' + Buffer.from(`${encodeURIComponent(env('LEAD_ID_CLIENT_ID'))}:${encodeURIComponent(env('LEAD_ID_CLIENT_SECRET'))}`).toString('base64')
 
