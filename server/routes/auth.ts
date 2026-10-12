@@ -5,7 +5,7 @@ import { hashPassword, hashToken, newToken, SESSION_COOKIE, SESSION_DAYS, verify
 import { anon, anonTx, type Db } from '../db.js'
 import { isProduction } from '../lib/env.js'
 import { body, email, HttpError, type Env } from '../lib/http.js'
-import { finishLogin, logoutUrl, startLogin, type LeadClaims } from '../lib/leadId.js'
+import { finishLogin, logoutUrl, startLogin, verifyLeadJwt, type LeadClaims } from '../lib/leadId.js'
 import { assertSeatFree, savePlan } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
 
@@ -221,6 +221,41 @@ export async function attachLeadPerson(claims: LeadClaims) {
     return { userId: user.id as string, accountId }
   })
 }
+
+/**
+ * Départ d'une personne (12.10.2026) : OpenID Connect Back-Channel Logout. ERPlead, quand une personne est retirée
+ * de son organisation, poste ici un `logout_token` signé : toutes ses sessions tombent ; avec
+ * `lead_status: "disabled"`, elle devient inactive dans l'entreprise de l'organisation annoncée (place libérée), sauf
+ * si elle en est le dernier administrateur actif. Le jeton est vérifié comme un jeton d'identité (signature, émetteur,
+ * audience, expiration), doit porter l'événement de déconnexion, un `sub`, pas de `nonce`, et dater de moins de
+ * cinq minutes. Pas de cookie, pas de redirection : 200 ou 400.
+ */
+const BACKCHANNEL_EVENT = 'http://schemas.openid.net/event/backchannel-logout'
+app.post('/auth/lead/backchannel-logout', async (c) => {
+  c.header('Cache-Control', 'no-store')
+  const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>))
+  const token = String(form.logout_token ?? '')
+  const claims = token ? await verifyLeadJwt(token, process.env.LEAD_ID_CLIENT_ID ?? 'projectlead') : null
+  const fresh = typeof claims?.iat === 'number' && claims.iat * 1000 > Date.now() - 5 * 60_000
+  if (!claims || !fresh || typeof claims.sub !== 'string' || claims.nonce !== undefined || !claims.events?.[BACKCHANNEL_EVENT])
+    return c.json({ error: 'invalid_request' }, 400)
+  await anonTx(async (db) => {
+    const user = (await db.query('select id from users where lead_sub = $1', [claims.sub])).rows[0]
+    if (!user) return
+    const account = typeof claims.org === 'string'
+      ? (await db.query('select id from accounts where lead_org = $1', [claims.org])).rows[0] : null
+    if (typeof claims.org === 'string' && !account) return
+    if (account) await db.query('delete from sessions where user_id = $1 and account_id = $2', [user.id, account.id])
+    else await db.query('delete from sessions where user_id = $1', [user.id])
+    if (claims.lead_status === 'disabled' && account)
+      await db.query(
+        `update account_users set active = false
+          where account_id = $1 and user_id = $2 and active
+            and (role <> 'admin' or exists (select 1 from account_users o where o.account_id = $1 and o.user_id <> $2
+                                             and o.role = 'admin' and o.active))`, [account.id, user.id])
+  })
+  return c.body(null, 200)
+})
 
 app.get('/auth/lead/callback', async (c) => {
   const raw = await getSignedCookie(c, cookieSecret(), 'pl_lead_login')

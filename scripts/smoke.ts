@@ -732,6 +732,40 @@ r = await free.get('/api/me')
 check('formule résiliée : on garde l’accès en gratuit, rien n’est effacé', r.status === 200 && r.body.plan.tier === 'free'
   && r.body.plan.openProjects > 3, { status: r.status, plan: r.body.plan })
 void proSession
+
+section('Départ d’une personne : OpenID Back-Channel Logout')
+{
+  const org = `bc-org-${stamp}`
+  const plus = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, name: 'ProjectLead', url: null, status: 'live', upgrade_url: null } }, subscriptions: [] }
+  const person = (n: string, sub: string, role: string) => ({ sub, nonce: n, email: `${sub}@exemple.test`, email_verified: true, name: sub, locale: 'fr', org, org_name: `Entreprise ${org}`, org_role: role, lead: plus })
+  const boss = await leadLogin((n) => person(n, `boss-${stamp}`, 'admin'))
+  const bob = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
+  const me = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).status
+  check('deux personnes de la même organisation connectées', (await me(boss.session)) === 200 && (await me(bob.session)) === 200)
+  const logoutToken = (sub: string, over: Record<string, unknown> = {}, key = privateKey) => {
+    const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+    const iat = Math.floor(Date.now() / 1000)
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', iat, exp: iat + 120, sub, org, lead_status: 'disabled',
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} }, ...over })
+    return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), key).toString('base64url')}`
+  }
+  const post = async (token: string) => (await app.request('http://localhost/auth/lead/backchannel-logout', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ logout_token: token }) })).status
+  const otherKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
+  check('jeton signé par une autre clé : refusé, la session reste', (await post(logoutToken(`bob-${stamp}`, {}, otherKey))) === 400 && (await me(bob.session)) === 200)
+  check('jeton pour une autre application : refusé', (await post(logoutToken(`bob-${stamp}`, { aud: 'crmlead' }))) === 400)
+  check('jeton avec nonce : refusé', (await post(logoutToken(`bob-${stamp}`, { nonce: 'x' }))) === 400)
+  check('jeton de plus de cinq minutes : refusé', (await post(logoutToken(`bob-${stamp}`, { iat: Math.floor(Date.now() / 1000) - 600 }))) === 400)
+  check('sans l’événement de déconnexion : refusé', (await post(logoutToken(`bob-${stamp}`, { events: {} }))) === 400)
+  check('autre organisation annoncée : sans effet', (await post(logoutToken(`bob-${stamp}`, { org: 'org-inconnue' }))) === 200 && (await me(bob.session)) === 200)
+  check('départ : 200, la session ouverte tombe aussitôt', (await post(logoutToken(`bob-${stamp}`))) === 200 && (await me(bob.session)) === 401)
+  const row = (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows[0]
+  check('la personne devient inactive dans l’entreprise (place libérée)', row?.active === false, row)
+  check('l’administratrice garde sa session', (await me(boss.session)) === 200)
+  check('rejouer le départ ne casse rien', (await post(logoutToken(`bob-${stamp}`))) === 200)
+  check('dernier administrateur : sa session tombe, il reste actif', (await post(logoutToken(`boss-${stamp}`))) === 200 && (await me(boss.session)) === 401
+    && (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`boss-${stamp}`])).rows[0]?.active === true)
+}
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
