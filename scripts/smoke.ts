@@ -1106,6 +1106,57 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
   check('entreprise inconnue : « unknown_account », aucune ligne', r.status === 200 && r.body.result === 'unknown_account'
     && !(await pool.query('select 1 from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_4`])).rowCount, r)
 
+  // Deux abonnements en cours pour la même entreprise (deux onglets payés) : rien n'est résilié, l'administrateur est prévenu.
+  const notesBefore = (await pool.query(`select count(*)::int as n from notifications where account_id = $1 and title like '%deux abonnements%'`, [aboAcc])).rows[0].n
+  r = await hook(evt('customer.subscription.created', stripeSubs.get(`sub_${stamp}_3`)))
+  const notesAfter = (await pool.query(`select count(*)::int as n from notifications where account_id = $1 and title like '%deux abonnements%'`, [aboAcc])).rows[0].n
+  check('deux abonnements ProjectLead en cours : administrateur prévenu une fois, aucune résiliation', notesBefore >= 1 && notesAfter === notesBefore
+    && !calls.some((x) => x.method === 'DELETE'), { notesBefore, notesAfter })
+
+  // Une relecture identique ne fait pas bouger la ligne (la tâche du jour ne tourne pas en rond).
+  const v1 = (await pool.query('select updated_at::text as v, erplead_synced_at from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_3`])).rows[0]
+  r = await hook(evt('customer.subscription.updated', stripeSubs.get(`sub_${stamp}_3`)))
+  const v2 = (await pool.query('select updated_at::text as v, erplead_synced_at from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_3`])).rows[0]
+  check('même état relu : ligne inchangée, déclaration non refaite', r.body.result === 'applied' && v1.v === v2.v && v2.erplead_synced_at !== null, { v1, v2 })
+  {
+    const { reconcileSubscriptions } = await import('../server/lib/subscription.js')
+    const getsBefore = calls.filter((x) => x.method === 'GET').length
+    await reconcileSubscriptions()
+    const gets = calls.filter((x) => x.method === 'GET').slice(getsBefore).map((x) => x.path)
+    check('relecture du jour : seulement les abonnements qui peuvent encore changer (jamais un abonnement terminé)',
+      gets.some((p) => p.endsWith(`sub_${stamp}_3`)) && !gets.some((p) => p.endsWith(`sub_${stamp}_1`)), gets)
+  }
+
+  // Impayé (relances épuisées) : pas de second abonnement, il se règle au portail.
+  stripeSubs.set(`sub_${stamp}_2`, { ...stripeSubs.get(`sub_${stamp}_2`), status: 'unpaid' })
+  stripeSubs.set(`sub_${stamp}_3`, { ...stripeSubs.get(`sub_${stamp}_3`), status: 'unpaid' })
+  await hook(evt('customer.subscription.updated', stripeSubs.get(`sub_${stamp}_2`)))
+  await hook(evt('customer.subscription.updated', stripeSubs.get(`sub_${stamp}_3`)))
+  r = await boss.get('/api/billing')
+  const unpaid = r.body
+  r = await boss.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+  check('abonnement impayé : Gratuit, Checkout refusé (409), à régler dans le portail', unpaid.plan.tier === 'free' && unpaid.subscription?.blocking === true
+    && unpaid.subscription?.active === false && r.status === 409 && r.body.error === 'already_subscribed', { sub: unpaid.subscription, status: r.status })
+
+  // Un même client Stripe présenté pour deux entreprises au même instant : une seule le garde, aucune erreur.
+  {
+    const twin = await Promise.all([1, 2].map(async (n) => (await pool.query(`insert into accounts (name, lead_org) values ($1, $2) returning id`,
+      [`Jumeau ${n} ${stamp}`, `jumeau-${n}-${stamp}`])).rows[0].id as string))
+    const shared = `cus_${stamp}_partage`
+    const res = await Promise.all(twin.map((id, n) => hook(evt('checkout.session.completed', { id: `cs_twin_${n}`, object: 'checkout.session',
+      mode: 'subscription', customer: shared, subscription: null, metadata: { app: 'projectlead', account_id: id, plan: 'pro', interval: 'month' } }))))
+    const owners = (await pool.query('select id from accounts where stripe_customer_id = $1', [shared])).rows
+    check('un client Stripe pour deux entreprises au même instant : 200 tous deux, une seule le garde', res.every((x) => x.status === 200) && owners.length === 1,
+      { res, owners: owners.length })
+  }
+
+  // Une formule recopiée avant le calcul par application (origine inconnue) n'est pas « payée ici ».
+  await pool.query(`update accounts set plan = 'pro', plan_source = null, plan_valid_until = null where id = $1`, [aboAcc])
+  r = await boss.get('/api/me')
+  check('formule d\'origine inconnue (recopiée avant la bascule) : limites gardées jusqu\'à la relecture, mais rien de payé ici',
+    r.body.plan.tier === 'pro' && r.body.plan.paidTier === 'free' && r.body.plan.source === 'family' && r.body.plan.inherited?.app === null, r.body.plan)
+  await pool.query(`update accounts set plan = 'free', plan_source = 'free' where id = $1`, [aboAcc])
+
   // Une entreprise abonnée ne s'efface pas par mégarde ; la résiliation ne touche que ses propres abonnements.
   let blocked = ''
   try { await pool.query('delete from accounts where id = $1', [aboAcc]) } catch (e: any) { blocked = e?.code }

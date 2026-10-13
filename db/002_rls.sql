@@ -72,3 +72,20 @@ create policy tenant on sent_emails using (account_id = app_account()) with chec
 grant select, insert on sent_emails to projectlead_app;
 
 grant usage, select on all sequences in schema public to projectlead_app;
+
+-- Abonnement ProjectLead (008) : l'application lit l'abonnement de son entreprise, seul le webhook (propriétaire)
+-- écrit. La table naît après ce fichier (008) : reposé ici à chaque passage dès qu'elle existe.
+do $$
+begin
+  if to_regclass('public.billing_subscriptions') is not null then
+    alter table billing_subscriptions enable row level security;
+    drop policy if exists tenant on billing_subscriptions;
+    create policy tenant on billing_subscriptions using (account_id = app_account());
+    revoke all on billing_subscriptions from projectlead_app;
+    grant select on billing_subscriptions to projectlead_app;
+  end if;
+  if to_regclass('public.stripe_events') is not null then
+    alter table stripe_events enable row level security;
+    revoke all on stripe_events from projectlead_app;
+  end if;
+end $$;

@@ -24,7 +24,7 @@ export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: s
 export type Billing = {
   configured: boolean; portal: boolean; canManage: boolean; plan: Plan; hasCustomer: boolean
   subscription: { plan: 'pro' | 'pro_plus'; interval: 'month' | 'year' | null; status: string; currentPeriodEnd: string | null
-                  endsAt: string | null; active: boolean } | null
+                  endsAt: string | null; active: boolean; blocking: boolean } | null
   prices: Record<'pro' | 'pro_plus', Record<'month' | 'year', number>>; currency: 'EUR'
 }
 

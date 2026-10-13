@@ -3,7 +3,7 @@ import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } 
 import { z } from 'zod'
 import { hashPassword, hashToken, newToken, SESSION_COOKIE, SESSION_DAYS, verifyPassword } from '../auth.js'
 import { anon, anonTx, type Db } from '../db.js'
-import { isProduction } from '../lib/env.js'
+import { isProduction, leadIdOn } from '../lib/env.js'
 import { body, email, HttpError, type Env } from '../lib/http.js'
 import { finishLogin, logoutUrl, startLogin, verifyLeadJwt, type LeadClaims } from '../lib/leadId.js'
 import { assertSeatFree, savePlan } from '../lib/plans.js'
@@ -19,7 +19,7 @@ import { seedAccount } from '../lib/defaults.js'
 const app = new Hono<Env>()
 
 const cookieSecret = () => process.env.APP_SECRET || 'dev-only-secret-change-me-0123456789'
-export const leadIdConfigured = () => Boolean(process.env.LEAD_ID_CLIENT_SECRET && process.env.LEAD_ID_ISSUER)
+export const leadIdConfigured = leadIdOn
 
 export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null) {
   const token = newToken()

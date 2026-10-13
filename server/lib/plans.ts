@@ -1,4 +1,5 @@
 import type { Db } from '../db.js'
+import { leadIdOn, publicUrl } from './env.js'
 import { HttpError } from './http.js'
 
 /**
@@ -48,7 +49,6 @@ const best = (a: Tier, b: Tier): Tier => (RANK[a] >= RANK[b] ? a : b)
 /** Le code de ProjectLead chez ERPlead (claim `app` des droits). */
 const APP_CODE = () => process.env.LEAD_ID_APP || 'projectlead'
 
-const leadIdOn = () => Boolean(process.env.LEAD_ID_CLIENT_SECRET && process.env.LEAD_ID_ISSUER)
 
 export type Plan = Awaited<ReturnType<typeof planOf>>
 
@@ -65,16 +65,16 @@ export async function planOf(db: Db, accountId: string, lock = false) {
   const until = u.plan_valid_until ? new Date(u.plan_valid_until) : null
   const erpValid = !until || until.getTime() > Date.now()
   const erpTier = erpValid ? tierOf(u.plan) : 'free'
-  const family = u.plan_source === 'family'
-  // Ce qui est payé dans ProjectLead : l'abonnement local, ou un abonnement ProjectLead connu d'ERPlead.
-  const paidTier = best(tierOf(u.own_plan), family ? 'free' : erpTier)
+  // Ce qui est payé dans ProjectLead : l'abonnement local, ou un abonnement ProjectLead connu d'ERPlead (source
+  // « own »). Une formule d'origine inconnue (recopiée avant le calcul par application) ne compte pas comme payée ici.
+  const paidTier = best(tierOf(u.own_plan), u.plan_source === 'own' ? erpTier : 'free')
   const tier = best(paidTier, erpTier)
   const erpSeats = erpValid && Number.isInteger(u.plan_seats) ? (u.plan_seats as number) : 0
   const seats = linked ? Math.max(LIMITS[tier].seats, erpSeats) : Number.POSITIVE_INFINITY
   const limit = linked ? LIMITS[tier].openProjects : Number.POSITIVE_INFINITY
   // Formule héritée d'un abonnement payé ailleurs avant la bascule : jusqu'à une date figée, puis Gratuit.
-  const inherited = family && erpTier !== 'free' && RANK[erpTier] > RANK[paidTier]
-    ? { tier: erpTier, app: (u.plan_family_app as string | null) ?? null, until: until ? until.toISOString() : null } : null
+  const inherited = RANK[tier] > RANK[paidTier]
+    ? { tier, app: (u.plan_family_app as string | null) ?? null, until: until ? until.toISOString() : null } : null
   return {
     linked, tier, name: TIER_NAME[tier], upgradeUrl: DEFAULT_UPGRADE_URL,
     source: (tier === 'free' ? 'free' : inherited ? 'family' : 'own') as 'free' | 'family' | 'own',
@@ -86,7 +86,7 @@ export async function planOf(db: Db, accountId: string, lock = false) {
 }
 
 /** L'adresse complète de la page Formule (réponses 402 : lue aussi par les clients de l'API, hors de l'application). */
-const absolute = (path: string) => `${(process.env.PUBLIC_URL ?? '').replace(/\/+$/, '')}${path}`
+const absolute = (path: string) => `${publicUrl()}${path}`
 
 /** Refuse d'ouvrir un projet en cours de plus quand la formule est pleine (dans la transaction de l'appelant). */
 export async function assertCanOpenProject(db: Db, accountId: string) {

@@ -10,3 +10,9 @@ export function isProduction() {
     return u.protocol === 'https:' && !['localhost', '127.0.0.1'].includes(u.hostname)
   } catch { return false }
 }
+
+/** Le Compte Lead est-il branché (connexion, formule, déclaration des abonnements) ? */
+export const leadIdOn = () => Boolean(process.env.LEAD_ID_CLIENT_SECRET && process.env.LEAD_ID_ISSUER)
+
+/** L'adresse publique de l'application, sans barre finale (liens de retour de Stripe, réponses 402). */
+export const publicUrl = () => (process.env.PUBLIC_URL || 'https://projectlead.io').replace(/\/+$/, '')

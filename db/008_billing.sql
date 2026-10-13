@@ -28,6 +28,11 @@ alter table accounts add column if not exists plan_source text;            -- ow
 alter table accounts add column if not exists plan_valid_until timestamptz;
 alter table accounts add column if not exists plan_family_app text;        -- l'application de l'abonnement hérité
 
+-- La formule recopiée jusqu'ici était celle de la famille (meilleur abonnement de toutes les applications) : la
+-- relecture quotidienne repasse au premier passage des tâches après la mise en ligne, et recopie la formule
+-- qu'ERPlead calcule désormais pour ProjectLead seulement.
+update job_runs set last_run_at = 'epoch' where name = 'lead_plans';
+
 -- ------------------------------------------------------------ le client Stripe de l'entreprise
 
 -- Un client Stripe propre à ProjectLead (metadata app = projectlead) : jamais retrouvé par e-mail ni partagé

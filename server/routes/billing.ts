@@ -1,8 +1,10 @@
 import { waitUntil } from '@vercel/functions'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { publicUrl } from '../lib/env.js'
 import { body, HttpError, router, tx, type Env } from '../lib/http.js'
 import { planOf } from '../lib/plans.js'
+import type { Db } from '../db.js'
 import { APP, PRICES, StripeError, portalConfiguration, priceIds, stripe, stripeConfigured, verifyStripeSignature,
          webhookConfigured, type Interval, type PaidPlan } from '../lib/stripe.js'
 import { customerOf, GRANTING, processEvent, syncErplead } from '../lib/subscription.js'
@@ -18,8 +20,7 @@ import { customerOf, GRANTING, processEvent, syncErplead } from '../lib/subscrip
  */
 const app = router()
 
-const PUBLIC = () => (process.env.PUBLIC_URL || 'https://projectlead.io').replace(/\/+$/, '')
-const RETURN = (state?: 'ok' | 'annule') => `${PUBLIC()}/reglages/entreprise${state ? `?paiement=${state}` : ''}`
+const RETURN = (state?: 'ok' | 'annule') => `${publicUrl()}/reglages/entreprise${state ? `?paiement=${state}` : ''}`
 
 const failure = (e: unknown): never => {
   if (e instanceof StripeError) {
@@ -31,21 +32,26 @@ const failure = (e: unknown): never => {
 
 const requireAdmin = (c: any) => { if (c.get('ctx').role !== 'admin') throw new HttpError(403, 'forbidden') }
 
+/**
+ * Un abonnement qui empêche d'en prendre un second : en cours (actif, en essai, en retard de paiement) ou impayé
+ * (Stripe peut encore l'encaisser) : il se règle ou se change dans le portail.
+ */
+const BLOCKING = [...GRANTING, 'unpaid']
+
 /** L'abonnement ProjectLead le plus parlant de l'entreprise : celui qui ouvre la formule, sinon le dernier. */
-async function currentSubscription(c: any) {
-  return tx(c, async (db) => (await db.query(
-    `select stripe_subscription_id, plan, interval, status, current_period_end, cancel_at_period_end, cancel_at
-       from billing_subscriptions where account_id = app_account()
-      order by (status = any($1)) desc, (plan = 'pro_plus') desc, updated_at desc limit 1`, [GRANTING])).rows[0] ?? null)
-}
+const currentSubscription = async (db: Db) => (await db.query(
+  `select stripe_subscription_id, plan, interval, status, current_period_end, cancel_at_period_end, cancel_at
+     from billing_subscriptions where account_id = app_account()
+    order by (status = any($1)) desc, (status = any($2)) desc, (plan = 'pro_plus') desc, updated_at desc limit 1`,
+  [GRANTING, BLOCKING])).rows[0] ?? null
 
 app.get('/billing', async (c) => {
   const ctx = c.get('ctx')
-  const { plan, hasCustomer } = await tx(c, async (db) => ({
+  const { plan, hasCustomer, s } = await tx(c, async (db) => ({
     plan: await planOf(db, ctx.accountId),
     hasCustomer: Boolean((await db.query('select stripe_customer_id from accounts where id = app_account()')).rows[0]?.stripe_customer_id),
+    s: await currentSubscription(db),
   }))
-  const s = await currentSubscription(c)
   return c.json({
     configured: stripeConfigured(),
     portal: stripeConfigured() && Boolean(portalConfiguration()),
@@ -56,6 +62,7 @@ app.get('/billing', async (c) => {
       // Fin annoncée (résiliée au portail) : à la fin de la période, ou à la date posée par Stripe (cancel_at).
       endsAt: s.cancel_at ?? (s.cancel_at_period_end ? s.current_period_end : null),
       active: GRANTING.includes(s.status),
+      blocking: BLOCKING.includes(s.status),
     } : null,
     hasCustomer,
     prices: PRICES,
@@ -70,8 +77,8 @@ app.post('/billing/checkout', async (c) => {
   const { plan, interval } = b as { plan: PaidPlan; interval: Interval }
   const ctx = c.get('ctx')
   // Déjà abonné à ProjectLead : on change de formule dans le portail, jamais par un second abonnement.
-  const s = await currentSubscription(c)
-  if (s && GRANTING.includes(s.status)) throw new HttpError(409, 'already_subscribed')
+  const s = await tx(c, (db) => currentSubscription(db))
+  if (s && BLOCKING.includes(s.status)) throw new HttpError(409, 'already_subscribed')
   try {
     const customer = await customerOf(ctx.accountId, c.get('email'))
     const meta = { app: APP, account_id: ctx.accountId, plan, interval }

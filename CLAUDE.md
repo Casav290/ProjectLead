@@ -20,7 +20,8 @@ RLS par `app.account_id` : toute requête métier passe par `withTenant` (`serve
 rôle `projectlead_app`. `anon` (rôle propriétaire, sans RLS) est réservé à la connexion, aux pages
 publiques et aux tâches de fond : chaque requête y porte elle-même son filtre de compte.
 Migrations `db/NNN_*.sql`, idempotentes ; `000_roles.sql` et `002_rls.sql` rejoués à chaque passage :
-une nouvelle table lue par l'application doit être ajoutée à la boucle de `002_rls.sql`.
+une nouvelle table lue par l'application doit être ajoutée à la boucle de `002_rls.sql` (une table née dans une
+migration plus récente, ou en lecture seule pour l'application, y a son bloc conditionnel, comme `billing_subscriptions`).
 
 Code repris de CRMlead, à garder aligné : `server/lib/mailbox/*` (Gmail, Microsoft 365, IMAP ; seul
 `index.ts` est propre à ProjectLead), `server/lib/icsparse.ts`, `server/lib/time.ts`,

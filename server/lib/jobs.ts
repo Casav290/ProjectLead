@@ -5,6 +5,7 @@ import { calendarsOnce } from './extcal.js'
 import { mailboxesOnce } from './mailbox/index.js'
 import { localDay } from './time.js'
 import { entitlementsOf } from './leadId.js'
+import { leadIdOn } from './env.js'
 import { savePlan } from './plans.js'
 import { reconcileSubscriptions, syncErplead } from './subscription.js'
 
@@ -108,7 +109,7 @@ export async function runJobs(force = false) {
  * Personne n'est mis dehors : en gratuit, on garde l'accès. Un Compte Lead injoignable ne change rien.
  */
 export async function refreshLeadPlans() {
-  if (!process.env.LEAD_ID_CLIENT_SECRET || !process.env.LEAD_ID_ISSUER) return { checked: 0 }
+  if (!leadIdOn()) return { checked: 0 }
   const accounts = await anon(async (db) => (await db.query('select id, lead_org from accounts where lead_org is not null')).rows)
   let checked = 0
   for (const a of accounts) {

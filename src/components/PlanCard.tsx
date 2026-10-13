@@ -41,6 +41,7 @@ export function PlanCard() {
   }, [b, intervalSet])
 
   useEffect(() => {
+    if (me && !me.plan.linked) return   // sans Compte Lead, pas de formule : rien à lire
     load().catch((e) => setError(errorText(e)))
     if (back) { try { window.history.replaceState(null, '', window.location.pathname) } catch { /* rien */ } }
     if (back !== 'ok') return
@@ -61,6 +62,8 @@ export function PlanCard() {
   const plan = b.plan
   const sub = b.subscription
   const subscribed = Boolean(sub?.active)
+  // Un abonnement en cours ou impayé se règle ou se change au portail, jamais par un second abonnement.
+  const locked = Boolean(sub?.blocking)
   const current = plan.paidTier
   const seats = plan.seats === null ? 'sans limite' : plural(plan.seats, 'personne', 'personnes')
 
@@ -85,7 +88,7 @@ export function PlanCard() {
     if (here) {
       action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">Formule actuelle</p>
     } else if (b.configured && b.canManage && p !== 'free') {
-      action = subscribed
+      action = locked
         // Déjà abonné : on change de formule dans le portail, jamais par un second abonnement.
         ? (b.portal ? <Button className="w-full" onClick={portal} disabled={!!busy}>Changer de formule</Button> : null)
         : RANK[p] > RANK[current]
