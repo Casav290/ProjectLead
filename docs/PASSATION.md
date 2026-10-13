@@ -88,10 +88,19 @@ n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
      déclarés dans `vercel.json` seulement (les répéter dans la sortie du build fait échouer le déploiement).
   La ligne `*/5 … projectlead-cron.sh` est retirée de la crontab du VPS (copie de la crontab d'avant dans
   `~/tmp/projectlead-vercel/`).
-- **Ancienne fonction Neon `projectlead`** (déploiement 15, paquet `f78241b`) : gardée telle quelle, plus aucun
-  DNS n'y mène. Elle ne peut plus connecter personne (ancien secret client) ni lire les 10 clés rechiffrées.
-  Retour arrière : remettre les deux enregistrements DNS d'avant, l'ancien `secret_hash`
-  (`~/tmp/projectlead-vercel/erplead-client-projectlead-avant.txt`) et `node ~/tmp/projectlead-vercel/rechiffrer.mjs retour`.
+- **Ancienne fonction Neon `projectlead`** : plus aucun DNS n'y mène. Jusqu'au déploiement 15 (paquet `f78241b`),
+  son adresse d'appel servait encore l'application entière sur la base de production, avec les anciens secrets, et
+  chaque appel lançait les tâches de fond (vu le 13.10 dans `job_runs`). Depuis le **déploiement 16** (13.10, 06:24 UTC),
+  elle n'est plus qu'un renvoi 308 vers https://projectlead.io, même chemin (`deploy/neon/renvoi.mjs`) : ni base, ni
+  tâche, ni secret lu. Déployée avec le zip seul : ses 11 variables restent dans Neon (état d'avant :
+  `~/tmp/projectlead-vercel/neon-fonction-avant.json`). Rien n'est supprimé.
+  Retour arrière, dans l'ordre : redéployer l'amorçage d'avant (`~/tmp/projectlead-vercel/neon-boot-retour.zip`, soit
+  `deploy/neon/boot.mjs` zippé sous le nom `index.mjs`, `deploy_function` avec le zip seul), puis remettre les deux
+  enregistrements DNS d'avant, l'ancien `secret_hash` (`~/tmp/projectlead-vercel/erplead-client-projectlead-avant.txt`)
+  et `node ~/tmp/projectlead-vercel/rechiffrer.mjs retour`. Remettre le DNS d'abord ferait tourner projectlead.io en rond.
+- **www.projectlead.io** sert l'application (200), comme projectlead.io. La connexion par ERPlead revient toujours sur
+  `LEAD_ID_REDIRECT_URI` (sans www) : `/auth/lead/start` appelé sur www renvoie d'abord vers la même adresse sans www,
+  pour que le cookie de départ y soit posé (sinon retour en `/login?erreur=session`, défaut corrigé le 13.10).
 - **Contrôle connecté** : `node ~/tmp/projectlead-vercel/e2e-connexion.mjs` (navigateur sans tête, compte
   « TEST Boulangerie Favre » du banc, connexion par ERPlead, écran Projets, console sans erreur).
 
@@ -110,7 +119,7 @@ n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
 ## Ce qui reste, dans l'ordre
 
 1. **Après Vercel (13.10.2026), ce qu'Ève pourra supprimer quand elle voudra** (rien n'a été effacé) : la
-   fonction Neon `projectlead` et ses deux domaines personnalisés Neon (projectlead.io, www), le jeton
+   fonction Neon `projectlead` (aujourd'hui un simple renvoi) et ses deux domaines personnalisés Neon (projectlead.io, www), le jeton
    « cron du VPS » de `task_tokens`, `~/bin/projectlead-cron.sh` et `~/.projectlead-task-secret` du VPS,
    la ligne `GLM_API_KEY` de `server_secrets` (ancien chiffré illisible).
 2. **Essai réel en formule gratuite** : Ève (eve.gemmet@gmail.com, Free) doit entrer dans ProjectLead et

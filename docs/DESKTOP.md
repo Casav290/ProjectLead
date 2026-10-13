@@ -1,12 +1,14 @@
 # Brancher projectlead.io (à faire par Claude Desktop, sur l'ordinateur d'Ève)
 
+**Historique (01.10.2026), ne plus suivre.** Depuis le 13.10.2026, projectlead.io est servi par Vercel
+(`docs/PASSATION.md`, section Hébergement) et la fonction Neon ne fait plus que renvoyer vers projectlead.io.
+
 Même méthode qu'InvoiceLead (`Casav290/invoicelead`, `docs/RESEND.md`). Le conteneur de la session
 ProjectLead n'atteint ni Porkbun ni Resend. Aucune clé ne doit être recopiée dans une conversation,
 un ticket ou le dépôt.
 
 Repères Neon : projet `gentle-frog-61717092`, branche `br-broad-dream-b4d44vqe` (production),
-fonction `projectlead`. Adresse actuelle :
-https://br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech
+fonction `projectlead` (son adresse d'appel est rendue par l'outil `get_function`).
 
 ## 1. Domaine vers la fonction Neon
 

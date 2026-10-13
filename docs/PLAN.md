@@ -10,7 +10,7 @@ Version 3, 13.10.2026 (hébergement Vercel).
 | Code | GitHub `Casav290/ProjectLead` |
 | Pile | Hono + React/Vite + PostgreSQL (`pg`), comme CRMlead ; visuel Trait net, couleur ocre `#9a6a00` |
 | Base | Neon, projet `gentle-frog-61717092` (« ProjectLead »), branche `production`, `aws-us-east-2`, à côté d'InvoiceLead |
-| Hébergement | Vercel depuis le 13.10.2026 (Ève : « comme les autres ») : projet `projectlead`, branche de production `vercel`, fonction en `cle1` à côté de la base ; avant : Neon Functions (fonction `projectlead`, gardée sans domaine) |
+| Hébergement | Vercel depuis le 13.10.2026 (Ève : « comme les autres ») : projet `projectlead`, branche de production `vercel`, fonction en `cle1` à côté de la base ; avant : Neon Functions (fonction `projectlead`, gardée sans domaine, réduite à un renvoi vers projectlead.io) |
 | Domaine | `projectlead.io` (Porkbun) : `A @ → 76.76.21.21`, `CNAME www → cname.vercel-dns.com` (Vercel) |
 | Emails sortants | Resend, domaine `projectlead.io`, comme InvoiceLead |
 | Connexion | Compte Lead (CRMlead), tout droit comme InvoiceLead ; email et mot de passe en secours |

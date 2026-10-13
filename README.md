@@ -79,8 +79,9 @@ application Hono). Tâches de fond : au passage du trafic (`waitUntil`) et par 2
 `/api/tasks/run` (un par heure, `CRON_SECRET`), déclarés dans `vercel.json`. Rien ne tourne depuis le VPS.
 Variables, secrets et retour arrière : `docs/PASSATION.md`, section Hébergement.
 
-L'ancien hébergement Neon Functions (`server/neon.ts`, `scripts/neon-build.mjs`, `deploy/neon/`) reste dans le
-dépôt pour un retour arrière ; la fonction Neon `projectlead` n'a plus de domaine.
+L'ancien hébergement Neon Functions (`server/neon.ts`, `scripts/neon-build.mjs`, `deploy/neon/boot.mjs`) reste dans le
+dépôt pour un retour arrière ; la fonction Neon `projectlead` n'a plus de domaine et ne fait plus que renvoyer vers
+projectlead.io (`deploy/neon/renvoi.mjs`).
 Le contrôle `.github/workflows/verifier-en-ligne.yml` vérifie projectlead.io (`scripts/e2e-prod.mjs`).
 
 ## Recevoir des emails sans boîte branchée
