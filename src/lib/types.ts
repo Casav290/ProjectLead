@@ -11,9 +11,22 @@ export type Me = {
   plan: Plan
 }
 
-/** La formule de la famille Lead et ce qu'en utilise l'entreprise (server/lib/plans.ts). */
+/**
+ * La formule ProjectLead et ce qu'en utilise l'entreprise (server/lib/plans.ts). `paidTier` : la formule payée dans
+ * ProjectLead ; `inherited` : celle d'un abonnement payé ailleurs avant la bascule, jusqu'à une date figée.
+ */
 export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: string; upgradeUrl: string; seats: number | null
+  source: 'free' | 'own' | 'family'; paidTier: 'free' | 'pro' | 'pro_plus'
+  inherited: { tier: 'free' | 'pro' | 'pro_plus'; app: string | null; until: string | null } | null
   openProjects: number; projectLimit: number | null; members: number; invited: number }
+
+/** L'abonnement ProjectLead (server/routes/billing.ts, GET /api/billing). */
+export type Billing = {
+  configured: boolean; portal: boolean; canManage: boolean; plan: Plan; hasCustomer: boolean
+  subscription: { plan: 'pro' | 'pro_plus'; interval: 'month' | 'year' | null; status: string; currentPeriodEnd: string | null
+                  cancelAtPeriodEnd: boolean; active: boolean } | null
+  prices: Record<'pro' | 'pro_plus', Record<'month' | 'year', number>>; currency: 'EUR'
+}
 
 export type Person = { id: string; name: string; color: string; email?: string; role?: string }
 

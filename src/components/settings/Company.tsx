@@ -34,7 +34,7 @@ export default function Company() {
     <>
       <SettingsHeader title="Entreprise">Ces réglages valent pour toute l'équipe.</SettingsHeader>
       <div className="max-w-2xl space-y-5">
-        <PlanCard plan={me.plan} />
+        <PlanCard />
         <Card title="Identité et calendrier">
           <form onSubmit={save} className="grid gap-3 p-4 sm:grid-cols-2">
             <Field label="Nom de l'entreprise" className="sm:col-span-2">

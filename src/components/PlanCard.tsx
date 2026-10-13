@@ -1,38 +1,189 @@
-import type { Plan } from '../lib/types'
-import { Card } from './ui'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import clsx from 'clsx'
+import { api, errorText } from '../lib/api'
+import { useApp } from '../lib/store'
+import type { Billing, Plan } from '../lib/types'
+import { Button, Card, Spinner } from './ui'
 
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`
+const RANK: Record<Plan['tier'], number> = { free: 0, pro: 1, pro_plus: 2 }
+const NAME: Record<Plan['tier'], string> = { free: 'Gratuit', pro: 'Pro', pro_plus: 'Pro+' }
+const FEATURES: Record<Plan['tier'], string[]> = {
+  free: ['3 projets en cours à la fois', '1 personne', 'Toutes les fonctions de ProjectLead'],
+  pro: ['Projets sans limite', '1 personne', 'Toutes les fonctions de ProjectLead'],
+  pro_plus: ['Projets sans limite', "Jusqu'à 5 personnes", 'Toutes les fonctions de ProjectLead'],
+}
+const euros = (n: number) => new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'EUR',
+  minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n)
+const day = (d: string) => new Date(d).toLocaleDateString('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
+const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'Scanlead', invoicelead: 'InvoiceLead', greetlead: 'Greetlead' } as Record<string, string>)[code ?? ''] ?? code ?? 'Lead'
 
 /**
- * La formule de la famille Lead : tout le monde entre, la formule fixe seulement les quantités
- * (server/lib/plans.ts). Rien pour une entreprise sans Compte Lead : elle n'a pas de formule.
+ * La carte Formule (Réglages → Entreprise) : ProjectLead encaisse lui-même son abonnement, valable dans ProjectLead
+ * seulement (Ève, 13.10.2026). Tout le monde y lit la formule et ce qu'il en utilise ; seul l'administrateur paie
+ * (Stripe Checkout), change de formule ou résilie (portail Stripe propre à ProjectLead). Sans Compte Lead, pas de
+ * formule : rien n'est affiché. Sans configuration Stripe, les boutons de paiement sont masqués.
  */
-export function PlanCard({ plan }: { plan: Plan }) {
-  if (!plan.linked) return null
+export function PlanCard() {
+  const { me, refresh } = useApp()
+  const [b, setB] = useState<Billing | null>(null)
+  const [annual, setAnnual] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // Le retour de Stripe Checkout : `?paiement=ok` ou `?paiement=annule`, lu une fois puis effacé de l'adresse.
+  const [back] = useState(() => new URLSearchParams(window.location.search).get('paiement'))
+  const load = useCallback(() => api.get<Billing>('/billing').then((x) => { setB(x); return x }), [])
+
+  useEffect(() => {
+    load().catch((e) => setError(errorText(e)))
+    if (back) { try { window.history.replaceState(null, '', window.location.pathname) } catch { /* rien */ } }
+    if (back !== 'ok') return
+    // Après un paiement, le webhook arrive en quelques secondes : on relit jusqu'à voir la formule payée.
+    let n = 0
+    const id = window.setInterval(async () => {
+      n++
+      const x = await load().catch(() => null)
+      if ((x && x.plan.paidTier !== 'free') || n >= 15) { window.clearInterval(id); refresh() }
+    }, 2000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!me?.plan.linked) return null
+  if (!b) return <Card title="Formule">{error ? <p className="p-4 text-sm text-late">{error}</p> : <Spinner />}</Card>
+
+  const plan = b.plan
+  const sub = b.subscription
+  const subscribed = Boolean(sub?.active)
+  const current = plan.paidTier
   const seats = plan.seats === null ? 'sans limite' : plural(plan.seats, 'personne', 'personnes')
-  const seatsFull = plan.seats !== null && plan.members + plan.invited >= plan.seats
+
+  async function go(path: string, body?: unknown) {
+    setError(null); setBusy(path)
+    try {
+      const r = await api.post<{ url: string }>(path, body)
+      window.location.assign(r.url)
+    } catch (e) {
+      setBusy(null)
+      setError(errorText(e))
+    }
+  }
+  const checkout = (p: 'pro' | 'pro_plus') => go('/billing/checkout', { plan: p, interval: annual ? 'year' : 'month' })
+  const portal = () => go('/billing/portal')
+
+  const card = (p: Plan['tier']) => {
+    const here = p === current
+    const price = p === 'free' ? 0 : b.prices[p][annual ? 'year' : 'month']
+    let action: ReactNode = null
+    if (here) {
+      action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">Formule actuelle</p>
+    } else if (b.configured && b.canManage && p !== 'free') {
+      action = subscribed
+        // Déjà abonné : on change de formule dans le portail, jamais par un second abonnement.
+        ? (b.portal ? <Button className="w-full" onClick={portal} disabled={!!busy}>Changer de formule</Button> : null)
+        : RANK[p] > RANK[current]
+          ? <Button variant="primary" className="w-full" onClick={() => checkout(p)} disabled={!!busy}>
+              {busy === '/billing/checkout' ? 'Ouverture du paiement…' : p === 'pro' ? 'Passer à Pro' : 'Passer à Pro+'}</Button>
+          : null
+    }
+    return (
+      <article key={p} className={clsx('flex flex-col bg-card p-4', here ? 'border-2 border-accent' : 'border border-input')}>
+        <h3 className="text-base font-extrabold">{NAME[p]}</h3>
+        <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5">
+          <span className="text-2xl font-extrabold leading-none tracking-[-.02em]">{euros(price)}</span>
+          <span className="text-xs text-muted-foreground">{p === 'free' ? 'sans limite de durée' : annual ? '/ an HT' : '/ mois HT'}</span>
+        </p>
+        <p className="mt-1 h-4 text-xs text-muted-foreground">
+          {p !== 'free' && annual ? `soit ${euros(Math.round((price / 12) * 100) / 100)} / mois` : ''}</p>
+        <ul className="mt-3 flex-1 space-y-1.5 text-sm">
+          {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
+        </ul>
+        <div className="mt-4 min-h-[36px]">{action}</div>
+      </article>
+    )
+  }
+
+  const toggle = (on: boolean, label: ReactNode) => (
+    <button type="button" aria-pressed={annual === on} onClick={() => setAnnual(on)}
+      className={clsx('flex items-center gap-2 px-3 py-1.5 text-[13px] font-bold',
+        annual === on ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:bg-muted')}>{label}</button>
+  )
+
   return (
-    <Card title="Formule">
-      <div className="space-y-3 p-4 text-sm">
-        <p><span className="font-bold">{plan.name}</span>
-          {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
+    <Card title="Formule ProjectLead">
+      <div className="space-y-4 p-4 text-sm">
+        {back === 'ok' && (
+          <p role="status" className="border border-l-[3px] border-won/40 border-l-won bg-won/5 px-3 py-2">
+            {plan.paidTier === 'free' ? 'Paiement reçu, merci. Votre formule s\'active dans quelques secondes.'
+              : `Paiement reçu, merci. Votre formule ${NAME[plan.paidTier]} est active.`}</p>
+        )}
+        {back === 'annule' && (
+          <p role="status" className="border border-l-[3px] border-border bg-card px-3 py-2">
+            Paiement annulé : rien n'a été débité, votre formule reste la même.</p>
+        )}
+
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="space-y-1">
+            <p>Votre formule : <span className="font-bold">{plan.name}</span>
+              {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
+            {sub && subscribed && (
+              <p className="text-muted-foreground">Abonnement ProjectLead {NAME[sub.plan]}{sub.interval === 'year' ? ', annuel' : sub.interval === 'month' ? ', mensuel' : ''}
+                {sub.currentPeriodEnd && (sub.cancelAtPeriodEnd
+                  ? <> · se termine le {day(sub.currentPeriodEnd)}, puis Gratuit</>
+                  : <> · renouvellement le {day(sub.currentPeriodEnd)}</>)}</p>
+            )}
+            {plan.inherited && (
+              <p className="text-muted-foreground">
+                {NAME[plan.inherited.tier]}{plan.inherited.until ? ` jusqu'au ${day(plan.inherited.until)}` : ''} grâce à votre abonnement {appName(plan.inherited.app)},
+                puis Gratuit, sauf si vous prenez une formule ici.</p>
+            )}
+          </div>
+          {b.portal && b.canManage && b.hasCustomer && (
+            <Button onClick={portal} disabled={!!busy}>{busy === '/billing/portal' ? 'Ouverture…' : "Gérer l'abonnement"}</Button>
+          )}
+        </div>
+        {sub && ['past_due', 'unpaid'].includes(sub.status) && (
+          <p className="border border-l-[3px] border-soon/40 border-l-soon bg-soon/5 px-3 py-2 text-xs">
+            Le dernier paiement a échoué. Mettez à jour votre moyen de paiement dans « Gérer l'abonnement » pour garder votre formule.</p>
+        )}
+
         <ul className="space-y-1">
           <li>Projets en cours : <span className="font-semibold tabular-nums">{plan.openProjects}</span>
             {plan.projectLimit !== null ? <> sur {plan.projectLimit}</> : <span className="text-muted-foreground"> (sans limite)</span>}</li>
           <li>Personnes : <span className="font-semibold tabular-nums">{plan.members + plan.invited}</span> sur {seats}
-            {plan.invited > 0 && <span className="text-muted-foreground"> (dont {plural(plan.invited, 'invitation en attente', 'invitations en attente')})</span>}
-            {seatsFull && plan.tier !== 'pro_plus' && <> · <a href={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Pro+ pour inviter jusqu'à 5 personnes</a></>}</li>
+            {plan.invited > 0 && <span className="text-muted-foreground"> (dont {plural(plan.invited, 'invitation en attente', 'invitations en attente')})</span>}</li>
         </ul>
-        <p className="text-xs text-muted-foreground">Les demandes à qualifier, les projets terminés, archivés et les modèles ne comptent pas.
-          La formule est celle de votre Compte Lead : elle se prend une fois, dans n'importe quelle application Lead. Les brouillons de
-          facture dans InvoiceLead demandent sa clé d'API, comprise dans la formule Pro+.</p>
-        {plan.tier !== 'pro_plus' && (
-          <a href={plan.upgradeUrl} className="inline-flex h-9 items-center bg-primary px-3 text-[13px] font-bold text-primary-foreground hover:bg-accent-dark">
-            {plan.tier === 'free' ? 'Passer à Pro' : 'Passer à Pro+'}</a>
+
+        {!b.configured && (
+          <p role="status" className="border border-l-[3px] border-border bg-card px-3 py-2 text-xs">
+            Le paiement en ligne n'est pas encore ouvert : votre espace fonctionne normalement d'ici là.</p>
         )}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div role="group" aria-label="Période de paiement" className="inline-flex border border-input">
+            {toggle(false, 'Mensuel')}
+            {toggle(true, <>Annuel <span className={clsx('px-1.5 py-0.5 text-[11px] font-extrabold', annual ? 'bg-white/20' : 'bg-accent-veil text-accent-dark')}>2 mois offerts</span></>)}
+          </div>
+          {!b.canManage && <p className="text-xs text-muted-foreground">Seul un administrateur peut changer la formule.</p>}
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">{card('free')}{card('pro')}{card('pro_plus')}</div>
+        {error && <p className="text-late">{error}</p>}
+
+        <p className="text-xs text-muted-foreground">Les demandes à qualifier, les projets terminés, archivés et les modèles ne comptent pas.
+          Votre formule ProjectLead se prend ici et ne vaut que pour ProjectLead. Les brouillons de facture dans InvoiceLead demandent
+          une clé d'API InvoiceLead, comprise dans la formule Pro+ d'InvoiceLead (prise dans InvoiceLead).</p>
+        <p className="text-xs text-muted-foreground">Prix hors taxes, en euros. Paiement sécurisé par Stripe. L'abonnement se renouvelle
+          automatiquement ; résiliable à tout moment dans « Gérer l'abonnement », effectif à la fin de la période payée.</p>
       </div>
     </Card>
   )
+}
+
+/** Le lien « Passer à Pro » : vers la page Formule pour un administrateur, une indication pour les autres. */
+export function UpgradeLink({ plan, children }: { plan: Plan; children: ReactNode }) {
+  const { me } = useApp()
+  if (me?.user.role !== 'admin') return <span className="text-muted-foreground">Un administrateur peut changer la formule (Réglages → Entreprise).</span>
+  return <Link to={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">{children}</Link>
 }
 
 /** Une ligne sous le titre des projets, en formule gratuite seulement. */
@@ -42,7 +193,7 @@ export function PlanLine({ plan }: { plan: Plan }) {
   return (
     <p className={full ? 'text-sm text-late' : 'text-sm text-muted-foreground'}>
       Formule gratuite : {plan.openProjects} projet{plan.openProjects > 1 ? 's' : ''} en cours sur {plan.projectLimit}.{' '}
-      <a href={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Passer à Pro</a>
+      <UpgradeLink plan={plan}>Passer à Pro</UpgradeLink>
     </p>
   )
 }

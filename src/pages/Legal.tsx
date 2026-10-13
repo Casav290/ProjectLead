@@ -8,7 +8,7 @@ import { Link } from 'react-router-dom'
  * publiques : server/routes/portal.ts…) ; le modifier, c'est modifier une promesse.
  */
 
-const UPDATED = '02.10.2026'
+const UPDATED = '13.10.2026'
 // Le contact de Quantum Liquid LLC, commun aux applications Lead.
 const CONTACT = 'support@scanlead.io'
 const PUBLISHER = 'Quantum Liquid LLC, société de droit du Wyoming, 30 N Gould St, Sheridan, WY 82801, États-Unis'
@@ -29,6 +29,7 @@ const PRIVACY: { title: string; intro: string; sections: Section[] } = {
     ]] },
     { h: '2. Finalités', p: [
       'Fournir le service : organiser les projets et les tâches, suivre le temps et la charge, tenir les clients informés, préparer la facturation dans InvoiceLead, envoyer les e-mails demandés par l\'utilisateur.',
+      'Abonnement : encaisser et gérer la formule ProjectLead choisie (par Stripe), et la déclarer au Compte Lead, qui la communique aux seules applications de la même organisation.',
       'Sécurité : authentification, isolation des entreprises, traçabilité des modifications.',
       'ProjectLead ne vend aucune donnée, ne fait pas de publicité, ne dépose aucun traceur publicitaire et ne constitue pas de profils à des fins marketing.',
     ] },
@@ -48,7 +49,9 @@ const PRIVACY: { title: string; intro: string; sections: Section[] } = {
     { h: '5. Destinataires et sous-traitants', p: [
       'Les données d\'une entreprise ne sont visibles que par ses membres, selon leurs droits. Une boîte mail connectée n\'est visible que par la personne qui l\'a branchée.',
       [
-        'Neon, Inc. (États-Unis) : hébergement de l\'application et de la base de données, pièces jointes comprises.',
+        'Vercel Inc. (États-Unis) : hébergement de l\'application.',
+        'Neon, Inc. (États-Unis) : hébergement de la base de données, pièces jointes comprises.',
+        'Stripe, Inc. et ses sociétés affiliées : encaissement des abonnements ProjectLead (nom, adresse e-mail et de facturation, numéro de TVA, moyen de paiement). Les données de carte sont saisies chez Stripe et ne passent jamais par ProjectLead.',
         'Resend, Inc. (États-Unis) : envoi des e-mails du service (suivis clients, invitations, confirmations de rendez-vous) quand aucune boîte n\'est branchée.',
         'CRMlead et InvoiceLead, applications de la même famille éditées par Quantum Liquid LLC : uniquement si l\'entreprise les relie par une clé d\'API (clients repris, affaires gagnées, brouillons de facture).',
         'Google LLC et Microsoft Corporation : uniquement pour les boîtes que l\'utilisateur a lui-même branchées.',
@@ -56,7 +59,7 @@ const PRIVACY: { title: string; intro: string; sections: Section[] } = {
       'Ces prestataires traitent les données hors de l\'Union européenne, notamment aux États-Unis.',
     ] },
     { h: '6. Durées de conservation', p: [
-      'Les données d\'une entreprise sont conservées tant que son compte est actif, puis effacées sur demande. Les sessions expirent après 30 jours, les invitations non acceptées après leur échéance.',
+      'Les données d\'une entreprise sont conservées tant que son compte est actif, puis effacées sur demande. Les sessions expirent après 30 jours, les invitations non acceptées après leur échéance. Stripe conserve les données de paiement et les factures selon ses propres obligations légales.',
     ] },
     { h: '7. Sécurité', p: [
       'Connexions chiffrées (HTTPS), mots de passe hachés, secrets des boîtes et clés d\'API chiffrés, isolation des entreprises au niveau de la base de données, journal d\'activité.',
@@ -73,7 +76,12 @@ const TERMS: typeof PRIVACY = {
   intro: `ProjectLead est édité par ${PUBLISHER}. En utilisant ProjectLead, vous acceptez les présentes conditions. Contact : ${CONTACT}.`,
   sections: [
     { h: '1. Le service', p: ['ProjectLead permet de mener les projets après la signature : étapes, tâches, temps, suivi des clients et préparation de la facturation. Le service évolue et peut être modifié, amélioré ou interrompu en partie.'] },
-    { h: '2. Compte et formule', p: ['L\'accès se fait avec le Compte Lead, ouvert à tous, gratuitement. La formule de la famille Lead, prise une fois dans n\'importe quelle application, fixe seulement les quantités : en gratuit, 3 projets en cours à la fois et 1 personne ; en Pro, projets sans limite ; en Pro+, jusqu\'à 5 personnes. Une limite porte sur les actions, jamais sur les données déjà créées. Les brouillons de facture dans InvoiceLead demandent une clé d\'API InvoiceLead, comprise dans la formule Pro+. Vous êtes responsable de l\'exactitude des informations du compte, de la confidentialité de vos accès et de l\'usage fait par les membres que vous invitez.'] },
+    { h: '2. Compte et formule', p: [
+      'L\'accès se fait avec le Compte Lead, ouvert à tous, gratuitement : il ouvre toutes les applications Lead en version gratuite. Vous êtes responsable de l\'exactitude des informations du compte, de la confidentialité de vos accès et de l\'usage fait par les membres que vous invitez.',
+      'La formule fixe seulement les quantités : en Gratuit, 3 projets en cours à la fois et 1 personne ; en Pro (19 € par mois ou 190 € par an), projets sans limite et 1 personne ; en Pro+ (39 € par mois ou 390 € par an), projets sans limite et jusqu\'à 5 personnes. Prix hors taxes, en euros. Une limite porte sur les actions, jamais sur les données déjà créées.',
+      'La formule ProjectLead se souscrit dans ProjectLead (Réglages → Entreprise) et ne vaut que pour ProjectLead ; un abonnement pris dans une autre application Lead n\'ouvre pas les formules payantes de ProjectLead. Le paiement est encaissé par Stripe pour le compte de l\'éditeur. L\'abonnement se renouvelle automatiquement à la fin de chaque période, mensuelle ou annuelle, au prix en vigueur. Il se résilie à tout moment depuis « Gérer l\'abonnement » : la résiliation prend effet à la fin de la période payée, et l\'entreprise repasse alors en Gratuit sans perdre ses données.',
+      'Les brouillons de facture dans InvoiceLead demandent une clé d\'API InvoiceLead, comprise dans la formule Pro+ d\'InvoiceLead, prise dans InvoiceLead.',
+    ] },
     { h: '3. Vos données', p: ['Les données que vous saisissez, importez ou synchronisez restent les vôtres. Vous garantissez avoir le droit de les traiter, notamment les coordonnées de vos clients et contacts. Leur traitement est décrit dans la politique de confidentialité.'] },
     { h: '4. Facturation dans InvoiceLead', p: ['ProjectLead ne crée dans InvoiceLead que des brouillons de facture. Rien n\'est émis ni envoyé à vos clients sans que vous le fassiez vous-même dans InvoiceLead : vous restez responsable des factures émises.'] },
     { h: '5. Usage acceptable', p: [[

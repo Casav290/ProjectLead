@@ -6,6 +6,7 @@ import { mailboxesOnce } from './mailbox/index.js'
 import { localDay } from './time.js'
 import { entitlementsOf } from './leadId.js'
 import { savePlan } from './plans.js'
+import { reconcileSubscriptions, syncErplead } from './subscription.js'
 
 /**
  * Tâches de fond. Comme dans CRMlead, elles profitent du trafic (une instance en veille n'a pas de
@@ -94,13 +95,17 @@ export async function runJobs(force = false) {
   if (await due('monthly_billing', 60 * 60_000, force)) out.monthlyBilling = await monthlyBilling().catch((e) => String(e))
   if (await due('triage_purge', 6 * 60 * 60_000, force)) out.triagePurged = await purgeTriage().catch((e) => String(e))
   if (await due('lead_plans', 24 * 60 * 60_000, force)) out.leadPlans = await refreshLeadPlans().catch((e) => String(e))
+  // L'abonnement ProjectLead : déclaration à ERPlead quand le webhook n'a pas pu la faire, relecture Stripe du jour.
+  if (await due('billing_sync', 10 * 60_000, force)) out.billingSync = await syncErplead().catch((e) => String(e))
+  if (await due('billing_reconcile', 24 * 60 * 60_000, force)) out.billingReconcile = await reconcileSubscriptions().catch((e) => String(e))
   return out
 }
 
 /**
- * La formule de la famille, relue chaque jour au Compte Lead : une formule prise ou résiliée ailleurs
- * change les limites ici le jour même (lib/plans.ts). Personne n'est mis dehors : en gratuit, on garde
- * l'accès. Un Compte Lead injoignable ne change rien.
+ * La formule ProjectLead, relue chaque jour au Compte Lead (jeton billing de ProjectLead : ERPlead calcule la
+ * formule de CETTE application). Un abonnement pris dans une autre application n'y compte pas ; pendant la
+ * transition, un abonnement payé ailleurs avant la bascule y compte jusqu'à une date figée (lib/plans.ts).
+ * Personne n'est mis dehors : en gratuit, on garde l'accès. Un Compte Lead injoignable ne change rien.
  */
 export async function refreshLeadPlans() {
   if (!process.env.LEAD_ID_CLIENT_SECRET || !process.env.LEAD_ID_ISSUER) return { checked: 0 }

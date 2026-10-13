@@ -46,7 +46,7 @@ export default function Integrations() {
 
         <LinkCard app="invoicelead" data={data} onChange={changed}
           title="InvoiceLead" intro="La facturation : chaque mois, un brouillon de facture par projet, que vous relisez et émettez dans InvoiceLead."
-          keyHint={<>Créez une clé <code className="font-mono">il_live_…</code> dans InvoiceLead → Réglages → API (formule Pro+), puis collez-la ici.</>}
+          keyHint={<>Créez une clé <code className="font-mono">il_live_…</code> dans InvoiceLead → Réglages → API (formule Pro+ d'InvoiceLead), puis collez-la ici.</>}
           keyPlaceholder="il_live_…" defaultUrl="https://invoicelead.io" language>
           <BillingSchedule data={data} onChange={reload} />
         </LinkCard>

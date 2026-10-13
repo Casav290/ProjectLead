@@ -102,9 +102,25 @@ const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', u
 let nextIdClaims: Record<string, unknown> = {}
 // Et ce qu'il répond quand une application relit les droits d'une organisation.
 const entitlementsByOrg: Record<string, unknown> = {}
-const issuerSrv = createServer((req, res) => {
+// Les abonnements que ProjectLead lui déclare (POST /api/lead-id/v1/subscriptions), et une panne simulée.
+const declared: any[] = []
+let issuerDown = false
+const issuerSrv = createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
   if (req.url === '/oauth/jwks') return res.end(JSON.stringify({ keys: [jwk] }))
+  if (req.url === '/api/lead-id/v1/subscriptions' && req.method === 'POST') {
+    if (issuerDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
+    if (req.headers.authorization !== 'Bearer a') { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
+    const b = await readBody(req)
+    declared.push(b)
+    // Comme ERPlead : la formule de l'application qui déclare, d'après ses abonnements (statuts qui ouvrent la formule).
+    const live = ['active', 'trialing', 'past_due'].includes(b.status)
+    const code = live ? b.plan : 'free'
+    const until = live && b.current_period_end ? new Date(Date.parse(b.current_period_end) + 3 * 86400e3).toISOString() : null
+    const out = { org: b.org, ...rights(code, { valid_until: until }) }
+    entitlementsByOrg[b.org] = out
+    return res.end(JSON.stringify(out))
+  }
   if (req.url?.startsWith('/api/lead-id/v1/entitlements')) {
     const org = new URL(req.url, 'http://x').searchParams.get('org') ?? ''
     if (!entitlementsByOrg[org] || req.headers.authorization !== 'Bearer a') { res.statusCode = 404; return res.end('{"error":"org_not_found"}') }
@@ -572,11 +588,20 @@ async function leadLogin(claims: (nonce: string) => Record<string, unknown>, que
   const session = (back.headers.get('set-cookie') ?? '').match(/projectlead_session=[^;]+/)?.[0] ?? ''
   return { authorize: to, location: back.headers.get('location'), session, cookies: back.headers.getSetCookie().length }
 }
+// Les droits tels qu'ERPlead les calcule depuis le 13.10.2026 : une formule PAR application (`plan` = celle de
+// ProjectLead, l'application qui demande), son origine (own, family, free) et sa date de validité.
+const PLAN_NAMES: Record<string, [string, number, number]> = { free: ['Gratuit', 0, 1], pro: ['Pro', 10, 1], pro_plus: ['Pro+', 20, 5] }
+const leadPlan = (code: string, extra: Record<string, unknown> = {}) => ({ code, name: PLAN_NAMES[code][0], rank: PLAN_NAMES[code][1],
+  seats: PLAN_NAMES[code][2], source: code === 'free' ? 'free' : 'own', valid_until: null, ...extra })
+const rights = (code: string, extra: Record<string, unknown> = {}, apps: Record<string, unknown> = {}, subscriptions: unknown[] = []) => ({
+  app: 'projectlead', plan: leadPlan(code, extra),
+  apps: { projectlead: { access: true, name: 'ProjectLead', url: null, status: 'live', upgrade_url: 'https://projectlead.io/reglages/entreprise', plan: leadPlan(code, extra) }, ...apps },
+  subscriptions, org_seats: PLAN_NAMES[code][2],
+})
 const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
   sub: `sub-${org}`, nonce, email: `${org}@exemple.test`, email_verified: true, name: 'Léa Lead', locale: 'fr',
   org, org_name: `Entreprise ${org}`, org_role: 'admin',
-  lead: { plan: { code: access ? 'pro' : 'free', name: access ? 'Pro' : 'Gratuit', rank: access ? 10 : 0, seats: 1 },
-          apps: { projectlead: { access, name: 'ProjectLead', url: null, status: 'live', upgrade_url: access ? null : 'https://scanlead.io/billing' } }, subscriptions: [] },
+  lead: rights(access ? 'pro' : 'free'),
 })
 let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
@@ -605,15 +630,15 @@ ll = await leadLogin((n) => lead(n, false, freeOrg), '?next=/projets')
 check('formule gratuite : on entre quand même (règle d’Ève du 02.10)', ll.location === '/projets' && ll.session.length > 30, ll)
 const free = new Client(); free.cookie = ll.session
 r = await free.get('/api/me')
-check('formule gratuite : espace créé, formule notée « Gratuit », 3 projets en cours, 1 personne',
+check('formule gratuite : espace créé, formule notée « Gratuit », 3 projets en cours, 1 personne, « Passer à Pro » vers sa propre page',
   r.status === 200 && r.body.plan?.linked && r.body.plan.tier === 'free' && r.body.plan.projectLimit === 3 && r.body.plan.seats === 1
-  && r.body.plan.upgradeUrl === 'https://scanlead.io/billing', r.body.plan)
+  && r.body.plan.upgradeUrl === '/reglages/entreprise', r.body.plan)
 const freeProjects: string[] = []
 for (const n of [1, 2, 3]) freeProjects.push((await free.post('/api/projects', { name: `Projet gratuit ${n}` })).body.id)
 check('gratuit : trois projets en cours', freeProjects.every(Boolean), freeProjects)
 r = await free.post('/api/projects', { name: 'Projet de trop' })
-check('gratuit : le quatrième est refusé (402), avec la limite et le lien de mise à niveau',
-  r.status === 402 && r.body.error === 'plan_limit_projects' && r.body.limit === 3 && r.body.upgrade_url === 'https://scanlead.io/billing', r)
+check('gratuit : le quatrième est refusé (402), avec la limite et le lien vers la page Formule de ProjectLead',
+  r.status === 402 && r.body.error === 'plan_limit_projects' && r.body.limit === 3 && r.body.upgrade_url === '/reglages/entreprise', r)
 r = await free.post('/api/projects', { name: 'Demande', status: 'lead' })
 check('gratuit : une demande à qualifier ne compte pas', r.status === 201, r)
 const freeLead = r.body.id
@@ -663,7 +688,7 @@ ll = await leadLogin((n) => ({ ...lead(n, false, `non-confirme-${stamp}`), email
 check('adresse pas encore confirmée : écran « confirmez votre adresse », rien de créé', ll.location === '/login?erreur=email' && !ll.session, ll)
 // Une personne désactivée dans l'espace de son organisation n'y tourne pas en boucle : elle entre ailleurs.
 const annOrg = `ann-org-${stamp}`
-const annPlan = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true } }, subscriptions: [] }
+const annPlan = rights('pro_plus')
 ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan }))
 const annAdmin = new Client(); annAdmin.cookie = ll.session
 ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
@@ -675,7 +700,7 @@ r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 check('Ann désactivée se reconnecte : session valable dans son propre espace, pas de boucle', r.status === 200 && r.body.account?.name !== `Entreprise ${annOrg}`, { status: r.status, account: r.body?.account?.name })
 // Une organisation Pro+ (5 places) et un membre local venu d'une autre organisation, gratuite.
 const plusOrg = `plus-org-${stamp}`
-const plusLead = (n: string) => ({ ...lead(n, true, plusOrg), lead: { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true } }, subscriptions: [] } })
+const plusLead = (n: string) => ({ ...lead(n, true, plusOrg), lead: rights('pro_plus') })
 ll = await leadLogin(plusLead)
 const plus = new Client(); plus.cookie = ll.session
 r = await plus.post('/api/team/invite', { email: `paul-${stamp}@exemple.test` })
@@ -695,11 +720,12 @@ const localMember = (await pool.query(`insert into users (email, name) values ($
 await pool.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin'), ($1,$3,'member')`, [localAcc, localAdmin, localMember])
 ll = await leadLogin((n) => ({ ...lead(n, false, `marc-org-${stamp}`), sub: `sub-marc-local-${stamp}`, email: `marc-local-${stamp}@exemple.test`, org_role: 'admin' }))
 r = await pool.query('select lead_org, plan from accounts where id = $1', [localAcc])
-check('entreprise locale : un simple membre ne la lie pas à son organisation gratuite', ll.session.length > 30 && r.rows[0].lead_org === null && r.rows[0].plan === 'pro', { row: r.rows[0], loc: ll.location })
+check('entreprise locale : un simple membre ne la lie pas à son organisation gratuite (et elle naît en Gratuit, plus en Pro)',
+  ll.session.length > 30 && r.rows[0].lead_org === null && r.rows[0].plan === 'free', { row: r.rows[0], loc: ll.location })
 // Une invitation en attente quand la formule baisse : son acceptation est refusée, puis une réactivation aussi.
 r = await plus.post('/api/team/invite', { email: `yves-${stamp}@exemple.test` })
 const yvesToken = String(r.body.link ?? '').split('/').pop()
-entitlementsByOrg[plusOrg] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
+entitlementsByOrg[plusOrg] = rights('free')
 await refreshLeadPlans()
 r = await new Client().post(`/api/auth/invitation/${yvesToken}/accept`, { name: 'Yves', password: 'motdepasse-solide' })
 check('formule descendue en gratuit : une ancienne invitation ne fait plus entrer (402)', r.status === 402 && r.body.error === 'plan_limit_seats', r)
@@ -726,14 +752,38 @@ ll = await leadLogin((n) => ({ ...lead(n, true), nonce: 'autre' }))
 check('jeton d’un autre départ (nonce) → erreur, pas de session', ll.location === '/login?erreur=lead' && !ll.session, ll)
 r = await app.request('http://localhost/auth/lead/callback?code=c&state=x')
 check('retour sans départ → erreur de session', r.headers.get('location') === '/login?erreur=session')
-entitlementsByOrg[freeOrg] = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, upgrade_url: null } }, subscriptions: [] }
+// Un abonnement par application (Ève, 13.10.2026) : un Pro+ payé dans CRMlead n'ouvre rien dans ProjectLead.
+entitlementsByOrg[freeOrg] = rights('free', {}, { crmlead: { access: true, name: 'CRMlead', plan: leadPlan('pro_plus') } })
 let plans = await refreshLeadPlans()
 r = await free.get('/api/me')
-check('formule relue chaque jour : Pro+ prise ailleurs, limites levées le jour même', plans.checked >= 1 && r.body.plan.tier === 'pro_plus'
-  && r.body.plan.projectLimit === null && r.body.plan.seats === 5, { plans, plan: r.body.plan })
+check('Pro+ pris AILLEURS (CRMlead) : limites inchangées ici, toujours Gratuit', plans.checked >= 1 && r.body.plan.tier === 'free'
+  && r.body.plan.projectLimit === 3 && r.body.plan.seats === 1, { plans, plan: r.body.plan })
+// Une réponse d'ERPlead calculée pour une autre application (client mal réglé) ne fixe pas la formule ProjectLead.
+entitlementsByOrg[freeOrg] = { ...rights('pro_plus'), app: 'crmlead' }
+await refreshLeadPlans()
+r = await free.get('/api/me')
+check('droits calculés pour une autre application (app ≠ projectlead) : ignorés', r.body.plan.tier === 'free', r.body.plan)
+// Transition : un abonnement payé ailleurs avant la bascule garde Pro ici jusqu'à sa date figée, sans grâce.
+const inheritedUntil = new Date(Date.now() + 3600e3).toISOString()
+entitlementsByOrg[freeOrg] = rights('pro', { source: 'family', valid_until: inheritedUntil }, {},
+  [{ app: 'crmlead', plan: 'pro', lead_plan: 'pro', status: 'active', current_period_end: inheritedUntil, family_until: inheritedUntil, inherited: true }])
+await refreshLeadPlans()
+r = await free.get('/api/me')
+check('hérité (source family) : Pro jusqu\'à valid_until, abonnement CRMlead nommé, rien de payé ici',
+  r.body.plan.tier === 'pro' && r.body.plan.source === 'family' && r.body.plan.paidTier === 'free' && r.body.plan.inherited?.app === 'crmlead'
+  && r.body.plan.inherited?.until === inheritedUntil && r.body.plan.projectLimit === null, r.body.plan)
+await pool.query(`update accounts set plan_valid_until = now() - interval '1 minute' where lead_org = $1`, [freeOrg])
+r = await free.get('/api/me')
+check('hérité : date passée → Gratuit aussitôt, sans attendre la relecture du lendemain', r.body.plan.tier === 'free' && r.body.plan.inherited === null
+  && r.body.plan.projectLimit === 3, r.body.plan)
+entitlementsByOrg[freeOrg] = rights('pro_plus')
+plans = await refreshLeadPlans()
+r = await free.get('/api/me')
+check('formule ProjectLead Pro+ connue d\'ERPlead (abonnement ProjectLead) : limites levées à la relecture', r.body.plan.tier === 'pro_plus'
+  && r.body.plan.source === 'own' && r.body.plan.projectLimit === null && r.body.plan.seats === 5, r.body.plan)
 r = await free.post('/api/projects', { name: 'Projet en Pro+' })
 check('Pro+ : un projet de plus passe', r.status === 201, r)
-entitlementsByOrg[freeOrg] = { plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps: { projectlead: { access: false } }, subscriptions: [] }
+entitlementsByOrg[freeOrg] = rights('free')
 plans = await refreshLeadPlans()
 r = await free.get('/api/me')
 check('formule résiliée : on garde l’accès en gratuit, rien n’est effacé', r.status === 200 && r.body.plan.tier === 'free'
@@ -743,6 +793,7 @@ void proSession
 section('Départ d’une personne : OpenID Back-Channel Logout')
 {
   const org = `bc-org-${stamp}`
+  // Forme d'avant le calcul par application (sans `app` ni `source`) : toujours acceptée.
   const plus = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, name: 'ProjectLead', url: null, status: 'live', upgrade_url: null } }, subscriptions: [] }
   const person = (n: string, sub: string, role: string) => ({ sub, nonce: n, email: `${sub}@exemple.test`, email_verified: true, name: sub, locale: 'fr', org, org_name: `Entreprise ${org}`, org_role: role, lead: plus })
   const boss = await leadLogin((n) => person(n, `boss-${stamp}`, 'admin'))
@@ -773,6 +824,291 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   check('dernier administrateur : sa session tombe, il reste actif', (await post(logoutToken(`boss-${stamp}`))) === 200 && (await me(boss.session)) === 401
     && (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`boss-${stamp}`])).rows[0]?.active === true)
 }
+section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
+{
+  const { signPayload, own } = await import('../server/lib/stripe.js')
+  const { syncErplead, cancelAccountSubscriptions } = await import('../server/lib/subscription.js')
+  const { hashToken } = await import('../server/auth.js')
+  let r: any
+  // ---------------------------------------------------------------- faux Stripe
+  const calls: { method: string; path: string; params: URLSearchParams; idem: string | null }[] = []
+  const stripeSubs = new Map<string, any>()
+  const customersByKey = new Map<string, string>()
+  let stripeDown = false, nCus = 0, nCs = 0
+  const fakeStripe = createServer(async (req, res) => {
+    res.setHeader('content-type', 'application/json')
+    const raw = await new Promise<string>((ok) => { let d = ''; req.on('data', (x) => (d += x)); req.on('end', () => ok(d)) })
+    if (req.headers.authorization !== 'Bearer sk_test_smoke') { res.statusCode = 401; return res.end('{"error":{"type":"invalid_request_error","message":"clé"}}') }
+    if (stripeDown) { res.statusCode = 500; return res.end('{"error":{"type":"api_error","message":"panne"}}') }
+    const url = new URL(req.url!, 'http://x')
+    const params = new URLSearchParams(req.method === 'POST' ? raw : url.search)
+    const idem = (req.headers['idempotency-key'] as string | undefined) ?? null
+    calls.push({ method: req.method!, path: url.pathname, params, idem })
+    if (req.method === 'POST' && url.pathname === '/v1/customers') {
+      const id = (idem && customersByKey.get(idem)) || `cus_${stamp}_${++nCus}`
+      if (idem) customersByKey.set(idem, id)
+      return res.end(JSON.stringify({ id, object: 'customer' }))
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/checkout/sessions') return res.end(JSON.stringify({ id: `cs_test_smoke${++nCs}`, url: `https://checkout.stripe.test/c/${nCs}` }))
+    if (req.method === 'POST' && url.pathname === '/v1/billing_portal/sessions') return res.end(JSON.stringify({ id: 'bps_smoke', url: 'https://billing.stripe.test/p/1' }))
+    const m = url.pathname.match(/^\/v1\/subscriptions\/(sub_\w+)$/)
+    if (m && stripeSubs.has(m[1]) && req.method === 'GET') return res.end(JSON.stringify(stripeSubs.get(m[1])))
+    if (m && stripeSubs.has(m[1]) && req.method === 'DELETE') {
+      const s = { ...stripeSubs.get(m[1]), status: 'canceled' }; stripeSubs.set(m[1], s); return res.end(JSON.stringify(s))
+    }
+    res.statusCode = 404; res.end('{"error":{"type":"invalid_request_error","code":"resource_missing","message":"absent"}}')
+  })
+  process.env.STRIPE_API_BASE = `http://127.0.0.1:${await listen(fakeStripe)}`
+
+  // ---------------------------------------------------------------- une entreprise Lead en Gratuit, son admin, un membre
+  const aboOrg = `abo-org-${stamp}`
+  entitlementsByOrg[aboOrg] = rights('free')
+  ll = await leadLogin((n) => ({ ...lead(n, false, aboOrg), sub: `sub-abo-${stamp}`, email: `abo-${stamp}@exemple.test` }))
+  const boss = new Client(); boss.cookie = ll.session
+  const aboAcc = (await pool.query('select id from accounts where lead_org = $1', [aboOrg])).rows[0].id as string
+  const memberId = (await pool.query(`insert into users (email, name) values ($1, 'Membre abo') returning id`, [`membre-abo-${stamp}@exemple.test`])).rows[0].id
+  await pool.query(`insert into account_users (account_id, user_id, role) values ($1, $2, 'member')`, [aboAcc, memberId])
+  const memberToken = `smoke-membre-${randomUUID()}`
+  await pool.query(`insert into sessions (token_hash, user_id, account_id, expires_at) values ($1, $2, $3, now() + interval '1 day')`, [hashToken(memberToken), memberId, aboAcc])
+  const member = new Client(); member.cookie = `projectlead_session=${memberToken}`
+
+  const hook = async (e: unknown, opts: { secret?: string; sig?: string } = {}) => {
+    const raw = JSON.stringify(e)
+    const res = await app.request('http://localhost/api/stripe/webhook', { method: 'POST',
+      headers: { 'content-type': 'application/json', 'stripe-signature': opts.sig ?? signPayload(raw, opts.secret ?? 'whsec_smoke_local') }, body: raw })
+    return { status: res.status, body: await res.json().catch(() => null) as any }
+  }
+  const counts = async () => (await pool.query(`select (select count(*) from stripe_events)::int as events,
+    (select count(*) from billing_subscriptions)::int as subs, (select count(*) from notifications where account_id = $1)::int as notes,
+    (select stripe_customer_id from accounts where id = $1) as customer, (select plan from accounts where id = $1) as plan`, [aboAcc])).rows[0]
+  const now = Math.floor(Date.now() / 1000)
+  const PRICE = {
+    pro_m: { id: 'price_pl_pro_m', lookup_key: 'projectlead_pro_monthly', recurring: { interval: 'month' }, metadata: { app: 'projectlead', projectlead_plan: 'pro', interval: 'month' } },
+    plus_y: { id: 'price_pl_plus_y', lookup_key: 'projectlead_proplus_yearly', recurring: { interval: 'year' }, metadata: { app: 'projectlead', projectlead_plan: 'pro_plus', interval: 'year' } },
+    crm_m: { id: 'price_crm_pro_m', lookup_key: 'crmlead_pro_monthly', recurring: { interval: 'month' }, metadata: { app: 'crmlead', crmlead_plan: 'pro' } },
+    scan_team: { id: 'price_scan_team', lookup_key: null, recurring: { interval: 'month' }, metadata: { plan: 'team' } },
+  }
+  const subOf = (id: string, over: Record<string, any> = {}, price: any = PRICE.pro_m, customer = `cus_${stamp}_1`) => ({
+    id, object: 'subscription', customer, status: 'active', cancel_at_period_end: false,
+    metadata: { app: 'projectlead', account_id: aboAcc, plan: 'pro', interval: 'month' },
+    items: { data: [{ price, current_period_end: now + 30 * 86400 }] }, ...over,
+  })
+  const evt = (type: string, object: unknown, id = `evt_smoke_${randomUUID().slice(0, 8)}`) => ({ id, object: 'event', type, created: now, data: { object } })
+
+  // ---------------------------------------------------------------- sans configuration
+  r = await boss.get('/api/billing')
+  check('sans variables Stripe : page Formule lisible, paiement fermé, Gratuit', r.status === 200 && r.body.configured === false
+    && r.body.portal === false && r.body.plan.tier === 'free' && r.body.subscription === null && r.body.prices.pro.month === 19 && r.body.prices.pro_plus.year === 390, r.body)
+  r = await boss.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+  check('sans variables Stripe : Checkout → 503 billing_not_configured', r.status === 503 && r.body.error === 'billing_not_configured', r)
+  r = await hook(evt('customer.subscription.created', subOf(`sub_${stamp}_x`)))
+  check('sans variables Stripe : webhook → 503 (Stripe réessaiera)', r.status === 503, r)
+
+  Object.assign(process.env, { STRIPE_SECRET_KEY: 'sk_test_smoke', STRIPE_WEBHOOK_SECRET: 'whsec_smoke_local',
+    STRIPE_PRICE_PRO_MONTHLY: 'price_pl_pro_m', STRIPE_PRICE_PRO_YEARLY: 'price_pl_pro_y',
+    STRIPE_PRICE_PROPLUS_MONTHLY: 'price_pl_plus_m', STRIPE_PRICE_PROPLUS_YEARLY: 'price_pl_plus_y' })
+  {
+    // Une clé live posée par erreur sur une préversion : rien ne se vend, rien ne se lit.
+    const before = { k: process.env.STRIPE_SECRET_KEY, v: process.env.VERCEL_ENV }
+    Object.assign(process.env, { STRIPE_SECRET_KEY: 'sk_live_jamais', VERCEL_ENV: 'preview' })
+    r = await boss.get('/api/billing')
+    check('clé live sur une préversion Vercel : paiement fermé', r.body.configured === false, r.body)
+    process.env.STRIPE_SECRET_KEY = before.k
+    if (before.v === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = before.v
+  }
+
+  // ---------------------------------------------------------------- Checkout et portail
+  r = await member.get('/api/billing')
+  check('un membre lit la formule mais ne la gère pas', r.status === 200 && r.body.configured === true && r.body.canManage === false, r.body)
+  r = await member.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+  check('Checkout par un membre → 403', r.status === 403, r)
+  r = await member.post('/api/billing/portal')
+  check('portail par un membre → 403', r.status === 403, r)
+  r = await boss.post('/api/billing/checkout', { plan: 'gold', interval: 'month' })
+  check('Checkout : formule inconnue → 400', r.status === 400, r)
+  r = await boss.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+  const cusCall = calls.find((x) => x.path === '/v1/customers')
+  const csCall = calls.find((x) => x.path === '/v1/checkout/sessions')
+  check('Checkout par l\'administrateur → adresse de paiement Stripe', r.status === 200 && r.body.url === 'https://checkout.stripe.test/c/1', r)
+  check('client Stripe propre à ProjectLead : metadata app + account_id, clé d\'idempotence projectlead-customer-<compte>',
+    cusCall?.params.get('metadata[app]') === 'projectlead' && cusCall?.params.get('metadata[account_id]') === aboAcc
+    && cusCall?.idem === `projectlead-customer-${aboAcc}` && (await counts()).customer === `cus_${stamp}_1`,
+    { params: cusCall && Object.fromEntries(cusCall.params), idem: cusCall?.idem })
+  const cs = csCall ? Object.fromEntries(csCall.params) : {}
+  check('session Checkout : abonnement, prix projectlead_pro_monthly, metadata ET subscription_data.metadata {app, account_id, plan, interval}',
+    cs.mode === 'subscription' && cs.customer === `cus_${stamp}_1` && cs['line_items[0][price]'] === 'price_pl_pro_m'
+    && cs['metadata[app]'] === 'projectlead' && cs['metadata[account_id]'] === aboAcc && cs['metadata[plan]'] === 'pro' && cs['metadata[interval]'] === 'month'
+    && cs['subscription_data[metadata][app]'] === 'projectlead' && cs['subscription_data[metadata][account_id]'] === aboAcc
+    && cs['subscription_data[metadata][plan]'] === 'pro' && cs['subscription_data[metadata][interval]'] === 'month', cs)
+  check('session Checkout : jamais client_reference_id, workspace_id, invoice_id ni organization_id (clés de ScanLead et de Connect)',
+    !Object.keys(cs).some((k) => /client_reference_id|workspace_id|invoice_id|organization_id/.test(k)), Object.keys(cs))
+  check('session Checkout : carte seule, adresse et TVA demandées, retour sur Réglages → Entreprise',
+    cs['payment_method_types[0]'] === 'card' && !cs['payment_method_types[1]'] && cs.billing_address_collection === 'required'
+    && cs['tax_id_collection[enabled]'] === 'true' && cs.success_url?.endsWith('/reglages/entreprise?paiement=ok')
+    && cs.cancel_url?.endsWith('/reglages/entreprise?paiement=annule'), cs)
+  const csIdem = csCall?.idem
+  r = await boss.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+  const csCalls = calls.filter((x) => x.path === '/v1/checkout/sessions')
+  check('second clic : même client (pas de second client Stripe), même clé d\'idempotence de session (un seul abonnement possible)',
+    r.status === 200 && calls.filter((x) => x.path === '/v1/customers').length === 1 && csCalls.length === 2 && csCalls[1].idem === csIdem && Boolean(csIdem),
+    { customers: calls.filter((x) => x.path === '/v1/customers').length, idem: csCalls.map((x) => x.idem) })
+  r = await boss.post('/api/billing/portal')
+  check('portail sans configuration propre à ProjectLead → 503 (jamais celle par défaut, qui est celle de ScanLead)', r.status === 503 && r.body.error === 'billing_not_configured', r)
+  process.env.STRIPE_PORTAL_CONFIGURATION = 'bpc_smoke_projectlead'
+  r = await boss.post('/api/billing/portal')
+  const pCall = calls.filter((x) => x.path === '/v1/billing_portal/sessions').pop()
+  check('portail : configuration ProjectLead, client ProjectLead, retour sur Réglages → Entreprise', r.status === 200 && r.body.url === 'https://billing.stripe.test/p/1'
+    && pCall?.params.get('configuration') === 'bpc_smoke_projectlead' && pCall?.params.get('customer') === `cus_${stamp}_1`
+    && Boolean(pCall?.params.get('return_url')?.endsWith('/reglages/entreprise')), pCall && Object.fromEntries(pCall.params))
+
+  // ---------------------------------------------------------------- signature
+  const before = await counts()
+  r = await hook(evt('customer.subscription.created', subOf(`sub_${stamp}_1`)), { sig: 't=1,v1=00' })
+  check('webhook : fausse signature → 400', r.status === 400 && r.body.error === 'invalid_signature', r)
+  r = await hook(evt('customer.subscription.created', subOf(`sub_${stamp}_1`)), { secret: 'whsec_autre_application' })
+  check('webhook : signé avec le secret d\'un autre endpoint → 400', r.status === 400, r)
+  {
+    const raw = JSON.stringify(evt('customer.subscription.created', subOf(`sub_${stamp}_1`)))
+    const res = await app.request('http://localhost/api/stripe/webhook', { method: 'POST', body: raw,
+      headers: { 'stripe-signature': signPayload(raw, 'whsec_smoke_local', now - 600) } })
+    check('webhook : signature de plus de 5 minutes (rejeu) → 400', res.status === 400)
+  }
+
+  // ---------------------------------------------------------------- isolation : les événements des autres applications
+  const callsBefore = calls.length
+  stripeSubs.set(`sub_${stamp}_crm`, subOf(`sub_${stamp}_crm`, { metadata: { app: 'crmlead', account_id: aboAcc, plan: 'pro' } }, PRICE.crm_m))
+  const foreign: [string, unknown][] = [
+    ['CRMlead : abonnement crmlead_pro_monthly (même account_id)', evt('customer.subscription.updated', subOf(`sub_${stamp}_crm`, { metadata: { app: 'crmlead', account_id: aboAcc, plan: 'pro' } }, PRICE.crm_m))],
+    ['marque projectlead mais prix CRMlead', evt('customer.subscription.created', subOf(`sub_${stamp}_mix`, {}, PRICE.crm_m))],
+    ['ScanLead : prix « team » sans app', evt('customer.subscription.created', subOf(`sub_${stamp}_scan`, { metadata: { plan: 'team', workspace_id: aboAcc } }, PRICE.scan_team))],
+    ['ScanLead : Checkout avec client_reference_id', evt('checkout.session.completed', { id: 'cs_scan', object: 'checkout.session', mode: 'subscription',
+      client_reference_id: aboAcc, customer: `cus_${stamp}_1`, subscription: `sub_${stamp}_scan`, metadata: { workspace_id: aboAcc } })],
+    ['Greetlead : Checkout de paiement unique', evt('checkout.session.completed', { id: 'cs_greet', object: 'checkout.session', mode: 'payment',
+      client_reference_id: 'card-1', metadata: { app: 'greetlead' } })],
+    ['paiement unique marqué projectlead (ProjectLead ne vend que l\'abonnement)', evt('checkout.session.completed', { id: 'cs_pay', object: 'checkout.session', mode: 'payment', metadata: { app: 'projectlead', account_id: aboAcc } })],
+    ['InvoiceLead : paiement échoué (nouvelle forme, parent.subscription_details)', evt('invoice.payment_failed', { id: 'in_il', object: 'invoice', customer: `cus_${stamp}_1`,
+      parent: { subscription_details: { subscription: 'sub_il_1', metadata: { app: 'invoicelead', account_id: aboAcc } } } })],
+    ['Greetlead : paiement échoué (ancienne forme)', evt('invoice.payment_failed', { id: 'in_gl', object: 'invoice', customer: `cus_${stamp}_1`, subscription: 'sub_gl_1',
+      subscription_details: { metadata: { app: 'greetlead' } } })],
+    ['type non traité (charge.succeeded)', evt('charge.succeeded', { id: 'ch_1', object: 'charge', metadata: { app: 'projectlead', account_id: aboAcc } })],
+  ]
+  for (const [label, e] of foreign) {
+    r = await hook(e)
+    check(`autre application → 200 « other_app » : ${label}`, r.status === 200 && r.body.result === 'other_app', r)
+  }
+  const after = await counts()
+  check('autres applications : aucune écriture (événements, abonnements, notifications, client, formule) et aucun appel à Stripe',
+    JSON.stringify(after) === JSON.stringify(before) && calls.length === callsBefore && after.plan === 'free', { before, after, appels: calls.length - callsBefore })
+  check('filtre own : la facture d\'un abonnement ProjectLead (nouvelle forme d\'API) est reconnue',
+    own(evt('invoice.payment_failed', { parent: { subscription_details: { subscription: 'sub_x', metadata: { app: 'projectlead' } } } })) === true
+    && own(evt('customer.subscription.updated', subOf('sub_y', {}, { id: 'price_inconnu', metadata: { app: 'projectlead', projectlead_plan: 'pro_plus' }, recurring: { interval: 'year' } }))) === true)
+
+  // ---------------------------------------------------------------- notre abonnement, de bout en bout
+  stripeSubs.set(`sub_${stamp}_1`, subOf(`sub_${stamp}_1`))
+  const created = evt('customer.subscription.created', subOf(`sub_${stamp}_1`))
+  r = await hook(created)
+  check('abonnement ProjectLead signé (projectlead_pro_monthly) → appliqué', r.status === 200 && r.body.result === 'applied', r)
+  r = await boss.get('/api/me')
+  check('/api/me : formule Pro tout de suite (abonnement ProjectLead), projets sans limite', r.body.plan.tier === 'pro' && r.body.plan.paidTier === 'pro'
+    && r.body.plan.source === 'own' && r.body.plan.projectLimit === null && r.body.plan.seats === 1, r.body.plan)
+  const decl = declared.filter((d) => d.external_id === `sub_${stamp}_1`)
+  check('le faux Compte Lead reçoit la déclaration (org, pro, active, sub_…, fin de période)', decl.length === 1 && decl[0].org === aboOrg
+    && decl[0].plan === 'pro' && decl[0].status === 'active' && Boolean(decl[0].current_period_end), decl)
+  let row = (await pool.query('select * from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_1`])).rows[0]
+  const acct = (await pool.query('select plan, plan_source from accounts where id = $1', [aboAcc])).rows[0]
+  check('ligne locale déclarée (erplead_synced_at posé) ; formule recopiée depuis la réponse d\'ERPlead', row?.account_id === aboAcc && row.plan === 'pro'
+    && row.interval === 'month' && row.status === 'active' && row.erplead_synced_at !== null && acct.plan === 'pro' && acct.plan_source === 'own', { row, acct })
+  r = await hook(created)
+  check('même événement rejoué → « duplicate », rien de plus déclaré', r.status === 200 && r.body.result === 'duplicate'
+    && declared.filter((d) => d.external_id === `sub_${stamp}_1`).length === 1, r)
+  r = await hook(evt('checkout.session.completed', { id: 'cs_test_smoke1', object: 'checkout.session', mode: 'subscription', customer: `cus_${stamp}_1`,
+    subscription: `sub_${stamp}_1`, metadata: { app: 'projectlead', account_id: aboAcc, plan: 'pro', interval: 'month' } }))
+  check('Checkout terminé (ProjectLead) → accepté, toujours une seule ligne', r.status === 200 && ['applied', 'stale'].includes(r.body.result)
+    && (await pool.query('select count(*)::int as n from billing_subscriptions where account_id = $1', [aboAcc])).rows[0].n === 1, r)
+  r = await boss.post('/api/billing/checkout', { plan: 'pro_plus', interval: 'year' })
+  check('déjà abonné : un second Checkout → 409 (changer de formule passe par le portail)', r.status === 409 && r.body.error === 'already_subscribed', r)
+
+  // L'état relu chez Stripe fait foi : un événement ancien, traité après coup, ne revient pas en arrière.
+  stripeSubs.set(`sub_${stamp}_1`, subOf(`sub_${stamp}_1`, { cancel_at_period_end: true }))
+  r = await hook(evt('customer.subscription.updated', subOf(`sub_${stamp}_1`, { cancel_at_period_end: false })))
+  r = await boss.get('/api/billing')
+  check('résiliation demandée au portail (relue chez Stripe, même si l\'événement est plus ancien) : toujours Pro, fin annoncée',
+    r.body.plan.tier === 'pro' && r.body.subscription?.cancelAtPeriodEnd === true && r.body.subscription?.active === true && r.body.hasCustomer === true, r.body)
+  check('changement sans effet sur la formule (fin annoncée) : pas de nouvelle déclaration', declared.filter((d) => d.external_id === `sub_${stamp}_1`).length === 1)
+
+  // Stripe en panne : rien n'est inscrit, Stripe renvoie l'événement plus tard.
+  stripeDown = true
+  const retried = evt('customer.subscription.updated', subOf(`sub_${stamp}_1`))
+  r = await hook(retried)
+  const kept = (await pool.query('select 1 from stripe_events where id = $1', [retried.id])).rowCount
+  check('Stripe injoignable : 502 et événement non inscrit (Stripe le renverra)', r.status === 502 && kept === 0, r)
+  stripeDown = false
+  r = await hook(retried)
+  check('… renvoyé une fois Stripe revenu : traité (pas « duplicate »)', r.status === 200 && ['applied', 'stale'].includes(r.body.result), r)
+
+  // Paiement échoué : l'abonnement relu passe « en retard » ; l'administrateur est prévenu dans ProjectLead.
+  stripeSubs.set(`sub_${stamp}_1`, subOf(`sub_${stamp}_1`, { status: 'past_due', cancel_at_period_end: true }))
+  r = await hook(evt('invoice.payment_failed', { id: 'in_pl_1', object: 'invoice', customer: `cus_${stamp}_1`,
+    parent: { subscription_details: { subscription: `sub_${stamp}_1`, metadata: { app: 'projectlead', account_id: aboAcc } } } }))
+  const note = (await pool.query(`select n.title from notifications n join users u on u.id = n.user_id where n.account_id = $1 and n.kind = 'plan' and u.lead_sub = $2`, [aboAcc, `sub-abo-${stamp}`])).rows
+  row = (await pool.query('select status from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_1`])).rows[0]
+  r = { ...r, me: (await boss.get('/api/me')).body.plan } as any
+  check('paiement échoué (ProjectLead) : en retard, administrateur prévenu, formule gardée pendant les relances', (r as any).body.result === 'payment_failed'
+    && row.status === 'past_due' && note.some((n) => /paiement/.test(n.title)) && (r as any).me.tier === 'pro'
+    && declared.filter((d) => d.external_id === `sub_${stamp}_1`).pop()?.status === 'past_due', { r, row, note })
+
+  // Fin de l'abonnement : retour au gratuit, rien n'est effacé.
+  stripeSubs.set(`sub_${stamp}_1`, subOf(`sub_${stamp}_1`, { status: 'canceled' }))
+  r = await hook(evt('customer.subscription.deleted', subOf(`sub_${stamp}_1`, { status: 'canceled' })))
+  r = await boss.get('/api/me')
+  check('abonnement terminé (subscription.deleted) → Gratuit, déclaré « canceled » à ERPlead', r.body.plan.tier === 'free' && r.body.plan.projectLimit === 3
+    && declared.filter((d) => d.external_id === `sub_${stamp}_1`).pop()?.status === 'canceled'
+    && (await pool.query('select plan from accounts where id = $1', [aboAcc])).rows[0].plan === 'free', r.body.plan)
+
+  // ERPlead en panne : Pro+ effectif ici quand même, puis la tâche billing_sync rattrape la déclaration.
+  issuerDown = true
+  stripeSubs.set(`sub_${stamp}_2`, subOf(`sub_${stamp}_2`, { metadata: { app: 'projectlead', account_id: aboAcc, plan: 'pro_plus', interval: 'year' } }, PRICE.plus_y))
+  r = await hook(evt('customer.subscription.created', stripeSubs.get(`sub_${stamp}_2`)))
+  const me2 = (await boss.get('/api/me')).body.plan
+  row = (await pool.query('select erplead_synced_at from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_2`])).rows[0]
+  check('Compte Lead en panne : Pro+ local quand même (5 places), déclaration en attente', r.status === 200 && r.body.result === 'applied'
+    && me2.tier === 'pro_plus' && me2.seats === 5 && row?.erplead_synced_at === null, { r, me2, row })
+  issuerDown = false
+  const synced = await syncErplead()
+  row = (await pool.query('select erplead_synced_at from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_2`])).rows[0]
+  check('… rattrapée par la tâche billing_sync une fois le Compte Lead revenu', synced.synced >= 1 && row.erplead_synced_at !== null
+    && declared.some((d) => d.external_id === `sub_${stamp}_2` && d.plan === 'pro_plus' && d.status === 'active'), { synced, row })
+
+  // Deux événements du même abonnement en même temps (Checkout terminé + abonnement créé) : une seule ligne, cohérente.
+  stripeSubs.set(`sub_${stamp}_3`, subOf(`sub_${stamp}_3`))
+  const pair = await Promise.all([
+    hook(evt('customer.subscription.created', subOf(`sub_${stamp}_3`))),
+    hook(evt('checkout.session.completed', { id: 'cs_pair', object: 'checkout.session', mode: 'subscription', customer: `cus_${stamp}_1`, subscription: `sub_${stamp}_3`,
+      metadata: { app: 'projectlead', account_id: aboAcc, plan: 'pro', interval: 'month' } })),
+  ])
+  const n3 = (await pool.query('select count(*)::int as n, min(status) as s from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_3`])).rows[0]
+  check('deux événements simultanés du même abonnement : 200 tous deux, une seule ligne active', pair.every((x) => x.status === 200) && n3.n === 1 && n3.s === 'active', { pair, n3 })
+
+  // Un abonnement ProjectLead d'une entreprise inconnue ici : rien n'est rattaché au hasard.
+  stripeSubs.set(`sub_${stamp}_4`, subOf(`sub_${stamp}_4`, { metadata: { app: 'projectlead', account_id: randomUUID(), plan: 'pro', interval: 'month' } }, PRICE.pro_m, 'cus_inconnu'))
+  r = await hook(evt('customer.subscription.created', stripeSubs.get(`sub_${stamp}_4`)))
+  check('entreprise inconnue : « unknown_account », aucune ligne', r.status === 200 && r.body.result === 'unknown_account'
+    && !(await pool.query('select 1 from billing_subscriptions where stripe_subscription_id = $1', [`sub_${stamp}_4`])).rowCount, r)
+
+  // Une entreprise abonnée ne s'efface pas par mégarde ; la résiliation ne touche que ses propres abonnements.
+  let blocked = ''
+  try { await pool.query('delete from accounts where id = $1', [aboAcc]) } catch (e: any) { blocked = e?.code }
+  check('effacer une entreprise qui a un abonnement : refusé par la base (résilier d\'abord)', blocked === '23503', blocked)
+  const n = await cancelAccountSubscriptions(aboAcc)
+  const deletes = calls.filter((x) => x.method === 'DELETE').map((x) => x.path)
+  check('résiliation de l\'entreprise : seulement SES abonnements ProjectLead en cours (DELETE), jamais ceux d\'une autre application',
+    n === 2 && deletes.length === 2 && deletes.every((p) => new RegExp(`sub_${stamp}_[23]$`).test(p)) && !deletes.some((p) => p.includes(`sub_${stamp}_crm`))
+    && (await boss.get('/api/me')).body.plan.tier === 'free', { n, deletes })
+  fakeStripe.close()
+  for (const k of ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_PRO_MONTHLY', 'STRIPE_PRICE_PRO_YEARLY', 'STRIPE_PRICE_PROPLUS_MONTHLY',
+    'STRIPE_PRICE_PROPLUS_YEARLY', 'STRIPE_PORTAL_CONFIGURATION', 'STRIPE_API_BASE']) delete process.env[k]
+}
+
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)

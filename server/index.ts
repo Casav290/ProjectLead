@@ -27,6 +27,7 @@ import integrationRoutes from './routes/integrations.js'
 import exchangeRoutes from './routes/exchange.js'
 import workRoutes, { publicForms } from './routes/work.js'
 import v1Routes from './routes/v1.js'
+import billingRoutes, { webhook as stripeWebhook } from './routes/billing.js'
 
 const app = new Hono<Env>()
 
@@ -63,6 +64,8 @@ app.route('/api/public/booking', publicBooking)
 app.route('/api/public/forms', publicForms)
 app.route('/api/public/calendar', publicCalendar)
 app.route('/api/inbound', publicMail)
+// Stripe signe ses envois, sans cookie : avant la garde de session, corps lu brut (routes/billing.ts).
+app.route('/api/stripe/webhook', stripeWebhook)
 app.route('/api/v1', v1Routes)
 
 app.get('/api/health', (c) => c.json({ ok: true }))
@@ -141,6 +144,7 @@ app.route('/api/booking', bookingRoutes)
 app.route('/api/mail', mailRoutes)
 app.route('/api/portal', portalRoutes)
 app.route('/api/integrations', integrationRoutes)
+app.route('/api', billingRoutes)
 app.route('/api', workRoutes)
 
 app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404))

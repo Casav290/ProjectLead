@@ -5,6 +5,7 @@ import { fmtDate, money, parseMoney, ROLE_LABEL } from '../../lib/format'
 import { useApp, useLoad } from '../../lib/store'
 import type { Member } from '../../lib/types'
 import { ColorChoice } from './Profile'
+import { UpgradeLink } from '../PlanCard'
 import { CopyField, Note, SettingsHeader, useRole } from './kit'
 
 type TeamRow = { id: string; name: string; color: string; member_ids: string[] }
@@ -41,7 +42,7 @@ export default function Team() {
         <p className="-mt-2 mb-5 border border-border bg-card px-3 py-2 text-sm">
           {me.plan.tier === 'pro_plus' ? 'Les 5 places de Pro+ sont prises : retirez une personne ou une invitation pour en inviter une autre.'
             : <>Votre formule {me.plan.name} compte {me.plan.seats === 1 ? '1 personne' : `${me.plan.seats} personnes`}, et toutes les places sont prises.
-                {' '}<a href={me.plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Pro+ pour inviter jusqu'à 5 personnes</a></>}
+                {' '}<UpgradeLink plan={me.plan}>Pro+ pour inviter jusqu'à 5 personnes</UpgradeLink></>}
         </p>
       )}
 

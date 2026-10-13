@@ -36,7 +36,8 @@ export async function openSession(c: any, userId: string, accountId: string, idT
 
 /** Crée l'entreprise, son premier administrateur et les réglages de départ. */
 async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string }, userId: string) {
-  const acc = (await db.query('insert into accounts (name, lead_org, plan) values ($1,$2,coalesce($3, \'pro\')) returning id',
+  // Une entreprise naît en Gratuit : la formule payante se prend dans ProjectLead (Réglages → Entreprise).
+  const acc = (await db.query('insert into accounts (name, lead_org, plan) values ($1,$2,coalesce($3, \'free\')) returning id',
     [a.company, a.leadOrg ?? null, a.plan ?? null])).rows[0]
   await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin')`, [acc.id, userId])
   await seedAccount(db, acc.id, userId)
@@ -44,7 +45,7 @@ async function createAccount(db: Db, a: { company: string; leadOrg?: string | nu
 }
 
 app.post('/api/auth/signup', async (c) => {
-  // Avec le Compte Lead, on s'inscrit là-bas : tout le monde y entre, la formule de la famille fixe les limites (lib/plans.ts).
+  // Avec le Compte Lead, on s'inscrit là-bas : tout le monde y entre, la formule ProjectLead fixe les limites (lib/plans.ts).
   // Une inscription locale passerait à côté (espace ouvert sans formule).
   if (leadIdConfigured()) throw new HttpError(403, 'signup_via_lead')
   const b = await body(c, z.object({
@@ -176,7 +177,8 @@ export async function attachLeadPerson(claims: LeadClaims) {
         [claims.email, claims.name ?? '', user.id])
     }
     // L'entreprise : celle de l'organisation Lead, sinon celle de la personne, sinon une nouvelle. La formule
-    // du jeton n'est posée que sur l'entreprise de SON organisation (jamais celle d'un membre venu d'ailleurs).
+    // ProjectLead du jeton (calculée par ERPlead pour cette application) n'est posée que sur l'entreprise de SON
+    // organisation (jamais celle d'un membre venu d'ailleurs).
     let acc: { id: string } | null = (await db.query('select id from accounts where lead_org = $1', [claims.org])).rows[0] ?? null
     let ownOrg = Boolean(acc), created = false
     if (!acc) {

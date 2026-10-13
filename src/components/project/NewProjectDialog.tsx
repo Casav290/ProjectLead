@@ -5,6 +5,7 @@ import { BILLING_LABEL, parseMoney, today } from '../../lib/format'
 import { useApp } from '../../lib/store'
 import type { Client, ProjectSummary } from '../../lib/types'
 import { Button, Field, Input, Modal, PeoplePicker, Select } from '../ui'
+import { UpgradeLink } from '../PlanCard'
 
 type Billing = ProjectSummary['billing_mode']
 
@@ -99,7 +100,7 @@ export default function NewProjectDialog({ open, onClose, templateId, clientId }
           <p className="border border-soon/40 bg-soon/5 px-3 py-2 text-sm sm:col-span-2">
             Votre formule gratuite a déjà {plan.projectLimit} projets en cours. Celui-ci sera créé « à qualifier » : vous le passerez
             en cours quand un projet sera terminé ou archivé.{' '}
-            <a href={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">Passer à Pro</a>
+            <UpgradeLink plan={plan}>Passer à Pro</UpgradeLink>
           </p>
         )}
         <Field label="Nom du projet" className="sm:col-span-2">
