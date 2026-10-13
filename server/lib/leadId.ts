@@ -40,6 +40,7 @@ export type LeadClaims = {
   name: string; locale: string; zoneinfo: string
   org: string; org_name: string; org_role: 'admin' | 'manager' | 'user'
   lead: LeadEntitlements
+  sid?: string                      // la session ERPlead de ce navigateur : une déconnexion ne ferme que ses sessions
 }
 export type LeadEntitlements = {
   plan: { code: 'free' | 'pro' | 'pro_plus' | string; name: string; rank: number; seats: number | null }

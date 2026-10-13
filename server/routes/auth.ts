@@ -21,12 +21,18 @@ const app = new Hono<Env>()
 const cookieSecret = () => process.env.APP_SECRET || 'dev-only-secret-change-me-0123456789'
 export const leadIdConfigured = leadIdOn
 
-export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null) {
+/**
+ * `sid` du jeton d'identité d'ERPlead : l'identifiant de la session ERPlead de CE navigateur. Gardé avec la session
+ * ProjectLead, il permet à une déconnexion de ne fermer que les sessions de ce navigateur (db/010_session_lead_sid.sql).
+ */
+export const leadSid = (v: unknown): string | null => (typeof v === 'string' && v.length >= 1 && v.length <= 255 ? v : null)
+
+export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null, sid?: string | null) {
   const token = newToken()
   await anon((db) => db.query(
-    `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token)
-     values ($1,$2,$3, now() + make_interval(days => $4), $5, $6)`,
-    [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null]))
+    `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token, lead_sid)
+     values ($1,$2,$3, now() + make_interval(days => $4), $5, $6, $7)`,
+    [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null, leadSid(sid)]))
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: SESSION_DAYS * 86400,
   })
@@ -278,12 +284,17 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
 }
 
 /**
- * Départ d'une personne (12.10.2026) : OpenID Connect Back-Channel Logout. ERPlead, quand une personne est retirée
- * de son organisation, poste ici un `logout_token` signé : toutes ses sessions tombent ; avec
- * `lead_status: "disabled"`, elle devient inactive dans l'entreprise de l'organisation annoncée (place libérée), sauf
- * si elle en est le dernier administrateur actif. Le jeton est vérifié comme un jeton d'identité (signature, émetteur,
- * audience, expiration), doit porter l'événement de déconnexion, un `sub`, pas de `nonce`, et dater de moins de
- * cinq minutes. Pas de cookie, pas de redirection : 200 ou 400.
+ * OpenID Connect Back-Channel Logout : ERPlead poste ici un `logout_token` signé.
+ * - Départ (`lead_status: "disabled"`, 12.10.2026) : TOUTES les sessions de la personne tombent, dans toutes les
+ *   entreprises, et elle devient inactive dans l'entreprise de l'organisation annoncée (place libérée), sauf si elle
+ *   en est le dernier administrateur actif.
+ * - Déconnexion (`lead_status: "logout"`, décision d'Ève du 13.10.2026) : seulement les sessions de CE navigateur,
+ *   celles dont le `sid` (session ERPlead, gardé à la connexion) est celui du jeton, et les sessions ouvertes avant
+ *   qu'on garde le `sid` (fermées par personne, comme avant). Ses autres appareils restent connectés. Un jeton sans
+ *   `sid` ferme toutes ses sessions, comme avant.
+ * Le jeton est vérifié comme un jeton d'identité (signature, émetteur, audience, expiration), doit porter l'événement
+ * de déconnexion, un `sub`, pas de `nonce`, et dater de moins de cinq minutes. Pas de cookie, pas de redirection :
+ * 200 ou 400.
  */
 const BACKCHANNEL_EVENT = 'http://schemas.openid.net/event/backchannel-logout'
 app.post('/auth/lead/backchannel-logout', async (c) => {
@@ -299,11 +310,9 @@ app.post('/auth/lead/backchannel-logout', async (c) => {
     if (!user) return
     const account = typeof claims.org === 'string'
       ? (await db.query('select id from accounts where lead_org = $1', [claims.org])).rows[0] : null
-    // « logout » (déconnexion dans ERPlead ou dans une autre application Lead) : se déconnecter ferme la session partout,
-    // donc toutes ses sessions, quel que soit l'espace ouvert. Un départ (« disabled ») ne touche que l'espace annoncé.
-    const everywhere = claims.lead_status === 'logout'
-    if (typeof claims.org === 'string' && !account && !everywhere) return
-    if (account && !everywhere) await db.query('delete from sessions where user_id = $1 and account_id = $2', [user.id, account.id])
+    const sid = leadSid(claims.sid)
+    if (claims.lead_status !== 'disabled' && sid)
+      await db.query('delete from sessions where user_id = $1 and (lead_sid = $2 or lead_sid is null)', [user.id, sid])
     else await db.query('delete from sessions where user_id = $1', [user.id])
     if (claims.lead_status === 'disabled' && account)
       await db.query(
@@ -330,7 +339,7 @@ app.get('/auth/lead/callback', async (c) => {
     // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026), dans l'espace de son entreprise.
     const invite = invitationToken(saved.next)
     const who = await attachLeadPerson(claims, { invitation: invite })
-    await openSession(c, who.userId, who.accountId, tokens.id_token)
+    await openSession(c, who.userId, who.accountId, tokens.id_token, leadSid(claims.sid))
     // Invitation acceptée : l'espace qui a invité. Adressée à une autre adresse : la page de l'invitation le dit.
     if (invite) return c.redirect(who.invitation === 'accepted' ? '/' : who.invitation === 'autre_adresse' ? `${saved.next}?erreur=adresse` : saved.next!)
     return c.redirect(saved.next ?? '/')

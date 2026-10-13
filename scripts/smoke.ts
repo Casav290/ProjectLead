@@ -129,7 +129,8 @@ const issuerSrv = createServer(async (req, res) => {
   }
   if (req.url === '/oauth/token' && req.method === 'POST') {
     const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
-    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', exp: Math.floor(Date.now() / 1000) + 300, ...nextIdClaims })
+    // Comme ERPlead : `sid`, la session ERPlead du navigateur (une connexion d'avant ne l'a pas : `sid: undefined`).
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', exp: Math.floor(Date.now() / 1000) + 300, sid: randomUUID(), ...nextIdClaims })
     const idToken = `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
     return res.end(JSON.stringify({ id_token: idToken, access_token: 'a', token_type: 'Bearer', expires_in: 300 }))
   }
@@ -619,6 +620,34 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
     w.status === 302 && w.headers.get('location') === 'http://localhost/auth/lead/start?next=/projets&signup=1' && !w.headers.get('set-cookie'),
     { status: w.status, location: w.headers.get('location'), cookie: Boolean(w.headers.get('set-cookie')) })
 }
+{
+  // Cookies refusés (le navigateur n'en garde aucun) et session ERPlead ouverte : départ, code rendu sans écran, retour
+  // sans le cookie de départ → page de connexion avec « erreur=session » ; jamais un nouveau départ (boucle).
+  let url = 'http://localhost/auth/lead/start?next=/projets', trips = 0
+  for (let hop = 0; hop < 12; hop++) {
+    const u = new URL(url)
+    if (u.pathname === '/oauth/authorize') {
+      trips++
+      nextIdClaims = lead(u.searchParams.get('nonce') ?? '', true)
+      url = `http://localhost/auth/lead/callback?code=c&state=${u.searchParams.get('state')}&iss=x`
+      continue
+    }
+    if (u.hostname !== 'localhost' || !u.pathname.startsWith('/auth/')) break
+    const res = await app.request(url)
+    const loc = res.headers.get('location')
+    if (!loc) break
+    url = new URL(loc, url).href
+  }
+  check('cookies refusés : un seul passage chez ERPlead, puis la page de connexion « erreur=session » (pas de boucle)',
+    trips === 1 && url === 'http://localhost/login?erreur=session', { trips, url })
+  const silent = await app.request('http://localhost/auth/lead/callback?error=login_required&state=perdu')
+  check('retour d’ERPlead en erreur sans cookie de départ : page de connexion « erreur=session », pas de nouveau départ',
+    silent.status === 302 && silent.headers.get('location') === '/login?erreur=session', silent.headers.get('location'))
+  const { readFileSync } = await import('node:fs')
+  const loginPage = readFileSync(new URL('../src/pages/Login.tsx', import.meta.url), 'utf8')
+  check('/login avec « erreur=… » ne repart pas seul vers le Compte Lead (seul un clic relance)',
+    /const direct = leadId === true && !code && !withEmail/.test(loginPage))
+}
 // Neon Functions ne garde que le dernier Set-Cookie d'une réponse : au retour, la session doit être le seul cookie.
 check('retour du Compte Lead : un seul cookie posé, celui de la session', ll.cookies === 1, ll)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
@@ -861,7 +890,7 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   const plus = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, name: 'ProjectLead', url: null, status: 'live', upgrade_url: null } }, subscriptions: [] }
   const person = (n: string, sub: string, role: string) => ({ sub, nonce: n, email: `${sub}@exemple.test`, email_verified: true, name: sub, locale: 'fr', org, org_name: `Entreprise ${org}`, org_role: role, lead: plus })
   const boss = await leadLogin((n) => person(n, `boss-${stamp}`, 'admin'))
-  const bob = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
+  let bob = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
   const me = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).status
   check('deux personnes de la même organisation connectées', (await me(boss.session)) === 200 && (await me(bob.session)) === 200)
   const accountOf = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).body?.account?.id
@@ -882,7 +911,10 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   check('jeton avec nonce : refusé', (await post(logoutToken(`bob-${stamp}`, { nonce: 'x' }))) === 400)
   check('jeton de plus de cinq minutes : refusé', (await post(logoutToken(`bob-${stamp}`, { iat: Math.floor(Date.now() / 1000) - 600 }))) === 400)
   check('sans l’événement de déconnexion : refusé', (await post(logoutToken(`bob-${stamp}`, { events: {} }))) === 400)
-  check('autre organisation annoncée : sans effet', (await post(logoutToken(`bob-${stamp}`, { org: 'org-inconnue' }))) === 200 && (await me(bob.session)) === 200)
+  check('départ annoncé pour une organisation sans espace ici : ses sessions tombent quand même (Compte Lead fermé), sa place ne bouge pas',
+    (await post(logoutToken(`bob-${stamp}`, { org: 'org-inconnue' }))) === 200 && (await me(bob.session)) === 401
+    && (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows[0]?.active === true)
+  bob = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
   check('départ : 200, la session ouverte tombe aussitôt', (await post(logoutToken(`bob-${stamp}`))) === 200 && (await me(bob.session)) === 401)
   const row = (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows[0]
   check('la personne devient inactive dans l’entreprise (place libérée)', row?.active === false, row)
@@ -901,6 +933,63 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   check('déconnexion ailleurs (logout) : 200, toutes ses sessions tombent, sa place reste', loggedOut === 200
     && (await me(back.session)) === 401 && kept.length === 1 && kept[0].active === true, { loggedOut, kept })
 }
+section('Déconnexion dans un navigateur : seulement ses sessions (sid d’ERPlead) ; départ : toutes')
+{
+  // Décision d'Ève (13.10.2026) : se déconnecter sur l'ordinateur ne coupe pas ses autres appareils.
+  const org = `sid-org-${stamp}`, sub = `carol-${stamp}`
+  const plus = { plan: { code: 'pro_plus', name: 'Pro+', rank: 20, seats: 5 }, apps: { projectlead: { access: true, name: 'ProjectLead', url: null, status: 'live', upgrade_url: null } }, subscriptions: [] }
+  const carol = (n: string, sid: string | undefined) => ({ sub, nonce: n, email: `${sub}@exemple.test`, email_verified: true, name: 'Carol', locale: 'fr',
+    org, org_name: `Entreprise ${org}`, org_role: 'user', lead: plus, sid })
+  const sidA = `sid-a-${stamp}`, sidB = `sid-b-${stamp}`
+  const owner = await leadLogin((n) => ({ ...carol(n, `sid-boss-${stamp}`), sub: `boss2-${stamp}`, email: `boss2-${stamp}@exemple.test`, org_role: 'admin' }))
+  const A = await leadLogin((n) => carol(n, sidA))
+  const B = await leadLogin((n) => carol(n, sidB))
+  const L = await leadLogin((n) => carol(n, undefined))
+  const tokenOf = (cookie: string) => hashTokenSmoke(cookie.split('=')[1] ?? '')
+  const sidOf = async (cookie: string) => (await pool.query('select lead_sid from sessions where token_hash = $1', [tokenOf(cookie)])).rows[0]?.lead_sid
+  check('retour du Compte Lead : le sid du jeton d’identité est gardé avec la session (et nul pour une connexion qui n’en a pas)',
+    (await sidOf(A.session)) === sidA && (await sidOf(B.session)) === sidB && (await sidOf(L.session)) === null,
+    { a: await sidOf(A.session), b: await sidOf(B.session), l: await sidOf(L.session) })
+  // Une session dans une autre entreprise (fiduciaire), ouverte dans le navigateur B.
+  const userId = (await pool.query('select id from users where lead_sub = $1', [sub])).rows[0].id
+  const other = (await pool.query(`insert into accounts (name, plan) values ($1, 'free') returning id`, [`Fiduciaire ${stamp}`])).rows[0].id
+  await pool.query(`insert into account_users (account_id, user_id, role) values ($1, $2, 'member')`, [other, userId])
+  const xToken = `x-${randomUUID()}`
+  await pool.query(`insert into sessions (token_hash, user_id, account_id, expires_at, lead_sid) values ($1, $2, $3, now() + interval '1 day', $4)`,
+    [hashTokenSmoke(xToken), userId, other, sidB])
+  const X = `projectlead_session=${xToken}`
+  const me = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).status
+  const logoutToken = (over: Record<string, unknown>) => {
+    const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+    const iat = Math.floor(Date.now() / 1000)
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', iat, exp: iat + 120, sub, org,
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} }, ...over })
+    return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+  }
+  const post = async (token: string) => (await app.request('http://localhost/auth/lead/backchannel-logout', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ logout_token: token }) })).status
+  check('quatre sessions ouvertes (navigateurs A et B, une d’avant le sid, une autre entreprise)',
+    (await me(A.session)) === 200 && (await me(B.session)) === 200 && (await me(L.session)) === 200 && (await me(X)) === 200)
+  check('déconnexion dans le navigateur A (logout, sid A) : la session A et celle d’avant le sid tombent ; B et l’autre entreprise restent',
+    (await post(logoutToken({ lead_status: 'logout', sid: sidA }))) === 200
+    && (await me(A.session)) === 401 && (await me(L.session)) === 401 && (await me(B.session)) === 200 && (await me(X)) === 200)
+  check('déconnexion d’un navigateur sans session ici : rien ne tombe',
+    (await post(logoutToken({ lead_status: 'logout', sid: `sid-z-${stamp}` }))) === 200 && (await me(B.session)) === 200 && (await me(X)) === 200)
+  // Des sessions toutes neuves, pour que le départ se prouve seul : navigateur B et autre entreprise.
+  const B2 = await leadLogin((n) => carol(n, sidB))
+  const x2Token = `x-${randomUUID()}`
+  await pool.query(`insert into sessions (token_hash, user_id, account_id, expires_at, lead_sid) values ($1, $2, $3, now() + interval '1 day', $4)`,
+    [hashTokenSmoke(x2Token), userId, other, sidB])
+  const X2 = `projectlead_session=${x2Token}`
+  check('départ (disabled) : toutes ses sessions tombent, autre entreprise comprise',
+    (await me(B2.session)) === 200 && (await me(X2)) === 200
+    && (await post(logoutToken({ lead_status: 'disabled' }))) === 200 && (await me(B2.session)) === 401 && (await me(X2)) === 401)
+  const places = (await pool.query(`select account_id, active from account_users where user_id = $1`, [userId])).rows
+  check('… sa place se libère dans l’entreprise annoncée seulement ; l’autre entreprise ne change pas',
+    places.find((x) => x.account_id === other)?.active === true && places.find((x) => x.account_id !== other)?.active === false, places)
+  check('l’administratrice de l’entreprise garde sa session', (await me(owner.session)) === 200)
+}
+
 section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six applications, adresses d’entrée')
 {
   const { existsSync, readFileSync } = await import('node:fs')
@@ -908,7 +997,7 @@ section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six
   const { createElement } = await import('react')
   const { renderToStaticMarkup } = await import('react-dom/server')
   const { LEAD_FAMILY, HERE_APP } = await import('../src/lib/leadFamily.js')
-  const { default: AppSwitcher } = await import('../src/components/AppSwitcher.js')
+  const { default: AppSwitcher, launcherDismiss } = await import('../src/components/AppSwitcher.js')
   // La copie de référence (banc lead-e2e), sinon la conception du passage ; chaque dépôt garde une copie identique.
   const refs = [process.env.LEAD_FAMILY_JSON, `${homedir()}/projets/lead-e2e/lead-family.json`, `${homedir()}/projets/.unlazy/lead-vercel/passage-design.json`]
   const ref = refs.find((f) => f && existsSync(f))
@@ -939,6 +1028,25 @@ section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six
   check('aucune entrée cachée ni bloquée par la formule : ni « Bientôt », ni « Passer à », ni lien de formule', !/Bientôt|Passer à|Mettre à niveau|reglages\/entreprise|upgrade/i.test(html))
   check('titre APPLICATIONS LEAD, panneau de 320 px, fixe à 16 px des bords sous 480 px', html.includes('>Applications Lead</p>') && html.includes('uppercase')
     && html.includes('min-[480px]:w-80') && html.includes('fixed left-4 right-4 top-16') && html.includes('overflow-y-auto'))
+  // Audit indépendant (CNX-12, CNX-13) : fermeture au clavier et à la souris, pastilles lisibles et décoratives.
+  const inside = (t: unknown) => t === 'dedans'
+  const esc = launcherDismiss({ type: 'keydown', key: 'Escape' }, inside)
+  check('Échap ferme le lanceur et rend le focus au bouton à 9 points', esc.close && esc.refocus === 'always', esc)
+  check('une autre touche ne le ferme pas', !launcherDismiss({ type: 'keydown', key: 'Tab' }, inside).close)
+  const out = launcherDismiss({ type: 'pointerdown', target: 'dehors' }, inside)
+  check('un clic ou un toucher en dehors le ferme (focus rendu au bouton s’il se perd)', out.close && out.refocus === 'if-lost', out)
+  check('un clic dans le panneau ne le ferme pas', !launcherDismiss({ type: 'pointerdown', target: 'dedans' }, inside).close)
+  const src = readFileSync(new URL('../src/components/AppSwitcher.tsx', import.meta.url), 'utf8')
+  check('le choix d’une entrée ferme le lanceur et rend le focus au bouton ; écoute pointerdown et keydown',
+    /const choose = \(\) => \{ setOpen\(false\); button\.current\?\.focus\(\) \}/.test(src) && src.includes('onClick={choose}')
+    && src.includes("addEventListener('pointerdown', onEvent)") && src.includes("addEventListener('keydown', onEvent)"))
+  const lum = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((t, v, i) => t + v * [0.2126, 0.7152, 0.0722][i], 0)
+  const ratios = LEAD_FAMILY.apps.map((a) => ({ code: a.code, ratio: Math.round((1.05 / (lum(a.color) + 0.05)) * 100) / 100 }))
+  check('pastilles : blanc sur la couleur de chaque application ≥ 4,5:1 (axe color-contrast)', ratios.every((x) => x.ratio >= 4.5), ratios)
+  check('pastilles décoratives (aria-hidden), à la couleur de la liste, jamais grises',
+    LEAD_FAMILY.apps.every((a) => new RegExp(`<span aria-hidden="true"[^>]*style="background:${a.color}"[^>]*>${a.mark}</span>`).test(html))
+    && !/8a847c/i.test(html + src))
   const de = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'de-CH', initialOpen: true }))
   const xx = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'pt', initialOpen: true }))
   check('langues fr/de/en/it/es, le français par défaut', de.includes('Sie sind hier') && de.includes('Lead-Apps') && xx.includes('Vous êtes ici'))

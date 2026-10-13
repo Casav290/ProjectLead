@@ -10,26 +10,47 @@ import { HERE_APP, LEAD_FAMILY, leadLocale } from '../lib/leadFamily'
  * « Vous êtes ici ».
  *
  * Panneau de 320 px aligné à droite ; sous 480 px, fixé à 16 px des bords, sous l'en-tête, avec son propre défilement.
- * Se ferme par Échap, par un clic en dehors ou par un choix. Points d'accroche des contrôles : `data-lead-launcher` sur
+ * Se ferme par Échap (le focus revient au bouton à 9 points), par un clic ou un toucher en dehors (le focus revient au
+ * bouton s'il se perdait), ou par le choix d'une entrée (audit CNX-12). Les pastilles de deux lettres sont décoratives
+ * (aria-hidden) : le nom de l'application les suit (CNX-13). Points d'accroche des contrôles : `data-lead-launcher` sur
  * le bouton, `data-lead-app` sur chaque entrée.
  */
+export type LauncherEvent = { type: string; key?: string; target?: unknown }
+
+/**
+ * Ce qu'un événement du document fait au lanceur ouvert : Échap le ferme et rend le focus au bouton ; un clic ou un
+ * toucher hors du lanceur le ferme (le focus ne revient au bouton que s'il se perd) ; le reste ne change rien.
+ */
+export function launcherDismiss(e: LauncherEvent, inside: (target: unknown) => boolean): { close: boolean; refocus?: 'always' | 'if-lost' } {
+  if (e.type === 'keydown') return e.key === 'Escape' ? { close: true, refocus: 'always' } : { close: false }
+  if (e.type === 'pointerdown' || e.type === 'mousedown') return inside(e.target) ? { close: false } : { close: true, refocus: 'if-lost' }
+  return { close: false }
+}
+
 export default function AppSwitcher({ locale, initialOpen = false }: { locale?: string | null; initialOpen?: boolean }) {
   const [open, setOpen] = useState(initialOpen)
   const box = useRef<HTMLDivElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
   const l = leadLocale(locale)
   const title = LEAD_FAMILY.title[l]
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !box.current?.contains(e.target as Node)) setOpen(false)
+    const onEvent = (e: Event) => {
+      const d = launcherDismiss(e as LauncherEvent, (t) => Boolean(box.current?.contains(t as Node)))
+      if (!d.close) return
+      setOpen(false)
+      if (d.refocus === 'always') button.current?.focus()
+      // Clic en dehors : le focus suit ce qui a été cliqué ; s'il se perd (fond de page), il revient au bouton.
+      else setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) button.current?.focus() }, 0)
     }
-    document.addEventListener('mousedown', close); document.addEventListener('keydown', close)
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+    document.addEventListener('pointerdown', onEvent); document.addEventListener('keydown', onEvent)
+    return () => { document.removeEventListener('pointerdown', onEvent); document.removeEventListener('keydown', onEvent) }
   }, [open])
+  const choose = () => { setOpen(false); button.current?.focus() }
 
   return (
     <div ref={box} className="relative">
-      <button type="button" data-lead-launcher onClick={() => setOpen(!open)} aria-expanded={open} aria-label={title} title={title}
+      <button ref={button} type="button" data-lead-launcher onClick={() => setOpen(!open)} aria-expanded={open} aria-label={title} title={title}
               className="grid h-11 w-11 place-items-center text-muted-foreground hover:bg-muted min-[480px]:h-9 min-[480px]:w-9">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
           {[4, 12, 20].flatMap((x) => [4, 12, 20].map((y) => <circle key={`${x}-${y}`} cx={x} cy={y} r="2" />))}
@@ -61,7 +82,7 @@ export default function AppSwitcher({ locale, initialOpen = false }: { locale?: 
                   {here ? (
                     <div data-lead-app={a.code} aria-current="page" className={row} style={{ background: `${a.color}1a` }}>{body}</div>
                   ) : (
-                    <a data-lead-app={a.code} href={a.entry} onClick={() => setOpen(false)} className={clsx(row, 'hover:bg-muted')}>{body}</a>
+                    <a data-lead-app={a.code} href={a.entry} onClick={choose} className={clsx(row, 'hover:bg-muted')}>{body}</a>
                   )}
                 </li>
               )
