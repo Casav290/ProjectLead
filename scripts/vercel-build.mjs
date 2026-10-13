@@ -6,11 +6,12 @@
  * 3. le serveur Hono (server/vercel.ts), empaqueté par esbuild en une seule fonction Node ;
  * 4. les routes : API, Compte Lead, carte de visite → fonction ; un fichier de dist/ s'il existe ; sinon l'application.
  *
- * Les crons sont déclarés dans vercel.json (24, un par heure : formule gratuite de Vercel, un passage par jour
- * et par cron) ; ce script les reprend dans config.json, que Vercel lit pour une sortie Build Output API.
+ * Les crons sont déclarés dans vercel.json seulement (24, un par heure : formule gratuite de Vercel, un passage par
+ * jour et par cron). Vercel les ajoute lui-même à cette sortie : les répéter dans config.json fait échouer le
+ * déploiement (duplicated_cron_job, constaté le 13.10.2026).
  */
 import { execSync } from 'node:child_process'
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { build } from 'esbuild'
 
 const run = (cmd, env) => execSync(cmd, { stdio: 'inherit', env: { ...process.env, ...env } })
@@ -49,11 +50,8 @@ writeFileSync(`${fn}/.vc-config.json`, JSON.stringify({
   runtime: 'nodejs22.x', handler: 'index.mjs', launcherType: 'Nodejs', shouldAddHelpers: false, maxDuration: 300,
 }, null, 2))
 
-const { crons = [] } = JSON.parse(readFileSync('vercel.json', 'utf8'))
-
 writeFileSync(`${out}/config.json`, JSON.stringify({
   version: 3,
-  crons,
   routes: [
     // Les fichiers de Vite portent leur empreinte dans le nom : gardés un an.
     { src: '^/assets/(.*)$', headers: { 'Cache-Control': 'public, max-age=31536000, immutable' }, continue: true },
@@ -64,4 +62,4 @@ writeFileSync(`${out}/config.json`, JSON.stringify({
   ],
 }, null, 2))
 
-console.log(`[build] .vercel/output prêt (${crons.length} crons)`)
+console.log('[build] .vercel/output prêt')
