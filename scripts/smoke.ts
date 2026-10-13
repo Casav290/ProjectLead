@@ -1033,7 +1033,14 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
   r = await hook(evt('customer.subscription.updated', subOf(`sub_${stamp}_1`, { cancel_at_period_end: false })))
   r = await boss.get('/api/billing')
   check('résiliation demandée au portail (relue chez Stripe, même si l\'événement est plus ancien) : toujours Pro, fin annoncée',
-    r.body.plan.tier === 'pro' && r.body.subscription?.cancelAtPeriodEnd === true && r.body.subscription?.active === true && r.body.hasCustomer === true, r.body)
+    r.body.plan.tier === 'pro' && Boolean(r.body.subscription?.endsAt) && r.body.subscription?.active === true && r.body.hasCustomer === true, r.body)
+  // Versions d'API récentes (2026-07-29.dahlia) : le portail pose `cancel_at` et laisse cancel_at_period_end à faux.
+  const endAt = now + 20 * 86400
+  stripeSubs.set(`sub_${stamp}_1`, subOf(`sub_${stamp}_1`, { cancel_at_period_end: false, cancel_at: endAt }))
+  r = await hook(evt('customer.subscription.updated', subOf(`sub_${stamp}_1`)))
+  r = await boss.get('/api/billing')
+  check('résiliation à une date (cancel_at, nouvelle forme du portail) : fin annoncée à cette date, toujours Pro',
+    r.body.plan.tier === 'pro' && r.body.subscription?.endsAt && Date.parse(r.body.subscription.endsAt) === endAt * 1000, r.body.subscription)
   check('changement sans effet sur la formule (fin annoncée) : pas de nouvelle déclaration', declared.filter((d) => d.external_id === `sub_${stamp}_1`).length === 1)
 
   // Stripe en panne : rien n'est inscrit, Stripe renvoie l'événement plus tard.

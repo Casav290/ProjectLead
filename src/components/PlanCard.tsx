@@ -34,6 +34,11 @@ export function PlanCard() {
   // Le retour de Stripe Checkout : `?paiement=ok` ou `?paiement=annule`, lu une fois puis effacé de l'adresse.
   const [back] = useState(() => new URLSearchParams(window.location.search).get('paiement'))
   const load = useCallback(() => api.get<Billing>('/billing').then((x) => { setB(x); return x }), [])
+  // L'écran s'ouvre sur la période de l'abonnement en cours (mensuel ou annuel).
+  const [intervalSet, setIntervalSet] = useState(false)
+  useEffect(() => {
+    if (!intervalSet && b?.subscription?.active && b.subscription.interval) { setAnnual(b.subscription.interval === 'year'); setIntervalSet(true) }
+  }, [b, intervalSet])
 
   useEffect(() => {
     load().catch((e) => setError(errorText(e)))
@@ -73,7 +78,8 @@ export function PlanCard() {
   const portal = () => go('/billing/portal')
 
   const card = (p: Plan['tier']) => {
-    const here = p === current
+    // « Formule actuelle » seulement sur la période prise : l'autre période se change au portail.
+    const here = p === current && (p === 'free' || !subscribed || !sub?.interval || sub.interval === (annual ? 'year' : 'month'))
     const price = p === 'free' ? 0 : b.prices[p][annual ? 'year' : 'month']
     let action: ReactNode = null
     if (here) {
@@ -105,7 +111,7 @@ export function PlanCard() {
   }
 
   const toggle = (on: boolean, label: ReactNode) => (
-    <button type="button" aria-pressed={annual === on} onClick={() => setAnnual(on)}
+    <button type="button" aria-pressed={annual === on} onClick={() => { setIntervalSet(true); setAnnual(on) }}
       className={clsx('flex items-center gap-2 px-3 py-1.5 text-[13px] font-bold',
         annual === on ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:bg-muted')}>{label}</button>
   )
@@ -129,9 +135,8 @@ export function PlanCard() {
               {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
             {sub && subscribed && (
               <p className="text-muted-foreground">Abonnement ProjectLead {NAME[sub.plan]}{sub.interval === 'year' ? ', annuel' : sub.interval === 'month' ? ', mensuel' : ''}
-                {sub.currentPeriodEnd && (sub.cancelAtPeriodEnd
-                  ? <> · se termine le {day(sub.currentPeriodEnd)}, puis Gratuit</>
-                  : <> · renouvellement le {day(sub.currentPeriodEnd)}</>)}</p>
+                {sub.endsAt ? <> · se termine le {day(sub.endsAt)}, puis Gratuit</>
+                  : sub.currentPeriodEnd ? <> · renouvellement le {day(sub.currentPeriodEnd)}</> : null}</p>
             )}
             {plan.inherited && (
               <p className="text-muted-foreground">

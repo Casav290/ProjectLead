@@ -46,7 +46,10 @@ create table if not exists billing_subscriptions (
   interval             text check (interval in ('month', 'year')),
   status               text not null,                -- tel que Stripe le dit (active, trialing, past_due, canceled…)
   current_period_end   timestamptz,
+  -- Fin annoncée : résiliation en fin de période (cancel_at_period_end) ou à une date (cancel_at, que le portail pose
+  -- depuis les versions d'API 2025-2026, avec cancel_at_period_end resté faux : constaté le 13.10.2026).
   cancel_at_period_end boolean not null default false,
+  cancel_at            timestamptz,
   -- Le moment où cet état a été lu chez Stripe : un état plus ancien, traité après coup, n'écrase pas un plus récent.
   stripe_state_at      timestamptz not null,
   created_at           timestamptz not null default now(),

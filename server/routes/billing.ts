@@ -33,7 +33,7 @@ const requireAdmin = (c: any) => { if (c.get('ctx').role !== 'admin') throw new 
 /** L'abonnement ProjectLead le plus parlant de l'entreprise : celui qui ouvre la formule, sinon le dernier. */
 async function currentSubscription(c: any) {
   return tx(c, async (db) => (await db.query(
-    `select stripe_subscription_id, plan, interval, status, current_period_end, cancel_at_period_end
+    `select stripe_subscription_id, plan, interval, status, current_period_end, cancel_at_period_end, cancel_at
        from billing_subscriptions where account_id = app_account()
       order by (status = any($1)) desc, (plan = 'pro_plus') desc, updated_at desc limit 1`, [GRANTING])).rows[0] ?? null)
 }
@@ -52,7 +52,9 @@ app.get('/billing', async (c) => {
     plan,
     subscription: s ? {
       plan: s.plan, interval: s.interval, status: s.status, currentPeriodEnd: s.current_period_end,
-      cancelAtPeriodEnd: s.cancel_at_period_end, active: GRANTING.includes(s.status),
+      // Fin annoncée (résiliée au portail) : à la fin de la période, ou à la date posée par Stripe (cancel_at).
+      endsAt: s.cancel_at ?? (s.cancel_at_period_end ? s.current_period_end : null),
+      active: GRANTING.includes(s.status),
     } : null,
     hasCustomer,
     prices: PRICES,

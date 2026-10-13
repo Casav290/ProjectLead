@@ -83,12 +83,13 @@ export async function applySubscription(db: Db, sub: any, stateAt: Date, forcedS
   const status = forcedStatus ?? String(sub.status ?? 'incomplete')
   const r = await db.query(
     `insert into billing_subscriptions (stripe_subscription_id, account_id, stripe_customer_id, plan, interval, status,
-                                        current_period_end, cancel_at_period_end, stripe_state_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                                        current_period_end, cancel_at_period_end, cancel_at, stripe_state_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      on conflict (stripe_subscription_id) do update set
        stripe_customer_id = excluded.stripe_customer_id, plan = excluded.plan, interval = excluded.interval,
        status = excluded.status, current_period_end = excluded.current_period_end,
-       cancel_at_period_end = excluded.cancel_at_period_end, stripe_state_at = excluded.stripe_state_at, updated_at = now(),
+       cancel_at_period_end = excluded.cancel_at_period_end, cancel_at = excluded.cancel_at,
+       stripe_state_at = excluded.stripe_state_at, updated_at = now(),
        erplead_synced_at = case
          when (billing_subscriptions.plan, billing_subscriptions.status, billing_subscriptions.current_period_end)
               is not distinct from (excluded.plan, excluded.status, excluded.current_period_end)
@@ -96,7 +97,8 @@ export async function applySubscription(db: Db, sub: any, stateAt: Date, forcedS
      where billing_subscriptions.stripe_state_at <= excluded.stripe_state_at
        and billing_subscriptions.account_id = excluded.account_id
      returning account_id`,
-    [sub.id, accountId, customer, plan.plan, plan.interval, status, periodEnd(sub), Boolean(sub.cancel_at_period_end), stateAt])
+    [sub.id, accountId, customer, plan.plan, plan.interval, status, periodEnd(sub), Boolean(sub.cancel_at_period_end),
+     typeof sub.cancel_at === 'number' ? new Date(sub.cancel_at * 1000) : null, stateAt])
   if (r.rowCount) return { result: 'applied', accountId }
   const kept = (await db.query('select account_id from billing_subscriptions where stripe_subscription_id = $1', [sub.id])).rows[0]
   if (kept && kept.account_id !== accountId) {
