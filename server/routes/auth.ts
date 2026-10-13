@@ -129,7 +129,8 @@ app.post('/api/auth/invitation/:token/accept', async (c) => {
 
 type Saved = { state: string; nonce: string; verifier: string; next?: string }
 
-app.get('/auth/lead/start', async (c) => {
+// `/auth/lead/login` : même départ, sous le nom que les contrôles de la famille essaient (comme `/auth/lead/start`).
+const startLeadLogin = async (c: any) => {
   if (!leadIdConfigured()) return c.redirect('/login?erreur=lead_non_configure')
   const s = startLogin({ locale: 'fr' })
   // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
@@ -139,7 +140,9 @@ app.get('/auth/lead/start', async (c) => {
     next: next?.startsWith('/') && !next.startsWith('//') ? next : undefined } satisfies Saved), cookieSecret(),
     { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: 600 })
   return c.redirect(url)
-})
+}
+app.get('/auth/lead/start', startLeadLogin)
+app.get('/auth/lead/login', startLeadLogin)
 
 /**
  * Rattacher la personne du Compte Lead à un utilisateur local (crmlead/docs/LEAD-ID.md,

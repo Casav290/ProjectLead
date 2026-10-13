@@ -1,6 +1,107 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
+  "installCommand": "npm ci",
   "buildCommand": "node scripts/vercel-build.mjs",
-  "regions": ["cle1"]
+  "regions": [
+    "fra1"
+  ],
+  "crons": [
+    {
+      "path": "/api/tasks/run?h=0",
+      "schedule": "7 0 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=1",
+      "schedule": "7 1 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=2",
+      "schedule": "7 2 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=3",
+      "schedule": "7 3 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=4",
+      "schedule": "7 4 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=5",
+      "schedule": "7 5 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=6",
+      "schedule": "7 6 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=7",
+      "schedule": "7 7 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=8",
+      "schedule": "7 8 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=9",
+      "schedule": "7 9 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=10",
+      "schedule": "7 10 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=11",
+      "schedule": "7 11 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=12",
+      "schedule": "7 12 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=13",
+      "schedule": "7 13 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=14",
+      "schedule": "7 14 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=15",
+      "schedule": "7 15 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=16",
+      "schedule": "7 16 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=17",
+      "schedule": "7 17 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=18",
+      "schedule": "7 18 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=19",
+      "schedule": "7 19 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=20",
+      "schedule": "7 20 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=21",
+      "schedule": "7 21 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=22",
+      "schedule": "7 22 * * *"
+    },
+    {
+      "path": "/api/tasks/run?h=23",
+      "schedule": "7 23 * * *"
+    }
+  ]
 }
