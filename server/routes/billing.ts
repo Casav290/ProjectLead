@@ -1,3 +1,4 @@
+import { waitUntil } from '@vercel/functions'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { body, HttpError, router, tx, type Env } from '../lib/http.js'
@@ -153,7 +154,10 @@ webhook.post('/', async (c) => {
     return c.json({ error: e instanceof StripeError ? 'stripe_unavailable' : 'server_error' }, e instanceof StripeError ? 502 : 500)
   }
   if (out.accountId && ['applied', 'linked', 'payment_failed'].includes(out.result)) {
-    await syncErplead({ accountId: out.accountId, limit: 5 }).catch(() => {})
+    // La déclaration à ERPlead ne retarde pas la réponse à Stripe (qui renverrait l'événement) : sur Vercel, elle
+    // se termine après la réponse (`waitUntil`) ; ailleurs, avant. En échec, la tâche billing_sync la reprend.
+    const sync = syncErplead({ accountId: out.accountId, limit: 5 }).catch(() => {})
+    if (process.env.VERCEL) waitUntil(sync); else await sync
   }
   return c.json({ received: true, result: out.result })
 })

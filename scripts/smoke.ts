@@ -638,7 +638,8 @@ for (const n of [1, 2, 3]) freeProjects.push((await free.post('/api/projects', {
 check('gratuit : trois projets en cours', freeProjects.every(Boolean), freeProjects)
 r = await free.post('/api/projects', { name: 'Projet de trop' })
 check('gratuit : le quatrième est refusé (402), avec la limite et le lien vers la page Formule de ProjectLead',
-  r.status === 402 && r.body.error === 'plan_limit_projects' && r.body.limit === 3 && r.body.upgrade_url === '/reglages/entreprise', r)
+  r.status === 402 && r.body.error === 'plan_limit_projects' && r.body.limit === 3
+  && r.body.upgrade_url === `${process.env.PUBLIC_URL}/reglages/entreprise`, r)
 r = await free.post('/api/projects', { name: 'Demande', status: 'lead' })
 check('gratuit : une demande à qualifier ne compte pas', r.status === 201, r)
 const freeLead = r.body.id
@@ -765,7 +766,7 @@ r = await free.get('/api/me')
 check('droits calculés pour une autre application (app ≠ projectlead) : ignorés', r.body.plan.tier === 'free', r.body.plan)
 // Transition : un abonnement payé ailleurs avant la bascule garde Pro ici jusqu'à sa date figée, sans grâce.
 const inheritedUntil = new Date(Date.now() + 3600e3).toISOString()
-entitlementsByOrg[freeOrg] = rights('pro', { source: 'family', valid_until: inheritedUntil }, {},
+entitlementsByOrg[freeOrg] = rights('pro', { source: 'family', valid_until: inheritedUntil, from_app: 'crmlead' }, {},
   [{ app: 'crmlead', plan: 'pro', lead_plan: 'pro', status: 'active', current_period_end: inheritedUntil, family_until: inheritedUntil, inherited: true }])
 await refreshLeadPlans()
 r = await free.get('/api/me')
@@ -913,6 +914,9 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
     Object.assign(process.env, { STRIPE_SECRET_KEY: 'sk_live_jamais', VERCEL_ENV: 'preview' })
     r = await boss.get('/api/billing')
     check('clé live sur une préversion Vercel : paiement fermé', r.body.configured === false, r.body)
+    delete process.env.VERCEL_ENV
+    r = await boss.get('/api/billing')
+    check('clé live sur un poste de développement (adresse locale) : paiement fermé', r.body.configured === false, r.body)
     process.env.STRIPE_SECRET_KEY = before.k
     if (before.v === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = before.v
   }

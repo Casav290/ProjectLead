@@ -85,11 +85,14 @@ export async function planOf(db: Db, accountId: string, lock = false) {
   }
 }
 
+/** L'adresse complète de la page Formule (réponses 402 : lue aussi par les clients de l'API, hors de l'application). */
+const absolute = (path: string) => `${(process.env.PUBLIC_URL ?? '').replace(/\/+$/, '')}${path}`
+
 /** Refuse d'ouvrir un projet en cours de plus quand la formule est pleine (dans la transaction de l'appelant). */
 export async function assertCanOpenProject(db: Db, accountId: string) {
   const p = await planOf(db, accountId, true)
   if (p.projectLimit !== null && p.openProjects >= p.projectLimit) {
-    throw new HttpError(402, 'plan_limit_projects', { limit: p.projectLimit, plan: p.tier, upgrade_url: p.upgradeUrl })
+    throw new HttpError(402, 'plan_limit_projects', { limit: p.projectLimit, plan: p.tier, upgrade_url: absolute(p.upgradeUrl) })
   }
 }
 
@@ -101,7 +104,7 @@ export async function assertSeatFree(db: Db, accountId: string, withInvitations 
   const p = await planOf(db, accountId, true)
   if (p.seats !== null && p.members + (withInvitations ? p.invited : 0) >= p.seats) {
     throw new HttpError(402, 'plan_limit_seats', {
-      limit: p.seats, plan: p.tier, upgrade_url: p.upgradeUrl,
+      limit: p.seats, plan: p.tier, upgrade_url: absolute(p.upgradeUrl),
       // Pro garde 1 personne : seule Pro+ en donne davantage.
       needed: p.tier === 'pro_plus' ? null : 'pro_plus',
     })
@@ -110,7 +113,7 @@ export async function assertSeatFree(db: Db, accountId: string, withInvitations 
 
 type LeadPlan = {
   app?: string | null
-  plan?: { code?: string; seats?: number | null; source?: string; valid_until?: string | null } | null
+  plan?: { code?: string; seats?: number | null; source?: string; valid_until?: string | null; from_app?: string } | null
   subscriptions?: { app?: string; lead_plan?: string | null; inherited?: boolean; family_until?: string | null }[]
 } | null | undefined
 
@@ -128,8 +131,10 @@ export async function savePlan(db: Db, accountId: string, lead: LeadPlan) {
   const until = lead.plan.valid_until ? new Date(lead.plan.valid_until) : null
   const validUntil = until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
   const lines = (lead.subscriptions ?? []).filter((s) => s?.inherited && typeof s.app === 'string')
+  // L'application de l'abonnement hérité : `plan.from_app` d'ERPlead, sinon la ligne héritée de même formule.
   const familyApp = source === 'family'
-    ? (lines.find((s) => s.lead_plan === lead.plan!.code) ?? lines[0])?.app ?? null : null
+    ? (typeof lead.plan.from_app === 'string' ? lead.plan.from_app
+      : (lines.find((s) => s.lead_plan === lead.plan!.code) ?? lines[0])?.app ?? null) : null
   await db.query(
     `update accounts set plan = $2, plan_seats = $3, plan_source = $4, plan_valid_until = $5, plan_family_app = $6
       where id = $1`,

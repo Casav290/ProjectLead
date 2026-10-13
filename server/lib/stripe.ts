@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { isProduction } from './env.js'
 
 /**
  * L'abonnement ProjectLead par Stripe, sans SDK (décision d'Ève du 13.10.2026 : chaque application Lead vend sa
@@ -40,15 +41,15 @@ export const LOOKUP_KEYS: Record<string, { plan: PaidPlan; interval: Interval }>
 }
 
 /**
- * La clé secrète. Une clé live (sk_live_, rk_live_) n'est acceptée qu'en production : une préversion Vercel ou
- * un poste de développement qui l'aurait reçue par erreur ne vend rien et ne lit rien.
+ * La clé secrète. Une clé live (sk_live_, rk_live_) n'est acceptée qu'en production (Vercel Production, ou serveur
+ * de production hors Vercel) : une préversion ou un poste de développement qui l'aurait reçue par erreur ne vend
+ * rien et ne lit rien.
  */
 export function secretKey(): string {
   const k = process.env.STRIPE_SECRET_KEY ?? ''
-  const live = /^(sk|rk)_live_/.test(k)
+  if (!/^(sk|rk)_live_/.test(k)) return k
   const env = process.env.VERCEL_ENV
-  if (live && env && env !== 'production') return ''
-  return k
+  return (env ? env === 'production' : isProduction()) ? k : ''
 }
 
 export function priceIds(): Record<PaidPlan, Record<Interval, string>> {
