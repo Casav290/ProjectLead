@@ -113,8 +113,22 @@ n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
 
 ## Abonnement ProjectLead (Stripe), depuis le 13.10.2026
 
-Branche `abonnement-par-app` (worktree `~/projets/projectlead-abonnement`), à fusionner dans `vercel` après
-ERPlead (calcul par application) et le garde du webhook ScanLead.
+**En production depuis le 13.10.2026** (commit `3669011` poussé sur `vercel` à 10:24 UTC, après ERPlead et le garde
+du webhook ScanLead ; variables posées et redéploiement `dpl_9EK9AJGuC8AfN9bJRpxDzwFdhCty` à 10:28 UTC). Objets
+Stripe live (compte `acct_1TRVTg…`, aucun secret ici) :
+
+| Objet | Identifiant |
+|---|---|
+| Produits | `projectlead_pro`, `projectlead_pro_plus` (metadata `app=projectlead`) |
+| Pro 19 €/mois, 190 €/an | `price_1UQ2rzEXSpi2MsjnfOrTKFIZ`, `price_1UQ2s0EXSpi2MsjnBlCEq1dK` |
+| Pro+ 39 €/mois, 390 €/an | `price_1UQ2s0EXSpi2MsjnCISrtpR8`, `price_1UQ2s1EXSpi2MsjnwBKBVCwj` |
+| Portail | `bpc_1UQ2s1EXSpi2Msjn2iEHZxYJ` (retour `https://projectlead.io/reglages/entreprise`) |
+| Endpoint | `we_1UQ2vgEXSpi2MsjnZr2OchHs`, `https://projectlead.io/api/stripe/webhook`, 5 événements |
+
+Preuves en production le 13.10.2026 (banc `~/projets/lead-e2e`) : `stripe-live-objects.mjs` → `STRIPE_LIVE_OK`,
+`smoke-billing-prod.mjs` → `BILLING_PROD_OK` (webhook configuré : POST non signé → 400), `17-per-app.mjs` (compte
+avec un seul abonnement ProjectLead : Pro ici, Gratuit et « Passer à Pro » local dans InvoiceLead, Greetlead et
+CRMlead). Aucun achat réel n'a été fait.
 
 - **Modèle** : CRMlead (`crmlead-vercel/server/routes/billing.ts`). Code : `server/lib/stripe.ts` (Stripe sans
   SDK, filtre `own`), `server/lib/subscription.ts` (client, état, déclaration à ERPlead, relecture du jour),
@@ -152,7 +166,8 @@ ERPlead (calcul par application) et le garde du webhook ScanLead.
   `scripts/e2e-abonnement.mjs` (Checkout 4242 en navigateur sans tête, rejeu signé par `scripts/stripe-replay.mjs`,
   portail, résiliation) → `E2E_ABONNEMENT_OK`.
 - **Retour arrière** : retirer les variables `STRIPE_PRICE_*` (boutons masqués, webhook 503 ; Stripe réessaie 3
-  jours) ou revenir au commit précédent de `vercel`. La migration 008 est additive ; l'ancien code ignore ses
+  jours) ou revenir au commit précédent de `vercel` (`f0e7143`, déploiement `dpl_DZaqUqs1TUJPfyGPDra5xPqGnWot`).
+  Objets Stripe jamais supprimés : prix et portail en `active=false`, endpoint désactivé. La migration 008 est additive ; l'ancien code ignore ses
   colonnes (seul le défaut `free` et le passage en Gratuit des 27 comptes de contrôle restent).
 
 ## Fait le 01.10
