@@ -46,6 +46,10 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   autre entreprise. Places prises → écran « Toutes les places ProjectLead de votre entreprise sont prises ». Le lanceur
   (`src/components/AppSwitcher.tsx`) lit `src/lib/leadFamily.ts`, copie telle quelle de `lead-family.json` : ne pas la
   modifier ici seule.
+- Se déconnecter ferme le Compte Lead et les sessions des applications DANS CE NAVIGATEUR seulement (Ève,
+  13.10.2026) : `sessions.lead_sid` garde le `sid` d'ERPlead, le back-channel « logout » ne ferme que ces sessions (et
+  celles d'avant le `sid`) ; un départ (« disabled ») ferme toutes les sessions de la personne. Pas de boucle de
+  connexion, même cookies refusés. Détails : `docs/PASSATION.md`, « Arrivée et déconnexion ».
 - La formule ProjectLead se prend dans ProjectLead et ne vaut qu'ici (Ève, 13.10.2026) : Stripe Checkout et
   portail (`server/routes/billing.ts`). Le compte Stripe est partagé par toutes les applications Lead : ne créer,
   lire, modifier ou annuler QUE des objets `metadata.app = projectlead` ; jamais `client_reference_id`. Un

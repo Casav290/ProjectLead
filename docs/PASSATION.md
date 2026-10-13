@@ -60,8 +60,30 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   InvoiceLead, Greetlead, chacune vers son adresse d'entrée (`https://<app>/login`, ERPlead `/account`), jamais sa
   page publique ; ProjectLead « Vous êtes ici » sans lien ; panneau fixe sous 480 px. Points d'accroche des contrôles :
   `data-lead-launcher`, `data-lead-app`, et `data-lead-org` (organisation ERPlead) sur la racine de l'espace.
-- **Contrôles** : `npm test`, sections « Connexion par le Compte Lead », « Départ d'une personne » et « Lanceur de la
-  famille Lead ».
+- **Contrôles** : `npm test`, sections « Connexion par le Compte Lead », « Départ d'une personne », « Déconnexion
+  dans un navigateur » et « Lanceur de la famille Lead ».
+
+**Arrivée et déconnexion (règle commune des six applications Lead, Ève, 13.10.2026).**
+- **Arrivée** : session ERPlead ouverte → directement dans l'espace de son entreprise (voir plus haut), dans la langue
+  du Compte Lead. ProjectLead n'a pas d'essai silencieux (`prompt=none`) : sa racine est déjà l'application et part
+  vers `/auth/lead/start`. Cookies refusés : un seul passage chez ERPlead, puis `/login?erreur=session` (le retour
+  sans cookie de départ), et `/login?erreur=…` ne repart jamais seul (pas de boucle) ; contrôle « cookies refusés ».
+  Dans les applications qui ont un essai silencieux, il n'a lieu qu'une fois : cookie `lead_probe` ou marqueur
+  `lead_probe=1` dans l'adresse de retour.
+- **Se déconnecter** ferme le Compte Lead et les sessions des applications DANS CE NAVIGATEUR seulement : ses autres
+  appareils restent connectés (se déconnecter sur l'ordinateur ne coupe pas le téléphone en plein salon). Norme
+  OpenID Connect : ERPlead met `sid` (sa session de navigateur) dans le jeton d'identité, la session ProjectLead le
+  garde (`sessions.lead_sid`, db/010) ; le `logout_token` « logout » porte ce `sid` et seules ces sessions tombent,
+  plus celles ouvertes avant le `sid` (fermées par personne, comme avant). Un jeton sans `sid` ferme tout, comme avant.
+  « Se déconnecter » dans ProjectLead ne ferme que la session de ce navigateur, puis ERPlead `/oauth/logout`
+  (`id_token_hint`).
+- **Départ d'une personne** (`lead_status: disabled`) : TOUTES ses sessions tombent, dans toutes les entreprises, et
+  sa place se libère dans l'entreprise annoncée.
+- **Adresse confirmée** : ERPlead l'exige pour toutes les applications (`require_verified_email`) ; une personne non
+  confirmée voit son écran « Confirmez votre adresse », avec le bouton pour renvoyer le lien.
+- **Lanceur** (audit indépendant CNX-12, CNX-13) : se ferme par Échap (focus rendu au bouton à 9 points), par un clic
+  ou un toucher en dehors et par le choix d'une entrée ; pastilles décoratives (`aria-hidden`), blanc sur la couleur
+  de chaque application ≥ 4,5:1 (ProjectLead #9a6a00 : 4,73:1).
 
 **Règle d'Ève (13.10.2026) : chaque application vend son propre abonnement, valable chez elle seule.** La
 formule ProjectLead se prend dans ProjectLead (Réglages → Entreprise, voir « Abonnement ProjectLead »

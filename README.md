@@ -54,6 +54,11 @@ tâches et dépendances, temps, suivi client, page publique, rendez-vous, emails
 CRMlead, InvoiceLead, échange du Compte Lead, isolation des entreprises, API, abonnement ProjectLead et
 webhook Stripe) contre de faux CRMlead, InvoiceLead, Compte Lead et Stripe lancés en local.
 
+Connexion (règle commune des applications Lead, 13.10.2026) : on arrive sans écran dans l'espace de son entreprise ;
+se déconnecter ferme le Compte Lead et les sessions DE CE NAVIGATEUR seulement (`sid` d'ERPlead gardé avec la
+session), les autres appareils restent connectés ; un départ annoncé par ERPlead ferme toutes les sessions. Voir
+`docs/PASSATION.md`, « Arrivée et déconnexion ».
+
 Abonnement en mode test Stripe réel, navigateur sans tête : `node scripts/stripe-setup.mjs --portal …` (clé
 de test), puis `scripts/e2e-abonnement.mjs` (en-tête du fichier) → `E2E_ABONNEMENT_OK`.
 
