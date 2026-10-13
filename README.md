@@ -61,25 +61,27 @@ des boîtes mail et les clés CRMlead / InvoiceLead ; le changer oblige à tout 
 Facultatives : `SMTP_URL` et `EMAIL_FROM` (envoi système quand aucune boîte n'est branchée ; sans
 eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Compte Lead),
 `GOOGLE_*` et `MICROSOFT_*` (boîtes en un clic, mêmes applications OAuth que CRMlead ;
-`GOOGLE_MAILBOX_OAUTH=1` pour rallumer Gmail par OAuth), `TASKS_SECRET` (protège
-`POST /api/tasks/run`, à appeler par un cron : boîtes mail, agendas, suivis automatiques, rappels
+`GOOGLE_MAILBOX_OAUTH=1` pour rallumer Gmail par OAuth), `TASKS_SECRET` et `CRON_SECRET` (protègent
+`/api/tasks/run`, appelé par le Cron de Vercel : boîtes mail, agendas, suivis automatiques, rappels
 d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine de l'adresse de capture : à poser seulement quand son MX mène à un relais qui poste sur
 `/api/inbound/<jeton>` ; sans lui, aucune adresse n'est affichée, seul le point d'entrée du relais l'est).
 
 ## Mise en ligne
 
-En ligne sur Neon Functions, à côté de la base (projet Neon `gentle-frog-61717092`, branche `production`,
-base `projectlead`, `aws-us-east-2`) : **https://projectlead.io** (domaine personnalisé Neon ; adresse
-technique de la fonction : `br-broad-dream-b4d44vqe-projectlead.compute.c-6.us-east-2.aws.neon.tech`).
+En ligne sur **Vercel** depuis le 13.10.2026, comme CRMlead et InvoiceLead : **https://projectlead.io** (et www),
+projet Vercel `projectlead` (équipe scanleads-projects), relié à ce dépôt, **branche de production `vercel`**,
+fonction en `cle1` à côté de la base. La base reste sur Neon (projet `gentle-frog-61717092`, branche
+`production`, base `projectlead`, `aws-us-east-2`).
 
-`node scripts/neon-build.mjs` produit `deploy/neon/index.mjs` (serveur, interface et migrations en un
-fichier, la base est migrée au démarrage). La fonction Neon `projectlead` est un petit amorçage
-(`deploy/neon/boot.mjs`) qui télécharge ce paquet depuis GitHub à un commit fixé et vérifie son empreinte :
-pour publier, construire, pousser, mettre le commit et l'empreinte dans `boot.mjs`, puis redéployer
-l'amorçage. Variables de la fonction : `PL_DATABASE_URL`, `APP_SECRET`, `TASKS_SECRET`, `PUBLIC_URL`.
-Le contrôle `.github/workflows/verifier-en-ligne.yml` vérifie projectlead.io à chaque envoi et chaque matin, sans
-rien créer en production (`scripts/e2e-prod.mjs` : connexion par le Compte Lead, inscription fermée, pages publiques).
-Une configuration Vercel (`vercel.json`, `scripts/vercel-build.mjs`) reste prête si l'on y passe un jour.
+Publier = pousser sur `vercel`. `scripts/vercel-build.mjs` (Build Output API) : migrations en production
+(`MIGRATE_DATABASE_URL`), contrôle des types, `vite build`, une seule fonction (`server/vercel.ts`, la même
+application Hono). Tâches de fond : au passage du trafic (`waitUntil`) et par 24 crons Vercel quotidiens sur
+`/api/tasks/run` (un par heure, `CRON_SECRET`), déclarés dans `vercel.json`. Rien ne tourne depuis le VPS.
+Variables, secrets et retour arrière : `docs/PASSATION.md`, section Hébergement.
+
+L'ancien hébergement Neon Functions (`server/neon.ts`, `scripts/neon-build.mjs`, `deploy/neon/`) reste dans le
+dépôt pour un retour arrière ; la fonction Neon `projectlead` n'a plus de domaine.
+Le contrôle `.github/workflows/verifier-en-ligne.yml` vérifie projectlead.io (`scripts/e2e-prod.mjs`).
 
 ## Recevoir des emails sans boîte branchée
 

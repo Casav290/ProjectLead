@@ -1,6 +1,6 @@
 # ProjectLead, plan et état
 
-Version 2, 01.10.2026 (soir).
+Version 3, 13.10.2026 (hébergement Vercel).
 
 ## Décisions
 
@@ -10,8 +10,8 @@ Version 2, 01.10.2026 (soir).
 | Code | GitHub `Casav290/ProjectLead` |
 | Pile | Hono + React/Vite + PostgreSQL (`pg`), comme CRMlead ; visuel Trait net, couleur ocre `#9a6a00` |
 | Base | Neon, projet `gentle-frog-61717092` (« ProjectLead »), branche `production`, `aws-us-east-2`, à côté d'InvoiceLead |
-| Hébergement | Neon Functions, fonction `projectlead` sur la branche `production` (un seul paquet : serveur, interface, migrations) |
-| Domaine | `projectlead.io` (Porkbun) |
+| Hébergement | Vercel depuis le 13.10.2026 (Ève : « comme les autres ») : projet `projectlead`, branche de production `vercel`, fonction en `cle1` à côté de la base ; avant : Neon Functions (fonction `projectlead`, gardée sans domaine) |
+| Domaine | `projectlead.io` (Porkbun) : `A @ → 76.76.21.21`, `CNAME www → cname.vercel-dns.com` (Vercel) |
 | Emails sortants | Resend, domaine `projectlead.io`, comme InvoiceLead |
 | Connexion | Compte Lead (CRMlead), tout droit comme InvoiceLead ; email et mot de passe en secours |
 | Formules | Tout compte entre, même gratuit (Ève, 02.10) ; Gratuit 3 projets en cours et 1 personne, Pro sans limite de projets, Pro+ 5 personnes (`server/lib/plans.ts`) |
@@ -28,6 +28,7 @@ Version 2, 01.10.2026 (soir).
 | 3. Emails | Resend, `RESEND_API_KEY` dans la fonction | Premier envoi réel reçu | fait (01.10) : suivi client reçu dans la boîte de réception Gmail d'Ève, depuis `suivi@invoicelead.io` ; passer sur `suivi@projectlead.io` quand le domaine sera vérifié chez Resend |
 | 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10) ; depuis le 02.10 tout compte entre, même gratuit (limites dans `server/lib/plans.ts`) ; reste l'essai réel en gratuit après publication |
 | 5. Liens famille | Clés CRMlead et InvoiceLead posées dans l'entreprise d'Ève ; `projectlead` en `live` dans `lead_apps` de CRMlead | Une adresse reprise de CRMlead, un brouillon dans InvoiceLead | migration CRMlead `114_projectlead_live.sql` prête (session CRMlead), publication à confirmer ; clés à poser par Ève |
+| 6. Vercel | Hébergement comme les autres applications : projet Vercel, base Neon inchangée, tâches de fond sans VPS | projectlead.io et www servis par Vercel, connexion réelle par ERPlead (navigateur sans tête, compte de test), tâche de fond passée sur Vercel | fait (13.10) |
 
 ## Ce qui bloque
 
@@ -37,5 +38,5 @@ elle-même dans ProjectLead. Détail dans
 
 ## Publier une nouvelle version
 
-`node scripts/neon-build.mjs`, pousser, mettre le commit et l'empreinte du paquet dans
-`deploy/neon/boot.mjs`, redéployer la fonction (`deploy_function`). Détails dans `README.md`.
+Pousser sur la branche `vercel` : Vercel construit et migre (`scripts/vercel-build.mjs`). Détails, variables et
+retour arrière dans `docs/PASSATION.md` (section Hébergement).

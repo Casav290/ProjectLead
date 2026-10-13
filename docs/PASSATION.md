@@ -1,4 +1,4 @@
-# Passation ProjectLead (02.10.2026)
+# Passation ProjectLead (02.10.2026, hébergement mis à jour le 13.10.2026)
 
 À lire en premier par la session qui reprend. Ensuite : `CLAUDE.md`, `docs/PLAN.md`, `README.md`.
 
@@ -51,31 +51,49 @@ production.
 
 ## Hébergement
 
-- Neon, projet `gentle-frog-61717092`, branche `br-broad-dream-b4d44vqe` (production), base
-  `projectlead`, région `aws-us-east-2`. Domaine https://projectlead.io (et www) branché.
-- Fonction Neon `projectlead` : déploiement 7 (01.10), paquet du commit `ddb277a` (connexion comme
-  InvoiceLead, pages légales, accessibilité, chargement découpé). La version suivante (jetons de
-  tâches, `server/index.ts` et `db/003_task_tokens.sql`) est sur la branche mais **pas publiée** : le
-  filtre de sécurité a refusé qu'un agent envoie le paquet de production. Il faut l'accord écrit d'Ève
-  (« je t'autorise à publier ProjectLead en production ») ou qu'elle publie elle-même.
-- La fonction est un amorçage (`deploy/neon/boot.mjs`) qui charge `deploy/neon/index.mjs` depuis
-  GitHub à un commit fixé et vérifie son empreinte. Publier :
-  1. `node scripts/neon-build.mjs`, envoyer `deploy/neon/index.mjs` ;
-  2. mettre ce commit et `sha256sum deploy/neon/index.mjs` dans `boot.mjs`, l'envoyer ;
-  3. zipper `boot.mjs` sous le nom `index.mjs`, puis `deploy_function` avec **le zip seul** :
-     sans `environment`, la fonction garde ses variables.
-- Variables de la fonction (valeurs dans Neon, jamais dans le dépôt) : `PL_DATABASE_URL`,
-  `APP_SECRET`, `TASKS_SECRET`, `PUBLIC_URL` (`https://projectlead.io`), `EMAIL_FROM`
-  (`ProjectLead <suivi@invoicelead.io>`), `RESEND_API_KEY`, `LEAD_ID_ISSUER`, `LEAD_ID_CLIENT_ID`,
-  `LEAD_ID_APP`, `LEAD_ID_CLIENT_SECRET`, `LEAD_ID_REDIRECT_URI`. `deploy_function` avec
-  `environment` remplace **tout** l'environnement, et Neon ne rend que les noms : ne jamais le passer
-  sans toutes les valeurs.
-- Tâches de fond : aujourd'hui, elles ne tournent qu'au passage de visiteurs. Prêt pour après la
-  publication : jeton dans `~/.projectlead-task-secret`, script `~/bin/projectlead-cron.sh`. Une fois
-  publié : poser l'empreinte (`insert into task_tokens (token_hash, label) values
-  (encode(sha256('<jeton>'::bytea), 'hex'), 'cron du VPS')`), puis ajouter à la crontab
-  `*/5 * * * * /usr/bin/env bash "$HOME/bin/projectlead-cron.sh"`. Chaque tâche garde son rythme ;
-  `?force=1` lance tout. Journal des échecs : `~/tmp/projectlead-cron.log`.
+Vercel depuis le 13.10.2026 (Ève : « ProjectLead comme les autres », plus rien sur Replit ni sur le VPS). La base
+n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
+
+- **Application** : projet Vercel `projectlead` (équipe scanleads-projects, formule gratuite Hobby), relié à
+  `Casav290/ProjectLead`, **branche de production `vercel`**. Fonction en `cle1` (Cleveland), à côté de la base
+  (us-east-2), comme InvoiceLead : en `fra1`, chaque aller-retour avec la base coûterait environ 90 ms.
+- **Base** : Neon `gentle-frog-61717092`, branche `production` (`br-broad-dream-b4d44vqe`), base `projectlead`,
+  `aws-us-east-2`, rôle `projectlead_owner` (l'application endosse `projectlead_app`, RLS).
+- **Domaine** : projectlead.io et www.projectlead.io, DNS Porkbun : `A @ → 76.76.21.21`, `CNAME www →
+  cname.vercel-dns.com`. Avant le 13.10 : `ALIAS @` et `CNAME www → fn-custom-domains.us-east-2.aws.neon.tech`
+  (copie : `~/tmp/projectlead-vercel/dns-avant.json` du VPS).
+- **Publier** : pousser sur `vercel`. Vercel construit (`scripts/vercel-build.mjs`) : migrations (production
+  seulement, `MIGRATE_DATABASE_URL`, connexion directe), contrôle des types, `vite build`, une seule fonction
+  (`server/vercel.ts`). Une autre branche donne un déploiement de test, sans migration, protégé par Vercel
+  (en-tête `x-vercel-protection-bypass`, jeton dans `~/.projectlead-vercel-bypass` du VPS).
+- **Variables** (Vercel → Settings → Environment Variables, Production ; valeurs aussi dans
+  `~/.projectlead-vercel.env` du VPS, droits 600) : `DATABASE_URL` (pooler), `MIGRATE_DATABASE_URL` (directe),
+  `APP_SECRET`, `TASKS_SECRET`, `CRON_SECRET`, `PUBLIC_URL` (`https://projectlead.io`), `EMAIL_FROM`
+  (`ProjectLead <suivi@invoicelead.io>`, comme avant), `RESEND_API_KEY` (clé d'envoi du compte Resend qui a
+  invoicelead.io, la même que Greetlead), `LEAD_ID_ISSUER` (`https://erplead.io`), `LEAD_ID_CLIENT_ID` et
+  `LEAD_ID_APP` (`projectlead`), `LEAD_ID_CLIENT_SECRET`, `LEAD_ID_REDIRECT_URI`. `NODE_ENV` n'est pas posé
+  (`server/vercel.ts` le pose à l'exécution).
+- **APP_SECRET est nouveau.** L'ancien n'existait que dans la fonction Neon, qui ne rend que les noms. Il chiffre
+  les clés CRMlead / InvoiceLead, les boîtes mail, les agendas et `server_secrets`. Le 13.10, seules étaient
+  chiffrées en base les clés InvoiceLead des 10 entreprises « TEST … » du banc `lead-e2e` (aucune entreprise réelle,
+  aucune boîte, aucun agenda) : elles ont été rechiffrées avec le nouveau secret à partir du texte clair du banc
+  (`~/tmp/projectlead-vercel/rechiffrer.mjs`, anciens chiffrés gardés dans `chiffres-neon-sauvegarde.json`). La
+  ligne `GLM_API_KEY` de `server_secrets` reste à l'ancien chiffré : ignorée, et la clé IA ne sert à rien dans ce code.
+- **Secret client ERPlead** : renouvelé le 13.10 côté ERPlead (`clients.secret_hash` du client `projectlead`,
+  format `lid_…` comme les autres applications, trace dans `audit`). Valeur : `~/.erplead-projectlead-client`.
+  Les clients crmlead, invoicelead, greetlead et scanlead n'ont pas changé.
+- **Tâches de fond, sans VPS** (`server/lib/jobs.ts`, chaque tâche à son rythme dans `job_runs`) :
+  1. à chaque requête reçue, au plus une fois par minute et par instance (`runJobsIfDue`, `waitUntil`) ;
+  2. 24 crons Vercel `GET /api/tasks/run?h=N`, un par heure (formule gratuite : chaque cron une fois par jour),
+     déclarés dans `vercel.json` seulement (les répéter dans la sortie du build fait échouer le déploiement).
+  La ligne `*/5 … projectlead-cron.sh` est retirée de la crontab du VPS (copie de la crontab d'avant dans
+  `~/tmp/projectlead-vercel/`).
+- **Ancienne fonction Neon `projectlead`** (déploiement 15, paquet `f78241b`) : gardée telle quelle, plus aucun
+  DNS n'y mène. Elle ne peut plus connecter personne (ancien secret client) ni lire les 10 clés rechiffrées.
+  Retour arrière : remettre les deux enregistrements DNS d'avant, l'ancien `secret_hash`
+  (`~/tmp/projectlead-vercel/erplead-client-projectlead-avant.txt`) et `node ~/tmp/projectlead-vercel/rechiffrer.mjs retour`.
+- **Contrôle connecté** : `node ~/tmp/projectlead-vercel/e2e-connexion.mjs` (navigateur sans tête, compte
+  « TEST Boulangerie Favre » du banc, connexion par ERPlead, écran Projets, console sans erreur).
 
 ## Fait le 01.10
 
@@ -91,9 +109,10 @@ production.
 
 ## Ce qui reste, dans l'ordre
 
-1. **Publication** de la version de `main` (jetons de tâches, formule relue chaque jour) : accord écrit
-   d'Ève, puis paquet, amorçage, `deploy_function` (zip seul), empreinte du jeton dans `task_tokens` et
-   crontab du VPS.
+1. **Après Vercel (13.10.2026), ce qu'Ève pourra supprimer quand elle voudra** (rien n'a été effacé) : la
+   fonction Neon `projectlead` et ses deux domaines personnalisés Neon (projectlead.io, www), le jeton
+   « cron du VPS » de `task_tokens`, `~/bin/projectlead-cron.sh` et `~/.projectlead-task-secret` du VPS,
+   la ligne `GLM_API_KEY` de `server_secrets` (ancien chiffré illisible).
 2. **Essai réel en formule gratuite** : Ève (eve.gemmet@gmail.com, Free) doit entrer dans ProjectLead et
    voir « Gratuit : 3 projets en cours ». Ne pas lui offrir de formule : elle veut vérifier le gratuit.
 3. **Clés d'Ève** : Ève crée la clé CRMlead
@@ -107,4 +126,5 @@ production.
    avec l'accord d'Ève (`delete from accounts where name like 'Contrôle %'`, puis les `users` sans
    entreprise).
 6. **Expéditeur** : quand projectlead.io sera vérifié chez Resend, proposer `EMAIL_FROM` sur
-   `suivi@projectlead.io` (aujourd'hui `suivi@invoicelead.io`, choix d'Ève).
+   `suivi@projectlead.io` (aujourd'hui `suivi@invoicelead.io`, choix d'Ève). Le compte Resend de la famille
+   (erplead.io, crmlead.io, scanlead.io) est plein : « domain limit of your plan » le 13.10.
