@@ -607,6 +607,11 @@ const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
 let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
 check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
+for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
+  // « /\evil.test » dans un Location relatif mène un navigateur sur evil.test : jamais repris comme page demandée.
+  ll = await leadLogin((n) => lead(n, true), `?next=${bad}`)
+  check(`page demandée « ${decodeURIComponent(bad)} » hors de ProjectLead : retour à l'accueil`, ll.location === '/', ll)
+}
 {
   // Le retour d'ERPlead arrive sur l'adresse sans www : un départ depuis www y est renvoyé avant de poser son cookie.
   const w = await app.request('http://www.localhost/auth/lead/start?next=/projets&signup=1')

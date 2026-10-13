@@ -44,7 +44,7 @@ const PUBLIC = [
 function AlreadyIn() {
   const [params] = useSearchParams()
   const next = params.get('next')
-  return <Navigate to={next && next.startsWith('/') && !next.startsWith('//') ? next : '/'} replace />
+  return <Navigate to={next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/'} replace />
 }
 
 function Routed() {

@@ -137,6 +137,12 @@ app.post('/api/auth/invitation/:token/accept', async (c) => {
 // ------------------------------------------------------------------ Compte Lead
 
 type Saved = { state: string; nonce: string; verifier: string; next?: string }
+/**
+ * La page où revenir après la connexion : un chemin de ProjectLead seulement. Ni « //autre.site », ni « /\autre.site »
+ * (un navigateur lit la barre oblique inverse comme « / » : la redirection relative mènerait sur un autre site).
+ */
+export const safeNext = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') && !/[\\\u0000-\u001f\u007f]/.test(v) && v.length <= 2048 ? v : undefined
 
 // `/auth/lead/login` : même départ, sous le nom que les contrôles de la famille essaient (comme `/auth/lead/start`).
 const startLeadLogin = async (c: any) => {
@@ -151,7 +157,7 @@ const startLeadLogin = async (c: any) => {
   const url = c.req.query('signup') === '1' ? `${s.url}&prompt=create` : s.url
   const next = c.req.query('next')
   await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state: s.state, nonce: s.nonce, verifier: s.verifier,
-    next: next?.startsWith('/') && !next.startsWith('//') ? next : undefined } satisfies Saved), cookieSecret(),
+    next: safeNext(next) } satisfies Saved), cookieSecret(),
     { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: 600 })
   return c.redirect(url)
 }
@@ -316,6 +322,7 @@ app.get('/auth/lead/callback', async (c) => {
   const refused = (code: string) => c.redirect(`/login?erreur=${code}${saved.next ? `&next=${encodeURIComponent(saved.next)}` : ''}`)
   try {
     saved = JSON.parse(raw) as Saved
+    saved.next = safeNext(saved.next)
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
     // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026), dans l'espace de son entreprise.
     const invite = invitationToken(saved.next)

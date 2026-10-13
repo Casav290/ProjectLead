@@ -35,7 +35,7 @@ const REFUSED: Record<string, { title: string; text: string }> = {
 export function leadStart(next: string | null, signup = false) {
   const q = new URLSearchParams()
   if (signup) q.set('signup', '1')
-  if (next && next.startsWith('/') && !next.startsWith('//') && !/^\/(login|signup)\b/.test(next)) q.set('next', next)
+  if (next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') && !/^\/(login|signup)\b/.test(next)) q.set('next', next)
   const s = q.toString()
   return `/auth/lead/start${s ? `?${s}` : ''}`
 }
