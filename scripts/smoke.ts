@@ -895,6 +895,11 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   const again = (await pool.query(`select au.active, au.lead_disabled from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows
   check('revenue chez ERPlead dans la même organisation : elle rentre dans l’espace, place reprise', back.location === '/' && (await me(back.session)) === 200
     && again.length === 1 && again[0].active === true && again[0].lead_disabled === false, { loc: back.location, again })
+  // Déconnexion ailleurs (« logout ») : toutes ses sessions tombent, même si l'organisation annoncée n'a pas d'espace ici ; sa place reste.
+  const loggedOut = await post(logoutToken(`bob-${stamp}`, { org: 'org-inconnue', lead_status: 'logout' }))
+  const kept = (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows
+  check('déconnexion ailleurs (logout) : 200, toutes ses sessions tombent, sa place reste', loggedOut === 200
+    && (await me(back.session)) === 401 && kept.length === 1 && kept[0].active === true, { loggedOut, kept })
 }
 section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six applications, adresses d’entrée')
 {

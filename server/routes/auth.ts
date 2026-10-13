@@ -299,8 +299,11 @@ app.post('/auth/lead/backchannel-logout', async (c) => {
     if (!user) return
     const account = typeof claims.org === 'string'
       ? (await db.query('select id from accounts where lead_org = $1', [claims.org])).rows[0] : null
-    if (typeof claims.org === 'string' && !account) return
-    if (account) await db.query('delete from sessions where user_id = $1 and account_id = $2', [user.id, account.id])
+    // « logout » (déconnexion dans ERPlead ou dans une autre application Lead) : se déconnecter ferme la session partout,
+    // donc toutes ses sessions, quel que soit l'espace ouvert. Un départ (« disabled ») ne touche que l'espace annoncé.
+    const everywhere = claims.lead_status === 'logout'
+    if (typeof claims.org === 'string' && !account && !everywhere) return
+    if (account && !everywhere) await db.query('delete from sessions where user_id = $1 and account_id = $2', [user.id, account.id])
     else await db.query('delete from sessions where user_id = $1', [user.id])
     if (claims.lead_status === 'disabled' && account)
       await db.query(
