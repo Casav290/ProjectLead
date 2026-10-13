@@ -3,7 +3,9 @@
 export type Me = {
   user: { id: string; email: string; name: string; color: string; role: 'admin' | 'manager' | 'member'; hourly_rate_cents: number
           capacity_minutes: number; lead_linked: boolean }
-  account: { id: string; name: string; plan: string; timezone: string; currency: string; week_hours: number; inbound_token: string }
+  /** `lead_org` : l'organisation ERPlead de l'entreprise (null pour une entreprise d'avant le Compte Lead). */
+  account: { id: string; name: string; plan: string; timezone: string; currency: string; week_hours: number; inbound_token: string
+             lead_org: string | null }
   unread: number; inbox: number
   running: { id: string; started_at: string; project_id: string; project_name: string; task_id: string | null; task_title: string | null } | null
   features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean }

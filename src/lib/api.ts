@@ -50,6 +50,7 @@ const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Email ou mot de passe incorrect.',
   email_taken: 'Cette adresse a déjà un compte.',
   signup_via_lead: "L'inscription se fait avec le Compte Lead.",
+  invitation_via_lead: "Acceptez l'invitation avec votre Compte Lead.",
   plan_limit_projects: 'La formule gratuite mène 3 projets en cours à la fois : terminez ou archivez un projet. Pour davantage, un administrateur peut passer à Pro (Réglages → Entreprise).',
   plan_limit_seats: 'Toutes les places de la formule sont prises. Pour une personne de plus, un administrateur peut passer à Pro+, jusqu\'à 5 personnes (Réglages → Entreprise).',
   plan_limit_seats_full: 'Les 5 places de Pro+ sont prises : retirez une personne ou une invitation en attente pour en inviter une autre.',

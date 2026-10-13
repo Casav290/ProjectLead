@@ -1,6 +1,6 @@
 # ProjectLead
 
-Gestion de projet de la famille Lead (Scanlead, CRMlead, ProjectLead, InvoiceLead). Propriétaire : Ève.
+Gestion de projet de la famille Lead (ERPlead, Scanlead, CRMlead, ProjectLead, InvoiceLead, Greetlead). Propriétaire : Ève.
 Langue de travail : français. Commits en français, courts.
 
 ## Où est quoi
@@ -41,6 +41,11 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
 - Le temps facturé ne se modifie plus.
 - Tout compte du Compte Lead entre, même en formule gratuite : la formule ne fixe que des quantités
   (`server/lib/plans.ts`), et une limite bloque une action, jamais des données déjà créées.
+- Passer d'une application Lead à l'autre (Ève, 13.10.2026) : une personne entre TOUJOURS dans l'espace de son
+  organisation ERPlead (`attachLeadPerson`), rejoint ou créé en Gratuit ; jamais un espace personnel ni celui d'une
+  autre entreprise. Places prises → écran « Toutes les places ProjectLead de votre entreprise sont prises ». Le lanceur
+  (`src/components/AppSwitcher.tsx`) lit `src/lib/leadFamily.ts`, copie telle quelle de `lead-family.json` : ne pas la
+  modifier ici seule.
 - La formule ProjectLead se prend dans ProjectLead et ne vaut qu'ici (Ève, 13.10.2026) : Stripe Checkout et
   portail (`server/routes/billing.ts`). Le compte Stripe est partagé par toutes les applications Lead : ne créer,
   lire, modifier ou annuler QUE des objets `metadata.app = projectlead` ; jamais `client_reference_id`. Un

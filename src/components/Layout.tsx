@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { fmtRelative } from '../lib/format'
 import { useApp } from '../lib/store'
 import type { Notification } from '../lib/types'
+import AppSwitcher from './AppSwitcher'
 import { Avatar } from './ui'
 
 /** La mise en page de l'application connectée : navigation à gauche, barre du haut, contenu. */
@@ -106,40 +107,6 @@ function Bell() {
   )
 }
 
-/** Les applications de la famille Lead, une icône « grille » comme dans CRMlead. */
-function AppSwitcher() {
-  const [open, setOpen] = useState(false)
-  const ref = useClickOutside(open, () => setOpen(false))
-  const apps = [
-    // L'ordre et les couleurs de la famille, comme l'écran du Compte Lead (CRMlead, SuiteBrand).
-    { name: 'Scanlead', mark: 'SL', color: '#2563eb', url: 'https://scanlead.io', desc: 'Scanner les cartes de visite' },
-    { name: 'CRMlead', mark: 'CL', color: '#0f6e70', url: 'https://crmlead.io', desc: 'Leads, contacts et adresses' },
-    { name: 'ProjectLead', mark: 'PL', color: '#9a6a00', url: null, desc: 'Mener le projet une fois l’affaire signée' },
-    { name: 'InvoiceLead', mark: 'IL', color: '#7a2e67', url: 'https://invoicelead.io', desc: 'Facturer et encaisser' },
-  ]
-  return (
-    <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Applications Lead" title="Applications Lead"
-              className="grid h-9 w-9 place-items-center text-muted-foreground hover:bg-muted">
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
-          {[4, 12, 20].flatMap((x) => [4, 12, 20].map((y) => <circle key={`${x}-${y}`} cx={x} cy={y} r="2" />))}
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute right-0 top-11 z-50 w-72 border border-input bg-card p-2">
-          <p className="px-2 py-1 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">Famille Lead</p>
-          {apps.map((a) => (
-            <a key={a.name} href={a.url ?? '/'} className={clsx('flex items-center gap-3 px-2 py-2 hover:bg-muted', !a.url && 'bg-accent-veil')}>
-              <span className="grid h-8 w-8 shrink-0 place-items-center text-[11px] font-extrabold text-white" style={{ background: a.color }}>{a.mark}</span>
-              <span className="min-w-0"><span className="block text-sm font-bold">{a.name}</span><span className="block text-xs text-muted-foreground">{a.desc}</span></span>
-            </a>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function UserMenu() {
   const { me } = useApp()
   const [open, setOpen] = useState(false)
@@ -187,7 +154,8 @@ export default function Layout({ children }: { children: ReactNode }) {
     </nav>
   )
   return (
-    <div className="flex min-h-screen">
+    // L'organisation ERPlead de l'espace ouvert : les contrôles de la famille vérifient qu'on est bien chez soi.
+    <div className="flex min-h-screen" data-lead-org={me?.account.lead_org ?? undefined}>
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-input bg-card lg:flex">
         <div className="flex h-14 items-center border-b border-border px-4"><Brand /></div>
         <div className="flex-1 overflow-y-auto">{side}</div>
@@ -214,7 +182,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <Timer />
             <Link to="/recherche" className="grid h-9 w-9 place-items-center text-muted-foreground hover:bg-muted md:hidden" aria-label="Rechercher"><Icon d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4" /></Link>
             <Bell />
-            <AppSwitcher />
+            <AppSwitcher locale={typeof document === 'undefined' ? 'fr' : document.documentElement.lang} />
             <UserMenu />
           </div>
         </header>

@@ -66,7 +66,9 @@ app.patch('/members/:userId', async (c) => {
       if (was && !was.active) await assertSeatFree(db, ctx.accountId, false)
     }
     const r = await db.query(
+      // Un choix de l'administrateur (désactiver, réactiver) l'emporte sur un départ annoncé par ERPlead (db/009_passage.sql).
       `update account_users set role = coalesce($2, role), active = coalesce($3, active),
+              lead_disabled = case when $3::boolean is null then lead_disabled else false end,
               hourly_rate_cents = coalesce($4, hourly_rate_cents), cost_rate_cents = coalesce($5, cost_rate_cents),
               capacity_minutes = coalesce($6, capacity_minutes)
         where account_id = app_account() and user_id = $1`,

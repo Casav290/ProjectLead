@@ -39,6 +39,30 @@ vers Réglages → Entreprise), jamais les données déjà créées. Une affaire
 pleine arrive « à qualifier ». Les entreprises sans Compte Lead (anciens accès locaux) n'ont pas de limite.
 L'e-mail et le mot de passe restent en secours sur `/login?acces=email` pour les accès créés avant le Compte Lead.
 
+**Passer d'une application à l'autre (demande d'Ève du 13.10.2026, branche `passage-apps`).** Connectée une fois à
+ERPlead, une personne entre dans ProjectLead sans aucun écran, par le lanceur d'une autre application, une adresse
+tapée ou un lien profond (`/login` et toute page sans session partent vers `/auth/lead/start?next=…`).
+- **L'espace** (`attachLeadPerson`, `server/routes/auth.ts`) : toujours celui de son organisation ERPlead
+  (`accounts.lead_org = claims.org`), rejoint (administratrice chez ERPlead : administratrice, sinon membre) ou créé
+  à son nom en Gratuit. Une entreprise d'avant le Compte Lead n'est reprise que si la personne en est
+  l'administratrice et l'est aussi chez ERPlead. Plus jamais d'espace personnel ni d'autre entreprise : places
+  prises → `/login?erreur=places` (« Toutes les places ProjectLead de votre entreprise sont prises ») ; désactivée
+  par un administrateur ProjectLead → `/login?erreur=desactive`. Rien n'est créé dans ces deux cas.
+- **Départ annoncé par ERPlead** (back-channel, `lead_status: disabled`) : `account_users.lead_disabled` (009). Si
+  ERPlead la laisse revenir dans la même organisation, elle reprend sa place à la connexion suivante, s'il en reste.
+  Un choix de l'administrateur (Réglages → Équipe) remet ce drapeau à faux.
+- **Invitation ProjectLead** (`/invitation/<jeton>`) : bouton « Accepter avec mon Compte Lead » →
+  `/auth/lead/start?next=/invitation/<jeton>` ; au retour, l'invitation est prise pour la personne connectée si
+  l'adresse vérifiée est la même (sinon `?erreur=adresse`), et l'entreprise qui invite s'ouvre. Plus de nouveau mot
+  de passe ProjectLead avec le Compte Lead branché (403 `invitation_via_lead`) ; celui d'un accès d'avant reste accepté.
+- **Lanceur à 9 points** (`src/components/AppSwitcher.tsx`) : les six applications de `src/lib/leadFamily.ts`
+  (copie telle quelle de `~/projets/lead-e2e/lead-family.json`), dans l'ordre ERPlead, Scanlead, CRMlead, ProjectLead,
+  InvoiceLead, Greetlead, chacune vers son adresse d'entrée (`https://<app>/login`, ERPlead `/account`), jamais sa
+  page publique ; ProjectLead « Vous êtes ici » sans lien ; panneau fixe sous 480 px. Points d'accroche des contrôles :
+  `data-lead-launcher`, `data-lead-app`, et `data-lead-org` (organisation ERPlead) sur la racine de l'espace.
+- **Contrôles** : `npm test`, sections « Connexion par le Compte Lead », « Départ d'une personne » et « Lanceur de la
+  famille Lead ».
+
 **Règle d'Ève (13.10.2026) : chaque application vend son propre abonnement, valable chez elle seule.** La
 formule ProjectLead se prend dans ProjectLead (Réglages → Entreprise, voir « Abonnement ProjectLead »
 ci-dessous). Un abonnement CRMlead, Scanlead, InvoiceLead ou Greetlead n'ouvre plus rien ici. Transition : un

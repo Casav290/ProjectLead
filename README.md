@@ -1,6 +1,6 @@
 # ProjectLead
 
-La gestion de projet de la famille Lead (Scanlead, CRMlead, ProjectLead, InvoiceLead) : mener le
+La gestion de projet de la famille Lead (ERPlead, Scanlead, CRMlead, ProjectLead, InvoiceLead, Greetlead) : mener le
 projet une fois l'affaire signée, avec ses étapes, ses tâches, ses intervenants, son temps, le suivi
 envoyé au client et la facturation du mois dans InvoiceLead.
 

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import Layout from './components/Layout'
 import { Spinner, Toaster } from './components/ui'
 import { AppProvider, useApp } from './lib/store'
@@ -40,6 +40,13 @@ const PUBLIC = [
   { path: '/conditions', el: <Legal kind="terms" /> },
 ]
 
+/** /login avec une session déjà ouverte : la page demandée (?next=), sinon l'accueil de l'espace. */
+function AlreadyIn() {
+  const [params] = useSearchParams()
+  const next = params.get('next')
+  return <Navigate to={next && next.startsWith('/') && !next.startsWith('//') ? next : '/'} replace />
+}
+
 function Routed() {
   const { me, loading } = useApp()
   const loc = useLocation()
@@ -74,7 +81,7 @@ function Routed() {
         <Route path="/facturation" element={<Billing />} />
         <Route path="/reglages/*" element={<Settings />} />
         <Route path="/recherche" element={<Search />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="/login" element={<AlreadyIn />} />
         <Route path="/signup" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

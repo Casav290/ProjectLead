@@ -14,7 +14,7 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
             au.role, au.hourly_rate_cents, au.capacity_minutes, au.ical_token
        from users u join account_users au on au.user_id = u.id and au.account_id = app_account()
       where u.id = app_user()`)).rows[0]
-  const account = (await db.query('select id, name, plan, locale, timezone, currency, week_hours, inbound_token from accounts where id = app_account()')).rows[0]
+  const account = (await db.query('select id, name, plan, locale, timezone, currency, week_hours, inbound_token, lead_org from accounts where id = app_account()')).rows[0]
   const settings = (await db.query(
     `select (crmlead_url is not null and crmlead_key_enc is not null) as crmlead,
             (invoicelead_url is not null and invoicelead_key_enc is not null) as invoicelead

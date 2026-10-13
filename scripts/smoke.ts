@@ -21,6 +21,7 @@ await migrate(() => {})
 const { default: app } = await import('../server/index.js')
 const { pool } = await import('../server/db.js')
 const { runJobs } = await import('../server/lib/jobs.js')
+const { hashToken: hashTokenSmoke } = await import('../server/auth.js')
 
 let ok = 0, ko = 0
 function check(name: string, cond: unknown, detail?: unknown) {
@@ -617,6 +618,7 @@ check('formule Pro : session ouverte, retour à la page demandée', ll.location 
 check('retour du Compte Lead : un seul cookie posé, celui de la session', ll.cookies === 1, ll)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 check('l’entreprise Lead devient l’espace ProjectLead', r.status === 200 && r.body.account?.name === `Entreprise lead-org-${stamp}`, r.body)
+check('/me : l’organisation ERPlead de l’espace (data-lead-org des contrôles de la famille)', r.body.account?.lead_org === `lead-org-${stamp}`, r.body.account)
 const proSession = ll.session
 {
   const out = await app.request('http://localhost/api/auth/logout', { method: 'POST', headers: { cookie: ll.session } })
@@ -678,16 +680,32 @@ check('… même avec un statut en cours dans la même requête', r.status === 4
 ll = await leadLogin((n) => { const c: any = lead(n, true, `sans-portee-${stamp}`); delete c.org; delete c.lead; return c })
 r = await pool.query('select count(*)::int as n from users where lower(email) = lower($1)', [`sans-portee-${stamp}@exemple.test`])
 check('portée « lead » retirée de l’adresse : connexion refusée, message précis, rien de créé', ll.location === '/login?erreur=portee' && !ll.session && r.rows[0].n === 0, { ll, n: r.rows[0].n })
-// Places : une deuxième personne de l'organisation gratuite (1 place) reste dehors, avec un message clair.
+// Places : une deuxième personne de l'organisation gratuite (1 place) reste dehors, avec un message clair. Jamais un
+// espace à part ni celui d'une autre entreprise (passage entre applications, 13.10.2026).
+const accountsBefore = (await pool.query('select count(*)::int as n from accounts')).rows[0].n
 ll = await leadLogin((n) => ({ ...lead(n, false, freeOrg), sub: `sub-collegue-${stamp}`, email: `collegue2-${stamp}@exemple.test`, org_role: 'user' }))
-r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
-check('gratuit (1 place) : une deuxième personne de l’organisation entre quand même, dans son propre espace gratuit',
-  ll.session.length > 30 && r.status === 200 && r.body.account?.name !== `Entreprise ${freeOrg}` && r.body.plan?.tier === 'free' && r.body.unread >= 1,
-  { loc: ll.location, account: r.body.account?.name, plan: r.body.plan, unread: r.body.unread })
+r = await pool.query(`select (select count(*)::int from accounts) as accounts,
+  (select count(*)::int from account_users au join users u on u.id = au.user_id where u.lead_sub = $1) as places`, [`sub-collegue-${stamp}`])
+check('gratuit (1 place) : une deuxième personne de l’organisation voit « Toutes les places ProjectLead de votre entreprise sont prises », sans session ni espace à part',
+  ll.location === '/login?erreur=places' && !ll.session && r.rows[0].accounts === accountsBefore && r.rows[0].places === 0,
+  { loc: ll.location, session: Boolean(ll.session), ...r.rows[0], accountsBefore })
 // Une adresse pas encore confirmée chez le Compte Lead : un message clair, pas de boucle, rien de créé.
 ll = await leadLogin((n) => ({ ...lead(n, false, `non-confirme-${stamp}`), email_verified: false }))
 check('adresse pas encore confirmée : écran « confirmez votre adresse », rien de créé', ll.location === '/login?erreur=email' && !ll.session, ll)
-// Une personne désactivée dans l'espace de son organisation n'y tourne pas en boucle : elle entre ailleurs.
+ll = await leadLogin((n) => ({ ...lead(n, false, `non-confirme-${stamp}`), email_verified: false }), '?next=/invitation/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG')
+check('… la page demandée (une invitation) est gardée pour « J’ai confirmé mon adresse, entrer »',
+  ll.location === `/login?erreur=email&next=${encodeURIComponent('/invitation/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG')}` && !ll.session, ll)
+{
+  // Deux collègues d'une organisation sans espace arrivent au même instant (deux applications ouvertes) : un seul espace.
+  const { attachLeadPerson } = await import('../server/routes/auth.js')
+  const twinOrg = `jumeaux-org-${stamp}`
+  const twin = (who: string) => ({ ...lead('', true, twinOrg), lead: rights('pro_plus'), sub: `sub-${who}-${stamp}`, email: `${who}-${stamp}@exemple.test`,
+    org_role: who === 'zoe' ? 'admin' : 'user' }) as any
+  const both = await Promise.all([attachLeadPerson(twin('zoe')), attachLeadPerson(twin('yan'))])
+  const n = (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [twinOrg])).rows[0].n
+  check('deux collègues arrivés au même instant : un seul espace pour leur organisation, tous deux dedans', n === 1 && both[0].accountId === both[1].accountId, { n, both })
+}
+// Une personne désactivée dans l'espace de son organisation n'y tourne pas en boucle, et n'entre pas ailleurs : un écran le dit.
 const annOrg = `ann-org-${stamp}`
 const annPlan = rights('pro_plus')
 ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan }))
@@ -696,9 +714,16 @@ ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `su
 const annId = (await pool.query('select id from users where lead_sub = $1', [`sub-ann-${stamp}`])).rows[0]?.id
 r = await annAdmin.patch(`/api/team/members/${annId}`, { active: false })
 check('l’administrateur désactive Ann', r.status === 200, r)
-ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
+const annLogin = () => leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
+ll = await annLogin()
+r = await pool.query(`select count(*)::int as n from account_users au where au.user_id = $1`, [annId])
+check('Ann désactivée par l’administrateur se reconnecte : écran « accès désactivé », sans session, pas de boucle ni d’espace à part',
+  ll.location === '/login?erreur=desactive' && !ll.session && r.rows[0].n === 1, { loc: ll.location, places: r.rows[0].n })
+r = await annAdmin.post('/api/team/invite', { email: `ann-${stamp}@exemple.test` })
+ll = await annLogin()
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
-check('Ann désactivée se reconnecte : session valable dans son propre espace, pas de boucle', r.status === 200 && r.body.account?.name !== `Entreprise ${annOrg}`, { status: r.status, account: r.body?.account?.name })
+check('réinvitée par l’administrateur : Ann rentre par le Compte Lead dans l’espace de son entreprise', ll.location === '/' && r.status === 200
+  && r.body.account?.lead_org === annOrg, { loc: ll.location, account: r.body?.account })
 // Une organisation Pro+ (5 places) et un membre local venu d'une autre organisation, gratuite.
 const plusOrg = `plus-org-${stamp}`
 const plusLead = (n: string) => ({ ...lead(n, true, plusOrg), lead: rights('pro_plus') })
@@ -707,13 +732,30 @@ const plus = new Client(); plus.cookie = ll.session
 r = await plus.post('/api/team/invite', { email: `paul-${stamp}@exemple.test` })
 check('Pro+ : inviter passe', r.status === 201 || r.status === 200, r)
 const paulToken = String(r.body.link ?? '').split('/').pop()
+r = await new Client().get(`/api/auth/invitation/${paulToken}`)
+check('invitation : la page sait que le Compte Lead est branché, et que Paul n’a pas de mot de passe ProjectLead',
+  r.status === 200 && r.body.leadId === true && r.body.hasPassword === false, r.body)
 r = await new Client().post(`/api/auth/invitation/${paulToken}/accept`, { name: 'Paul', password: 'motdepasse-solide' })
-check('Pro+ : Paul accepte l’invitation', r.status === 200, r)
-ll = await leadLogin((n) => ({ ...lead(n, false, `paul-org-${stamp}`), sub: `sub-paul-${stamp}`, email: `paul-${stamp}@exemple.test`, org_role: 'admin' }))
+check('Compte Lead branché : pas de nouveau mot de passe ProjectLead pour accepter (403 invitation_via_lead)', r.status === 403 && r.body.error === 'invitation_via_lead', r)
+const paulLead = (n: string) => ({ ...lead(n, false, `paul-org-${stamp}`), sub: `sub-paul-${stamp}`, email: `paul-${stamp}@exemple.test`, org_role: 'admin' })
+// Une autre adresse que celle de l'invitation : elle n'est pas prise, la page de l'invitation le dit.
+ll = await leadLogin((n) => ({ ...paulLead(n), sub: `sub-paul-autre-${stamp}`, email: `paul-autre-${stamp}@exemple.test`, org: `paul-autre-org-${stamp}` }),
+  `?next=/invitation/${paulToken}`)
+r = await pool.query('select accepted_at from invitations where token_hash = $1', [hashTokenSmoke(paulToken)])
+check('invitation ouverte avec un Compte Lead d’une autre adresse : pas prise, retour sur l’invitation avec le message',
+  ll.location === `/invitation/${paulToken}?erreur=adresse` && r.rows[0]?.accepted_at === null, { loc: ll.location, row: r.rows[0] })
+ll = await leadLogin(paulLead, `?next=/invitation/${paulToken}`)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
 const plusPlan = (await pool.query('select plan from accounts where lead_org = $1', [plusOrg])).rows[0]?.plan
-check('membre venu d’une organisation gratuite : il entre dans l’entreprise Pro+, dont la formule reste Pro+',
-  r.status === 200 && r.body.plan?.tier === 'pro_plus' && plusPlan === 'pro_plus', { plan: r.body.plan, plusPlan })
+check('Pro+ : Paul accepte l’invitation avec son Compte Lead, sans mot de passe, et entre dans l’entreprise Pro+ (formule gardée)',
+  ll.location === '/' && r.status === 200 && r.body.account?.lead_org === plusOrg && r.body.plan?.tier === 'pro_plus' && plusPlan === 'pro_plus',
+  { loc: ll.location, account: r.body.account, plan: r.body.plan?.tier, plusPlan })
+r = await pool.query('select accepted_at from invitations where token_hash = $1', [hashTokenSmoke(paulToken)])
+check('l’invitation est prise (une seule fois)', r.rows[0]?.accepted_at !== null, r.rows[0])
+ll = await leadLogin(paulLead)
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('arrivée suivante de Paul depuis une autre application : l’espace de SON organisation, jamais celui d’une autre entreprise',
+  r.status === 200 && r.body.account?.lead_org === `paul-org-${stamp}`, r.body.account)
 // Une entreprise d'avant le Compte Lead ne se lie pas à l'organisation personnelle d'un simple membre.
 const localAcc = (await pool.query(`insert into accounts (name) values ('Atelier local ${stamp}') returning id`)).rows[0].id
 const localAdmin = (await pool.query(`insert into users (email, name) values ($1, 'Admin local') returning id`, [`admin-local-${stamp}@exemple.test`])).rows[0].id
@@ -723,6 +765,17 @@ ll = await leadLogin((n) => ({ ...lead(n, false, `marc-org-${stamp}`), sub: `sub
 r = await pool.query('select lead_org, plan from accounts where id = $1', [localAcc])
 check('entreprise locale : un simple membre ne la lie pas à son organisation gratuite (et elle naît en Gratuit, plus en Pro)',
   ll.session.length > 30 && r.rows[0].lead_org === null && r.rows[0].plan === 'free', { row: r.rows[0], loc: ll.location })
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('… et il entre dans l’espace de SON organisation, pas dans l’entreprise locale', r.body.account?.lead_org === `marc-org-${stamp}`, r.body.account)
+// L'administratrice d'une entreprise d'avant le Compte Lead, administratrice chez ERPlead aussi : l'entreprise devient la sienne.
+const oldAcc = (await pool.query(`insert into accounts (name) values ('Atelier ancien ${stamp}') returning id`)).rows[0].id
+const oldAdmin = (await pool.query(`insert into users (email, name) values ($1, 'Admin ancienne') returning id`, [`admin-ancienne-${stamp}@exemple.test`])).rows[0].id
+await pool.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin')`, [oldAcc, oldAdmin])
+ll = await leadLogin((n) => ({ ...lead(n, false, `ancienne-org-${stamp}`), sub: `sub-ancienne-${stamp}`, email: `admin-ancienne-${stamp}@exemple.test`, org_role: 'admin' }))
+r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
+check('entreprise d’avant le Compte Lead, administratrice des deux côtés : reliée à son organisation, aucun espace en plus',
+  r.body.account?.id === oldAcc && r.body.account?.lead_org === `ancienne-org-${stamp}`
+  && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [`ancienne-org-${stamp}`])).rows[0].n === 1, r.body.account)
 // Une invitation en attente quand la formule baisse : son acceptation est refusée, puis une réactivation aussi.
 r = await plus.post('/api/team/invite', { email: `yves-${stamp}@exemple.test` })
 const yvesToken = String(r.body.link ?? '').split('/').pop()
@@ -730,6 +783,11 @@ entitlementsByOrg[plusOrg] = rights('free')
 await refreshLeadPlans()
 r = await new Client().post(`/api/auth/invitation/${yvesToken}/accept`, { name: 'Yves', password: 'motdepasse-solide' })
 check('formule descendue en gratuit : une ancienne invitation ne fait plus entrer (402)', r.status === 402 && r.body.error === 'plan_limit_seats', r)
+ll = await leadLogin((n) => ({ ...lead(n, false, `yves-org-${stamp}`), sub: `sub-yves-${stamp}`, email: `yves-${stamp}@exemple.test`, org_role: 'admin' }),
+  `?next=/invitation/${yvesToken}`)
+check('… ni par le Compte Lead : écran « places prises », pas de session, invitation gardée',
+  ll.location === `/login?erreur=places&next=${encodeURIComponent(`/invitation/${yvesToken}`)}` && !ll.session
+  && (await pool.query('select accepted_at from invitations where token_hash = $1', [hashTokenSmoke(yvesToken)])).rows[0]?.accepted_at === null, ll)
 const paulId = (await pool.query('select id from users where lower(email) = lower($1)', [`paul-${stamp}@exemple.test`])).rows[0].id
 r = await plus.patch(`/api/team/members/${paulId}`, { active: false })
 check('désactiver une personne passe', r.status === 200, r)
@@ -801,6 +859,9 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   const bob = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
   const me = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).status
   check('deux personnes de la même organisation connectées', (await me(boss.session)) === 200 && (await me(bob.session)) === 200)
+  const accountOf = async (cookie: string) => (await new Client().req('GET', '/api/me', undefined, { cookie })).body?.account?.id
+  check('… dans le même espace, celui de leur organisation (rejoint, pas un second espace)', (await accountOf(boss.session)) === (await accountOf(bob.session))
+    && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [org])).rows[0].n === 1)
   const logoutToken = (sub: string, over: Record<string, unknown> = {}, key = privateKey) => {
     const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
     const iat = Math.floor(Date.now() / 1000)
@@ -824,7 +885,60 @@ section('Départ d’une personne : OpenID Back-Channel Logout')
   check('rejouer le départ ne casse rien', (await post(logoutToken(`bob-${stamp}`))) === 200)
   check('dernier administrateur : sa session tombe, il reste actif', (await post(logoutToken(`boss-${stamp}`))) === 200 && (await me(boss.session)) === 401
     && (await pool.query(`select au.active from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`boss-${stamp}`])).rows[0]?.active === true)
+  // ERPlead la laisse revenir dans la même organisation : elle reprend sa place, sans administrateur ni écran (db/009_passage.sql).
+  const back = await leadLogin((n) => person(n, `bob-${stamp}`, 'user'))
+  const again = (await pool.query(`select au.active, au.lead_disabled from account_users au join users u on u.id = au.user_id where u.lead_sub = $1`, [`bob-${stamp}`])).rows
+  check('revenue chez ERPlead dans la même organisation : elle rentre dans l’espace, place reprise', back.location === '/' && (await me(back.session)) === 200
+    && again.length === 1 && again[0].active === true && again[0].lead_disabled === false, { loc: back.location, again })
 }
+section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six applications, adresses d’entrée')
+{
+  const { existsSync, readFileSync } = await import('node:fs')
+  const { homedir } = await import('node:os')
+  const { createElement } = await import('react')
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const { LEAD_FAMILY, HERE_APP } = await import('../src/lib/leadFamily.js')
+  const { default: AppSwitcher } = await import('../src/components/AppSwitcher.js')
+  // La copie de référence (banc lead-e2e), sinon la conception du passage ; chaque dépôt garde une copie identique.
+  const refs = [process.env.LEAD_FAMILY_JSON, `${homedir()}/projets/lead-e2e/lead-family.json`, `${homedir()}/projets/.unlazy/lead-vercel/passage-design.json`]
+  const ref = refs.find((f) => f && existsSync(f))
+  if (ref) {
+    const raw = JSON.parse(readFileSync(ref, 'utf8'))
+    const fam = raw.apps ? raw : raw.family
+    check(`src/lib/leadFamily.ts identique à la liste de référence (${ref.replace(homedir(), '~')})`, JSON.stringify(fam) === JSON.stringify(LEAD_FAMILY))
+  } else console.log('  (lead-family.json absent : seule la forme attendue est contrôlée)')
+  const CODES = ['erplead', 'scanlead', 'crmlead', 'projectlead', 'invoicelead', 'greetlead']
+  check('six applications, dans l’ordre ERPlead, Scanlead, CRMlead, ProjectLead, InvoiceLead, Greetlead', JSON.stringify(LEAD_FAMILY.apps.map((a) => a.code)) === JSON.stringify(CODES))
+  check('adresses d’entrée : /login de chaque application (ERPlead : /account), jamais une racine publique',
+    LEAD_FAMILY.apps.every((a) => a.entry === (a.code === 'erplead' ? 'https://erplead.io/account' : `${a.origin}/login`)), LEAD_FAMILY.apps.map((a) => a.entry))
+  check('ProjectLead se reconnaît : PL, #9a6a00, https://projectlead.io/login', HERE_APP === 'projectlead'
+    && LEAD_FAMILY.apps.some((a) => a.code === 'projectlead' && a.mark === 'PL' && a.color === '#9a6a00' && a.entry === 'https://projectlead.io/login'))
+  const closed = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'fr' }))
+  check('bouton à 9 points : data-lead-launcher, « Applications Lead », panneau fermé', /<button[^>]*data-lead-launcher[^>]*aria-label="Applications Lead"[^>]*title="Applications Lead"/.test(closed)
+    && (closed.match(/<circle/g) ?? []).length === 9 && !closed.includes('data-lead-app'), closed.slice(0, 300))
+  const html = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'fr', initialOpen: true }))
+  const rows = [...html.matchAll(/<(a|div) data-lead-app="([a-z]+)"([^>]*)>/g)].map((m) => ({ tag: m[1], code: m[2], attrs: m[3] }))
+  check('lanceur ouvert : 6 entrées data-lead-app, dans l’ordre de la liste', JSON.stringify(rows.map((x) => x.code)) === JSON.stringify(CODES), rows.map((x) => x.code))
+  check('chaque autre application : un lien simple vers son adresse d’entrée, même onglet', rows.filter((x) => x.code !== 'projectlead').every((x) =>
+    x.tag === 'a' && x.attrs.includes(`href="${LEAD_FAMILY.apps.find((a) => a.code === x.code)!.entry}"`) && !x.attrs.includes('target=')), rows)
+  const here = rows.find((x) => x.code === 'projectlead')
+  check('ProjectLead : « Vous êtes ici », aria-current="page", sans lien', here?.tag === 'div' && here.attrs.includes('aria-current="page"') && !here.attrs.includes('href')
+    && html.includes('Vous êtes ici') && (html.match(/Ouvrir →/g) ?? []).length === 5, here)
+  check('marques et couleurs de la famille, actions en français', LEAD_FAMILY.apps.every((a) => html.includes(`background:${a.color}`) && html.includes(`>${a.mark}<`)
+    && html.includes(a.do.fr.replace(/'/g, '&#x27;'))), html.slice(0, 400))
+  check('aucune entrée cachée ni bloquée par la formule : ni « Bientôt », ni « Passer à », ni lien de formule', !/Bientôt|Passer à|Mettre à niveau|reglages\/entreprise|upgrade/i.test(html))
+  check('titre APPLICATIONS LEAD, panneau de 320 px, fixe à 16 px des bords sous 480 px', html.includes('>Applications Lead</p>') && html.includes('uppercase')
+    && html.includes('min-[480px]:w-80') && html.includes('fixed left-4 right-4 top-16') && html.includes('overflow-y-auto'))
+  const de = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'de-CH', initialOpen: true }))
+  const xx = renderToStaticMarkup(createElement(AppSwitcher, { locale: 'pt', initialOpen: true }))
+  check('langues fr/de/en/it/es, le français par défaut', de.includes('Sie sind hier') && de.includes('Lead-Apps') && xx.includes('Vous êtes ici'))
+  const layout = readFileSync(new URL('../src/components/Layout.tsx', import.meta.url), 'utf8')
+  check('l’en-tête de l’espace porte le lanceur, à gauche du menu de la personne, et data-lead-org', /<AppSwitcher[^>]*\/>\s*<UserMenu \/>/.test(layout)
+    && layout.includes('data-lead-org={me?.account.lead_org'))
+  const login = readFileSync(new URL('../src/pages/Login.tsx', import.meta.url), 'utf8')
+  check('écran de connexion : « Le même compte pour toutes les applications Lead. »', login.includes('Le même compte pour toutes les applications Lead.'))
+}
+
 section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
 {
   const { signPayload, own } = await import('../server/lib/stripe.js')

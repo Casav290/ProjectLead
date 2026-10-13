@@ -20,7 +20,7 @@ const PRIVACY: { title: string; intro: string; sections: Section[] } = {
   intro: `ProjectLead est un logiciel de gestion de projet édité par ${PUBLISHER}. Cette page explique quelles données ProjectLead traite, pourquoi, où elles vont et combien de temps elles restent. Contact : ${CONTACT}.`,
   sections: [
     { h: '1. Données traitées', p: [[
-      'Compte : nom, adresse e-mail, entreprise, rôle. La connexion passe par le Compte Lead (commun à Scanlead, CRMlead, ProjectLead et InvoiceLead) ; un mot de passe local, quand il existe, est enregistré sous forme d\'empreinte, jamais en clair.',
+      'Compte : nom, adresse e-mail, entreprise, rôle. La connexion passe par le Compte Lead (ERPlead, commun à toutes les applications Lead) ; un mot de passe local, quand il existe, est enregistré sous forme d\'empreinte, jamais en clair.',
       'Données de travail saisies ou importées par les utilisateurs : projets, étapes, tâches, commentaires, pièces jointes, temps passé, taux horaires, budgets, modèles, notes.',
       'Clients et contacts : nom, fonction, e-mail, téléphone, adresse, saisis dans ProjectLead ou repris de CRMlead et d\'InvoiceLead.',
       'Demandes et rendez-vous reçus par les pages publiques (formulaire de demande, prise de rendez-vous) : nom, e-mail, téléphone et message laissés par la personne.',

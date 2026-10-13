@@ -4,6 +4,7 @@ import { api, errorText } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Button, Input, Spinner } from '../components/ui'
 import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
+import { leadEntry } from '../lib/leadFamily'
 
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
@@ -13,6 +14,21 @@ const ERRORS: Record<string, string> = {
   // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
   formule: 'La connexion doit être refaite. Réessayez.',
   lead_non_configure: "Le Compte Lead n'est pas encore branché sur ce serveur.",
+}
+
+/**
+ * Les arrivées refusées sans autre issue (server/routes/auth.ts, ArrivalRefused) : jamais d'espace à part, un écran qui
+ * dit quoi faire. Pas de nouveau départ automatique : il redonnerait le même refus.
+ */
+const REFUSED: Record<string, { title: string; text: string }> = {
+  places: {
+    title: 'Toutes les places ProjectLead de votre entreprise sont prises',
+    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Un administrateur peut libérer une place (Réglages → Équipe) ou prendre une formule avec plus de places (Réglages → Entreprise).',
+  },
+  desactive: {
+    title: 'Votre accès à ProjectLead est désactivé',
+    text: 'Un administrateur de votre entreprise a désactivé votre accès à ProjectLead. Demandez-lui de le réactiver (Réglages → Équipe).',
+  },
 }
 
 /** L'adresse de départ vers le Compte Lead, avec la page demandée pour y revenir ensuite. */
@@ -55,6 +71,18 @@ export default function Login() {
 
   if (leadId === null || direct) return <AuthShell><Spinner label="Connexion au Compte Lead…" /></AuthShell>
 
+  if (leadId && REFUSED[code]) {
+    return (
+      <AuthShell title={REFUSED[code].title}>
+        <p role="alert" className="mb-6 text-sm text-muted-foreground">{REFUSED[code].text}</p>
+        <a href={leadStart(next)} data-testid="lead-login"
+          className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
+          Réessayer</a>
+        <AuthSwitch><a href={leadEntry('erplead')} className={authLink}>Retour à mon Compte Lead</a></AuthSwitch>
+      </AuthShell>
+    )
+  }
+
   if (leadId && !withEmail) {
     return (
       <AuthShell title="Connexion">
@@ -62,7 +90,7 @@ export default function Login() {
         <a href={leadStart(next)} data-testid="lead-login"
           className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
           {code === 'email' ? 'J\'ai confirmé mon adresse, entrer' : 'Réessayer avec mon Compte Lead'}</a>
-        <p className="mt-3 text-center text-sm text-muted-foreground">Le même compte pour Scanlead, CRMlead, ProjectLead et InvoiceLead.</p>
+        <p className="mt-3 text-center text-sm text-muted-foreground">Le même compte pour toutes les applications Lead.</p>
         <AuthSwitch><Link to="/login?acces=email" className={authLink}>Se connecter avec un e-mail et un mot de passe</Link></AuthSwitch>
       </AuthShell>
     )
