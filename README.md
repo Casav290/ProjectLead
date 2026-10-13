@@ -51,8 +51,11 @@ npm run build
 
 `npm test` déroule les parcours de bout en bout (inscription, invitation, projets depuis un modèle,
 tâches et dépendances, temps, suivi client, page publique, rendez-vous, emails → projet, formulaire,
-CRMlead, InvoiceLead, échange du Compte Lead, isolation des entreprises, API) contre de faux CRMlead,
-InvoiceLead et Compte Lead lancés en local.
+CRMlead, InvoiceLead, échange du Compte Lead, isolation des entreprises, API, abonnement ProjectLead et
+webhook Stripe) contre de faux CRMlead, InvoiceLead, Compte Lead et Stripe lancés en local.
+
+Abonnement en mode test Stripe réel, navigateur sans tête : `node scripts/stripe-setup.mjs --portal …` (clé
+de test), puis `scripts/e2e-abonnement.mjs` (en-tête du fichier) → `E2E_ABONNEMENT_OK`.
 
 ## Variables d'environnement
 
@@ -65,6 +68,10 @@ eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Co
 `/api/tasks/run`, appelé par le Cron de Vercel : boîtes mail, agendas, suivis automatiques, rappels
 d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine de l'adresse de capture : à poser seulement quand son MX mène à un relais qui poste sur
 `/api/inbound/<jeton>` ; sans lui, aucune adresse n'est affichée, seul le point d'entrée du relais l'est).
+Abonnement ProjectLead (Stripe, Production seulement) : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY`, `STRIPE_PRICE_PROPLUS_MONTHLY`, `STRIPE_PRICE_PROPLUS_YEARLY`,
+`STRIPE_PORTAL_CONFIGURATION` ; sans elles, les boutons de paiement sont masqués et le webhook répond 503
+(`docs/PASSATION.md`, « Abonnement ProjectLead »).
 
 ## Mise en ligne
 

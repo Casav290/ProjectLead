@@ -8,7 +8,8 @@ import { leadStart } from './Login'
 
 /**
  * Inscription. Avec le Compte Lead branché, elle se fait là-bas (écran « Créer un compte » du
- * Compte Lead), comme pour InvoiceLead : la formule de la famille décide ensuite de l'accès. Le
+ * Compte Lead), comme pour InvoiceLead : tout compte entre en Gratuit, et la formule ProjectLead (prise dans
+ * ProjectLead, Réglages → Entreprise) fixe ensuite les quantités. Le
  * formulaire local ne sert qu'aux serveurs sans Compte Lead (développement, essais).
  */
 export default function Signup() {

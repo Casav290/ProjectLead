@@ -4,7 +4,8 @@ import { open } from './mailbox/secret.js'
 import { outboundUrlProblem } from './netguard.js'
 
 /**
- * InvoiceLead, la facturation de la famille (API REST v1, clé `il_live_…`, formule Pro+).
+ * InvoiceLead, la facturation de la famille (API REST v1, clé `il_live_…`, formule Pro+ d'InvoiceLead, prise dans
+ * InvoiceLead : un abonnement ProjectLead ne l'ouvre pas).
  * ProjectLead y crée des **brouillons** : la personne les relit et les émet dans InvoiceLead,
  * qui calcule la TVA, la QR-facture et passe les écritures. Rien n'est émis d'ici.
  */

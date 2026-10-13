@@ -32,7 +32,8 @@ Il reste un geste **côté CRMlead** pour l'allumer : une migration qui passe `p
 
 ## InvoiceLead : la facturation mensuelle
 
-1. Dans **InvoiceLead → Réglages → API** (formule Pro+), créer une clé `il_live_…`.
+1. Dans **InvoiceLead → Réglages → API** (formule Pro+ d'InvoiceLead, prise dans InvoiceLead : un abonnement
+   ProjectLead ne l'ouvre pas), créer une clé `il_live_…`.
 2. Dans **ProjectLead → Réglages → Intégrations → InvoiceLead**, poser l'adresse
    (`https://invoicelead.io`), la clé et la langue des factures.
 3. Sur chaque projet, choisir le mode de facturation : à l'heure (taux du projet, sinon de la

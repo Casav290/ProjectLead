@@ -14,8 +14,8 @@ Version 3, 13.10.2026 (hébergement Vercel).
 | Domaine | `projectlead.io` (Porkbun) : `A @ → 76.76.21.21`, `CNAME www → cname.vercel-dns.com` (Vercel) |
 | Emails sortants | Resend, domaine `projectlead.io`, comme InvoiceLead |
 | Connexion | Compte Lead (CRMlead), tout droit comme InvoiceLead ; email et mot de passe en secours |
-| Formules | Tout compte entre, même gratuit (Ève, 02.10) ; Gratuit 3 projets en cours et 1 personne, Pro sans limite de projets, Pro+ 5 personnes (`server/lib/plans.ts`) |
-| Facturation | Brouillons mensuels dans InvoiceLead par son API (clé `il_live_…`, Pro+) |
+| Formules | Tout compte entre, même gratuit (Ève, 02.10) ; Gratuit 3 projets en cours et 1 personne, Pro sans limite de projets (19 €/mois, 190 €/an), Pro+ 5 personnes (39 €/mois, 390 €/an) (`server/lib/plans.ts`). Chaque application vend sa propre formule (Ève, 13.10) : celle de ProjectLead se prend dans ProjectLead (Stripe Checkout, portail) et ne vaut qu'ici |
+| Facturation | Brouillons mensuels dans InvoiceLead par son API (clé `il_live_…`, formule Pro+ d'InvoiceLead, prise dans InvoiceLead) |
 | Adresses | CRMlead par son API (clé `crm_…`) ; affaires gagnées reçues par l'échange du Compte Lead |
 
 ## Étapes

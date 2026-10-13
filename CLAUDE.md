@@ -24,7 +24,8 @@ une nouvelle table lue par l'application doit être ajoutée à la boucle de `00
 
 Code repris de CRMlead, à garder aligné : `server/lib/mailbox/*` (Gmail, Microsoft 365, IMAP ; seul
 `index.ts` est propre à ProjectLead), `server/lib/icsparse.ts`, `server/lib/time.ts`,
-`server/lib/netguard.ts`, `server/lib/leadId.ts` (kit du Compte Lead), `trait-net/`.
+`server/lib/netguard.ts`, `server/lib/leadId.ts` (kit du Compte Lead), `server/lib/stripe.ts` (modèle de
+l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/`.
 
 ## Commandes
 
@@ -39,5 +40,9 @@ Code repris de CRMlead, à garder aligné : `server/lib/mailbox/*` (Gmail, Micro
 - Le temps facturé ne se modifie plus.
 - Tout compte du Compte Lead entre, même en formule gratuite : la formule ne fixe que des quantités
   (`server/lib/plans.ts`), et une limite bloque une action, jamais des données déjà créées.
+- La formule ProjectLead se prend dans ProjectLead et ne vaut qu'ici (Ève, 13.10.2026) : Stripe Checkout et
+  portail (`server/routes/billing.ts`). Le compte Stripe est partagé par toutes les applications Lead : ne créer,
+  lire, modifier ou annuler QUE des objets `metadata.app = projectlead` ; jamais `client_reference_id`. Un
+  événement d'une autre application reçoit 200 sans aucune écriture (`own`, `server/lib/stripe.ts`).
 - Les pages publiques (`/suivi`, `/rdv`, `/demande`) ne rendent que ce qui est destiné au client : ni compte,
   ni jeton, ni email interne, ni ce qui n'est pas coché « visible par le client ».

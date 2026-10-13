@@ -1,4 +1,4 @@
-# Passation ProjectLead (02.10.2026, hébergement mis à jour le 13.10.2026)
+# Passation ProjectLead (02.10.2026, hébergement et abonnement mis à jour le 13.10.2026)
 
 À lire en premier par la session qui reprend. Ensuite : `CLAUDE.md`, `docs/PLAN.md`, `README.md`.
 
@@ -15,7 +15,8 @@ ne jamais lui demander d'autorisation.
 - Code : `Casav290/ProjectLead`. PR #2 fusionnée le 02.10 par Ève (commit `ae16a58`) : tout le travail
   du 01.10 est dans `main` (connexion comme InvoiceLead, pages légales, accessibilité, chargement
   découpé, jetons de tâches, formule relue chaque jour).
-- Contrôles locaux : `npm run typecheck`, `npm test` (144 verts, sur `TEST_DATABASE_URL`), `npm run build`.
+- Contrôles locaux : `npm run typecheck`, `npm test` (tout vert, sur `TEST_DATABASE_URL`), `npm run build` ;
+  abonnement en mode test Stripe : `scripts/e2e-abonnement.mjs`.
 - Contrôle en ligne : `.github/workflows/verifier-en-ligne.yml`, sur https://projectlead.io, à chaque
   envoi et chaque matin. `scripts/e2e-prod.mjs` ne crée plus rien en production (13 points :
   santé, carte de visite, inscription fermée, départ vers le Compte Lead, écran d'erreur en ocre,
@@ -30,16 +31,22 @@ Trait net, ocre). L'inscription locale est fermée quand le Compte Lead est bran
 signup_via_lead`).
 
 **Règle d'Ève (02.10.2026) : tout compte, même gratuit, entre dans toutes les applications, en
-formule gratuite.** ProjectLead ne refuse donc personne : la formule du Compte Lead fixe seulement les
-quantités (`server/lib/plans.ts`) : Gratuit 3 projets en cours à la fois et 1 personne, Pro projets sans
-limite (1 personne), Pro+ 5 personnes. Les demandes à qualifier, projets terminés, archivés et modèles ne
+formule gratuite.** ProjectLead ne refuse donc personne : la formule fixe seulement les quantités
+(`server/lib/plans.ts`) : Gratuit 3 projets en cours à la fois et 1 personne, Pro projets sans limite
+(1 personne), Pro+ 5 personnes. Les demandes à qualifier, projets terminés, archivés et modèles ne
 comptent pas. Une limite bloque une action (402 `plan_limit_projects` ou `plan_limit_seats`, avec le lien
-de mise à niveau), jamais les données déjà créées. Une affaire gagnée reçue quand la formule est pleine
-arrive « à qualifier ». Les entreprises sans Compte Lead (anciens accès locaux) n'ont pas de limite.
-Réglages → Entreprise montre la formule et son usage ; la page Projets le rappelle en gratuit. L'e-mail et le mot de
-passe restent en secours sur `/login?acces=email` pour les accès créés avant le Compte Lead.
-Chaque jour, la formule de chaque entreprise liée est relue au Compte Lead (`refreshLeadPlans`) :
-une formule prise ou résiliée ailleurs change les limites le jour même ; personne n'est mis dehors.
+vers Réglages → Entreprise), jamais les données déjà créées. Une affaire gagnée reçue quand la formule est
+pleine arrive « à qualifier ». Les entreprises sans Compte Lead (anciens accès locaux) n'ont pas de limite.
+L'e-mail et le mot de passe restent en secours sur `/login?acces=email` pour les accès créés avant le Compte Lead.
+
+**Règle d'Ève (13.10.2026) : chaque application vend son propre abonnement, valable chez elle seule.** La
+formule ProjectLead se prend dans ProjectLead (Réglages → Entreprise, voir « Abonnement ProjectLead »
+ci-dessous). Un abonnement CRMlead, Scanlead, InvoiceLead ou Greetlead n'ouvre plus rien ici. Transition : un
+abonnement payé ailleurs AVANT la bascule garde Pro ou Pro+ ici jusqu'à la fin de sa période déjà payée, date
+figée par ERPlead (`family_until`), sans grâce ; ensuite Gratuit. Seul abonné concerné au 13.10 : Quantum Liquid
+(CRMlead Pro), jusqu'au 25.10.2026 à 11:40 UTC ; il n'a pas d'entreprise dans ProjectLead.
+Chaque jour, la formule ProjectLead de chaque entreprise liée est relue au Compte Lead (`refreshLeadPlans`,
+jeton `billing` de ProjectLead : ERPlead calcule la formule de CETTE application) ; personne n'est mis dehors.
 
 ## Accès à GitHub depuis le VPS
 
@@ -104,6 +111,50 @@ n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
 - **Contrôle connecté** : `node ~/tmp/projectlead-vercel/e2e-connexion.mjs` (navigateur sans tête, compte
   « TEST Boulangerie Favre » du banc, connexion par ERPlead, écran Projets, console sans erreur).
 
+## Abonnement ProjectLead (Stripe), depuis le 13.10.2026
+
+Branche `abonnement-par-app` (worktree `~/projets/projectlead-abonnement`), à fusionner dans `vercel` après
+ERPlead (calcul par application) et le garde du webhook ScanLead.
+
+- **Modèle** : CRMlead (`crmlead-vercel/server/routes/billing.ts`). Code : `server/lib/stripe.ts` (Stripe sans
+  SDK, filtre `own`), `server/lib/subscription.ts` (client, état, déclaration à ERPlead, relecture du jour),
+  `server/routes/billing.ts` (routes et webhook), `db/008_billing.sql`, carte `src/components/PlanCard.tsx`.
+- **Formule** = la meilleure de (a) celle qu'ERPlead calcule pour ProjectLead (`accounts.plan`, avec
+  `plan_source` own/family/free et `plan_valid_until` : passée, elle ne compte plus, même sans relecture) et
+  (b) l'abonnement local (`billing_subscriptions`, statuts active/trialing/past_due, 3 jours de grâce).
+- **Compte Stripe partagé** (acct_1TRVTg… « scanlead.io », avec ScanLead, CRMlead, InvoiceLead, Greetlead) :
+  ProjectLead ne touche qu'aux objets `metadata.app = projectlead`. Client Stripe propre à chaque entreprise
+  (clé d'idempotence `projectlead-customer-<compte>`), jamais retrouvé par e-mail. Checkout : metadata et
+  subscription_data.metadata {app, account_id, plan, interval}, carte seule, adresse et TVA ; jamais
+  `client_reference_id` (ScanLead annule ce qu'il ne reconnaît pas). Portail : configuration propre
+  (`STRIPE_PORTAL_CONFIGURATION`), jamais celle par défaut (ScanLead).
+- **Webhook** `POST /api/stripe/webhook` (avant la garde de session, corps brut) : signature, filtre `own`
+  (événement d'une autre application → 200 `other_app`, AUCUNE écriture, aucun appel à Stripe), abonnement relu
+  chez Stripe (l'état le plus récent fait foi), effet et inscription dans `stripe_events` dans une transaction
+  (rejoué → `duplicate`), puis déclaration à ERPlead (`reportSubscription`) et formule recopiée. Stripe en panne :
+  502, rien d'inscrit, Stripe renvoie. ERPlead en panne : Pro effectif quand même, `erplead_synced_at` nul, tâche
+  `billing_sync` toutes les 10 minutes. Tâche `billing_reconcile` chaque jour : relecture Stripe et redéclaration.
+  Paiement échoué : notification aux administrateurs dans ProjectLead (aucun e-mail).
+- **Gratuit par défaut** : `accounts.plan` naît `free` ; 008 repasse en Gratuit les entreprises sans
+  organisation Lead restées en Pro (27 comptes de contrôle du 01.10, sans paiement).
+- **Effacer une entreprise abonnée** est refusé par la base (clé étrangère) : passer d'abord par
+  `cancelAccountSubscriptions` (résilie ses seuls abonnements ProjectLead). Aucune route ne supprime d'entreprise.
+- **Variables** (Vercel, **Production seulement**, jamais en Preview) : `STRIPE_SECRET_KEY` (clé du compte, comme
+  CRMlead ; une clé live est ignorée hors production), `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO_MONTHLY`,
+  `STRIPE_PRICE_PRO_YEARLY`, `STRIPE_PRICE_PROPLUS_MONTHLY`, `STRIPE_PRICE_PROPLUS_YEARLY`,
+  `STRIPE_PORTAL_CONFIGURATION`. Sans elles : boutons de paiement masqués, webhook 503.
+- **Objets Stripe** : `STRIPE_SECRET_KEY=… node scripts/stripe-setup.mjs --app projectlead --live --portal
+  https://projectlead.io/reglages/entreprise --webhook https://projectlead.io/api/stripe/webhook --secret-file
+  <fichier 600>` (idempotent ; le secret whsec n'est jamais affiché, il va dans le fichier puis dans Vercel).
+  Mode test : mêmes objets créés le 13.10 sur le compte de test (prix `price_1UQ0dA…`, portail `bpc_1UQ0dD…`).
+- **Contrôles** : `npm test` (section « Abonnement ProjectLead » : isolation, signature, idempotence, ordre,
+  ERPlead et Stripe en panne, concurrence, règle par application) ; parcours réel en mode test :
+  `scripts/e2e-abonnement.mjs` (Checkout 4242 en navigateur sans tête, rejeu signé par `scripts/stripe-replay.mjs`,
+  portail, résiliation) → `E2E_ABONNEMENT_OK`.
+- **Retour arrière** : retirer les variables `STRIPE_PRICE_*` (boutons masqués, webhook 503 ; Stripe réessaie 3
+  jours) ou revenir au commit précédent de `vercel`. La migration 008 est additive ; l'ancien code ignore ses
+  colonnes (seul le défaut `free` et le passage en Gratuit des 27 comptes de contrôle restent).
+
 ## Fait le 01.10
 
 - Domaine projectlead.io : répond (`/api/health`), contrôle en ligne et README dessus.
@@ -118,6 +169,9 @@ n'a pas bougé : elle reste dans son projet Neon, comme celle d'InvoiceLead.
 
 ## Ce qui reste, dans l'ordre
 
+0. **Abonnement ProjectLead en ligne** (ordre du chantier « un abonnement par app ») : garde du webhook ScanLead
+   en production, ERPlead par application en production, objets Stripe live et variables Production (voir
+   « Abonnement ProjectLead »), puis fusion de `abonnement-par-app` dans `vercel` (fetch, rebase, push).
 1. **Après Vercel (13.10.2026), ce qu'Ève pourra supprimer quand elle voudra** (rien n'a été effacé) : la
    fonction Neon `projectlead` (aujourd'hui un simple renvoi) et ses deux domaines personnalisés Neon (projectlead.io, www), le jeton
    « cron du VPS » de `task_tokens`, `~/bin/projectlead-cron.sh` et `~/.projectlead-task-secret` du VPS,
