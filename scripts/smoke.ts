@@ -581,6 +581,13 @@ const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
 let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
 check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
+{
+  // Le retour d'ERPlead arrive sur l'adresse sans www : un départ depuis www y est renvoyé avant de poser son cookie.
+  const w = await app.request('http://www.localhost/auth/lead/start?next=/projets&signup=1')
+  check('départ depuis www : renvoyé vers l’adresse du retour, sans cookie posé sur www',
+    w.status === 302 && w.headers.get('location') === 'http://localhost/auth/lead/start?next=/projets&signup=1' && !w.headers.get('set-cookie'),
+    { status: w.status, location: w.headers.get('location'), cookie: Boolean(w.headers.get('set-cookie')) })
+}
 // Neon Functions ne garde que le dernier Set-Cookie d'une réponse : au retour, la session doit être le seul cookie.
 check('retour du Compte Lead : un seul cookie posé, celui de la session', ll.cookies === 1, ll)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })

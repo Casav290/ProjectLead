@@ -132,6 +132,11 @@ type Saved = { state: string; nonce: string; verifier: string; next?: string }
 // `/auth/lead/login` : même départ, sous le nom que les contrôles de la famille essaient (comme `/auth/lead/start`).
 const startLeadLogin = async (c: any) => {
   if (!leadIdConfigured()) return c.redirect('/login?erreur=lead_non_configure')
+  // Départ depuis www : ERPlead ne revient que sur l'adresse enregistrée (LEAD_ID_REDIRECT_URI, sans www), où le
+  // cookie de départ posé sur www n'arriverait pas (retour en « erreur=session »). On repart donc de cette adresse.
+  const home = callbackOrigin()
+  const here = new URL(c.req.url)
+  if (home && here.hostname === `www.${home.hostname}`) return c.redirect(`${home.origin}${here.pathname}${here.search}`)
   const s = startLogin({ locale: 'fr' })
   // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
   const url = c.req.query('signup') === '1' ? `${s.url}&prompt=create` : s.url
@@ -140,6 +145,9 @@ const startLeadLogin = async (c: any) => {
     next: next?.startsWith('/') && !next.startsWith('//') ? next : undefined } satisfies Saved), cookieSecret(),
     { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: 600 })
   return c.redirect(url)
+}
+function callbackOrigin(): URL | null {
+  try { return new URL(process.env.LEAD_ID_REDIRECT_URI ?? '') } catch { return null }
 }
 app.get('/auth/lead/start', startLeadLogin)
 app.get('/auth/lead/login', startLeadLogin)
