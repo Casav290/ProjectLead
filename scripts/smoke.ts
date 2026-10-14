@@ -106,9 +106,12 @@ const entitlementsByOrg: Record<string, unknown> = {}
 // Les abonnements que ProjectLead lui déclare (POST /api/lead-id/v1/subscriptions), et une panne simulée.
 const declared: any[] = []
 let issuerDown = false
+// Les clés publiées (une rotation les change) et le nombre de lectures du JWKS.
+let publishedKeys: unknown[] = [jwk]
+let jwksReads = 0
 const issuerSrv = createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
-  if (req.url === '/oauth/jwks') return res.end(JSON.stringify({ keys: [jwk] }))
+  if (req.url === '/oauth/jwks') { jwksReads++; return res.end(JSON.stringify({ keys: publishedKeys })) }
   if (req.url === '/api/lead-id/v1/subscriptions' && req.method === 'POST') {
     if (issuerDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
     if (req.headers.authorization !== 'Bearer a') { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
@@ -1158,6 +1161,58 @@ section('Déconnexion dans un navigateur : seulement ses sessions (sid d’ERPle
   check('… sa place se libère dans l’entreprise annoncée seulement ; l’autre entreprise ne change pas',
     places.find((x) => x.account_id === other)?.active === true && places.find((x) => x.account_id !== other)?.active === false, places)
   check('l’administratrice de l’entreprise garde sa session', (await me(owner.session)) === 200)
+}
+
+section('Clés d’ERPlead : une clé inconnue ne fait relire le JWKS qu’une fois toutes les 30 secondes')
+{
+  // Le back-channel et la boîte de réception de l'échange sont publics : un jeton forgé avec un `kid` inventé ne doit
+  // pas faire un appel à ERPlead par requête (comme ScanLead, server/leadId.ts).
+  const logoutToken = (kid = 'k1', key = privateKey) => {
+    const h = b64({ alg: 'RS256', kid, typ: 'JWT' })
+    const iat = Math.floor(Date.now() / 1000)
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', iat, exp: iat + 120, sub: `jwks-inconnue-${stamp}`, lead_status: 'logout',
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} } })
+    return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), key).toString('base64url')}`
+  }
+  const post = async (token: string) => (await app.request('http://localhost/auth/lead/backchannel-logout', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ logout_token: token }) })).status
+  const inbox = async (token: string) => (await new Client().req('POST', '/api/lead-exchange/v1/inbox', {}, { authorization: `Bearer ${token}` })).status
+  // L'émetteur annoncé est le bon (sinon le jeton est refusé avant toute clé) ; seule la clé est inventée.
+  const forged = (kid: string) => `${b64({ alg: 'RS256', kid })}.${b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead' })}.c2ln`
+
+  check('une vraie notification d’ERPlead passe (200)', (await post(logoutToken())) === 200)
+  const before = jwksReads
+  const serial: number[] = []
+  for (let i = 0; i < 10; i++) serial.push(await post(forged(`forged-${i}`)))
+  const burst = await Promise.all(Array.from({ length: 10 }, (_, i) => post(forged(`burst-${i}`))))
+  const viaInbox = await Promise.all(Array.from({ length: 10 }, (_, i) => inbox(forged(`inbox-${i}`))))
+  check('jetons forgés à clé inventée (10 en série, 10 en rafale au back-channel, 10 à la boîte de réception) : tous refusés, au plus une relecture du JWKS',
+    serial.every((s) => s === 400) && burst.every((s) => s === 400) && viaInbox.every((s) => s === 401) && jwksReads - before <= 1,
+    { serial, burst, viaInbox, reads: jwksReads - before })
+  check('… une vraie notification d’ERPlead passe toujours, et un vrai envoi d’échange est reconnu (enveloppe vide → 400, pas 401)',
+    (await post(logoutToken())) === 200 && (await inbox(exchangeJwt())) === 400)
+
+  // Rotation de clé chez ERPlead : la nouvelle clé est lue, mais pas avant 30 s après la dernière lecture.
+  const rotatedPair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const rotated = { ...rotatedPair.publicKey.export({ format: 'jwk' }), kid: 'rotated-key', alg: 'RS256', use: 'sig' }
+  const realNow = Date.now
+  let shift = 0
+  Date.now = () => realNow() + shift
+  try {
+    shift = 2 * 3_600_000 // cache d'une heure échu : une relecture
+    const start = jwksReads
+    const first = await post(logoutToken())
+    check('cache d’une heure échu : une relecture, le jeton est accepté', first === 200 && jwksReads - start === 1, { first, reads: jwksReads - start })
+    publishedKeys = [jwk, rotated]
+    shift += 5_000
+    const early = await post(logoutToken('rotated-key', rotatedPair.privateKey))
+    check('clé tournée, dernière lecture il y a 5 s : pas de nouvelle lecture, jeton refusé (400)', early === 400 && jwksReads - start === 1,
+      { early, reads: jwksReads - start })
+    shift += 26_000
+    const late = await post(logoutToken('rotated-key', rotatedPair.privateKey))
+    check('31 s après la dernière lecture : la nouvelle clé est lue (une lecture de plus) et le jeton accepté', late === 200 && jwksReads - start === 2,
+      { late, reads: jwksReads - start })
+  } finally { Date.now = realNow; publishedKeys = [jwk] }
 }
 
 section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six applications, adresses d’entrée')

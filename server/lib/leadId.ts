@@ -59,17 +59,36 @@ export type Tokens = { access_token: string; id_token: string; refresh_token?: s
 const LEGACY_EXCHANGE_ISSUERS = ['https://crmlead.io']
 
 const jwksCache = new Map<string, { at: number; keys: any[] }>()
-async function publicKey(kid: string, iss: string = issuer()) {
-  const fresh = async () => {
-    const r = await fetch(`${iss}/oauth/jwks`)
-    if (!r.ok) throw new Error(`jwks ${r.status}`)
-    jwksCache.set(iss, { at: Date.now(), keys: (await r.json()).keys })
+// Relecture pour une clé inconnue : au plus une toutes les 30 s, par émetteur. Le back-channel et la boîte de réception
+// de l'échange sont publics : sans ce délai, chaque jeton forgé avec un `kid` inventé ferait un appel à ERPlead (ou à
+// crmlead.io) : amplificateur 1 pour 1. Une vraie rotation de clé est prise en compte dans les 30 s. Les requêtes
+// simultanées partagent la même lecture. Les émetteurs sont ceux qu'on accepte (deux au plus) : les tables restent petites.
+const UNKNOWN_KID_REFRESH_MS = 30_000
+const jwksReadAt = new Map<string, number>()
+const jwksReading = new Map<string, Promise<void>>()
+function readJwks(iss: string): Promise<void> {
+  jwksReadAt.set(iss, Date.now())
+  let reading = jwksReading.get(iss)
+  if (!reading) {
+    reading = (async () => {
+      const r = await fetch(`${iss}/oauth/jwks`)
+      if (!r.ok) throw new Error(`jwks ${r.status}`)
+      jwksCache.set(iss, { at: Date.now(), keys: (await r.json()).keys })
+    })().finally(() => { jwksReading.delete(iss) })
+    jwksReading.set(iss, reading)
   }
+  return reading
+}
+/** Temps écoulé depuis `at` ; une horloge revenue en arrière compte comme « très ancien ». */
+const elapsed = (at: number) => { const d = Date.now() - at; return d < 0 ? Infinity : d }
+async function publicKey(kid: string, iss: string = issuer()) {
   const hit = jwksCache.get(iss)
-  if (!hit || Date.now() - hit.at > 3_600_000) await fresh()
+  if (!hit || elapsed(hit.at) > 3_600_000) await readJwks(iss)
   let jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid)
-  // Clé inconnue : le compte Lead a peut-être tourné sa clé, on relit une fois.
-  if (!jwk) { await fresh(); jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid) }
+  // Clé inconnue : le compte Lead a peut-être tourné sa clé, on relit (pas plus d'une fois toutes les 30 s).
+  if (!jwk && elapsed(jwksReadAt.get(iss) ?? -Infinity) >= UNKNOWN_KID_REFRESH_MS) {
+    await readJwks(iss); jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid)
+  }
   return jwk ? createPublicKey({ key: jwk, format: 'jwk' }) : null
 }
 

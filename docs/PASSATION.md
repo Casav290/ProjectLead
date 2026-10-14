@@ -76,7 +76,7 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   page publique ; ProjectLead « Vous êtes ici » sans lien ; panneau fixe sous 480 px. Points d'accroche des contrôles :
   `data-lead-launcher`, `data-lead-app`, et `data-lead-org` (organisation ERPlead) sur la racine de l'espace.
 - **Contrôles** : `npm test`, sections « Connexion par le Compte Lead », « Départ d'une personne », « Déconnexion
-  dans un navigateur » et « Lanceur de la famille Lead ».
+  dans un navigateur », « Clés d'ERPlead » et « Lanceur de la famille Lead ».
 
 **Arrivée et déconnexion (règle commune des six applications Lead, Ève, 13.10.2026).**
 - **Arrivée** : session ERPlead ouverte → directement dans l'espace de son entreprise (voir plus haut), dans la langue
@@ -100,6 +100,10 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   (`id_token_hint`).
 - **Départ d'une personne** (`lead_status: disabled`) : TOUTES ses sessions tombent, dans toutes les entreprises, et
   sa place se libère dans l'entreprise annoncée.
+- **Clés d'ERPlead** (`server/lib/leadId.ts`, comme ScanLead) : le back-channel et la boîte de réception de l'échange
+  sont publics ; un jeton à clé (`kid`) inconnue ne fait relire le JWKS de l'émetteur qu'une fois toutes les 30 s au
+  plus, une seule lecture à la fois (plus d'appel à ERPlead par jeton forgé). Une vraie rotation de clé est prise en
+  compte dans les 30 s. Contrôle : section « Clés d'ERPlead » de `npm test`.
 - **Adresse confirmée** : ERPlead l'exige pour toutes les applications (`require_verified_email`) ; une personne non
   confirmée voit son écran « Confirmez votre adresse », avec le bouton pour renvoyer le lien.
 - **Lanceur** (audit indépendant CNX-12, CNX-13) : se ferme par Échap (focus rendu au bouton à 9 points), par un clic
