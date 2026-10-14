@@ -638,11 +638,24 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
     if (!loc) break
     url = new URL(loc, url).href
   }
-  check('cookies refusés : un seul passage chez ERPlead, puis la page de connexion « erreur=session » (pas de boucle)',
-    trips === 1 && url === 'http://localhost/login?erreur=session', { trips, url })
+  check('cookies refusés : un seul passage chez ERPlead, puis la page de connexion « erreur=session » qui garde la page demandée (pas de boucle)',
+    trips === 1 && url === `http://localhost/login?erreur=session&next=${encodeURIComponent('/projets')}`, { trips, url })
   const silent = await app.request('http://localhost/auth/lead/callback?error=login_required&state=perdu')
   check('retour d’ERPlead en erreur sans cookie de départ : page de connexion « erreur=session », pas de nouveau départ',
     silent.status === 302 && silent.headers.get('location') === '/login?erreur=session', silent.headers.get('location'))
+  // Plus de 10 minutes sur le formulaire d'ERPlead : le cookie de départ vit une heure ; perdu quand même, le retour
+  // ramène sur l'écran de connexion AVEC la page demandée (« Réessayer » y mène), sans nouveau départ automatique.
+  const deepNext = '/projets/abc?onglet=taches'
+  const slow = await app.request(`http://localhost/auth/lead/start?next=${encodeURIComponent(deepNext)}`)
+  const maxAge = Number(/pl_lead_login=[^;]+;.*?Max-Age=(\d+)/i.exec(slow.headers.get('set-cookie') ?? '')?.[1] ?? 0)
+  check('départ : le cookie de départ vit au moins 30 minutes (formulaire d’ERPlead rempli sans se presser)', maxAge >= 1800, slow.headers.get('set-cookie'))
+  const slowTo = new URL(slow.headers.get('location') ?? 'http://x/')
+  const lost = await app.request(`http://localhost/auth/lead/callback?code=c&state=${encodeURIComponent(slowTo.searchParams.get('state') ?? '')}&iss=x`)
+  check('retour d’ERPlead après expiration du cookie de départ : « erreur=session » avec la page demandée, sans session ni nouveau départ',
+    lost.status === 302 && lost.headers.get('location') === `/login?erreur=session&next=${encodeURIComponent(deepNext)}`
+    && !/projectlead_session=/.test(lost.headers.get('set-cookie') ?? ''), lost.headers.get('location'))
+  const forged = await app.request(`http://localhost/auth/lead/callback?code=c&state=x.${Buffer.from('//evil.test').toString('base64url')}`)
+  check('… une page hors de ProjectLead glissée dans l’état n’est jamais reprise', forged.headers.get('location') === '/login?erreur=session', forged.headers.get('location'))
   // Un retour d'ERPlead en erreur AVEC le cookie de départ (accès refusé, connexion silencieuse impossible) : la page
   // de connexion avec l'erreur et la page demandée, sans session, et jamais un nouveau départ vers ERPlead.
   for (const err of ['login_required', 'access_denied']) {
@@ -795,8 +808,13 @@ r = await pool.query('select accepted_at from invitations where token_hash = $1'
 check('l’invitation est prise (une seule fois)', r.rows[0]?.accepted_at !== null, r.rows[0])
 ll = await leadLogin(paulLead)
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
-check('arrivée suivante de Paul depuis une autre application : l’espace de SON organisation, jamais celui d’une autre entreprise',
-  r.status === 200 && r.body.account?.lead_org === `paul-org-${stamp}`, r.body.account)
+// Paul a créé son Compte Lead pour accepter (nouvelle organisation, sans espace ici) : il retrouve l'entreprise qui l'a
+// invité à chaque arrivée, et aucun espace vide n'est créé pour son organisation (il cacherait cette entreprise).
+check('arrivée suivante de Paul (son organisation n’a pas d’espace ici) : l’entreprise qui l’a invité, aucun espace vide créé',
+  r.status === 200 && r.body.account?.lead_org === plusOrg
+  && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [`paul-org-${stamp}`])).rows[0].n === 0, r.body.account)
+check('… sans que la formule de l’organisation de Paul (Gratuit) remplace celle de l’entreprise qui l’a invité',
+  (await pool.query('select plan from accounts where lead_org = $1', [plusOrg])).rows[0]?.plan === 'pro_plus' && r.body.plan?.tier === 'pro_plus', r.body.plan)
 // Une entreprise d'avant le Compte Lead ne se lie pas à l'organisation personnelle d'un simple membre.
 const localAcc = (await pool.query(`insert into accounts (name) values ('Atelier local ${stamp}') returning id`)).rows[0].id
 const localAdmin = (await pool.query(`insert into users (email, name) values ($1, 'Admin local') returning id`, [`admin-local-${stamp}@exemple.test`])).rows[0].id
@@ -807,7 +825,61 @@ r = await pool.query('select lead_org, plan from accounts where id = $1', [local
 check('entreprise locale : un simple membre ne la lie pas à son organisation gratuite (et elle naît en Gratuit, plus en Pro)',
   ll.session.length > 30 && r.rows[0].lead_org === null && r.rows[0].plan === 'free', { row: r.rows[0], loc: ll.location })
 r = await new Client().req('GET', '/api/me', undefined, { cookie: ll.session })
-check('… et il entre dans l’espace de SON organisation, pas dans l’entreprise locale', r.body.account?.lead_org === `marc-org-${stamp}`, r.body.account)
+check('… il entre dans l’entreprise dont il est membre (comme avant le passage), sans espace vide pour son organisation',
+  r.body.account?.id === localAcc && r.body.user?.role === 'member'
+  && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [`marc-org-${stamp}`])).rows[0].n === 0, r.body.account)
+{
+  // Entreprise d'avant le Compte Lead, MÊME organisation ERPlead : le membre arrive avant l'administratrice. Il entre dans
+  // l'entreprise (sans la lier) ; l'administratrice la relie ensuite à l'organisation, avec tous ses projets.
+  const org = `menuiserie-org-${stamp}`
+  const shop = (await pool.query(`insert into accounts (name) values ('Menuiserie ${stamp}') returning id`)).rows[0].id
+  const boss = (await pool.query(`insert into users (email, name) values ($1, 'Admin menuiserie') returning id`, [`admin-menuiserie-${stamp}@exemple.test`])).rows[0].id
+  const worker = (await pool.query(`insert into users (email, name) values ($1, 'Membre menuiserie') returning id`, [`membre-menuiserie-${stamp}@exemple.test`])).rows[0].id
+  await pool.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin'), ($1,$3,'member')`, [shop, boss, worker])
+  await pool.query(`insert into projects (account_id, name, owner_id, created_by) values ($1, 'Cuisine Dupuis', $2, $2)`, [shop, boss])
+  const as = (who: string, role: string) => (n: string) => ({ ...lead(n, false, org), sub: `sub-${who}-menuiserie-${stamp}`, email: `${who}-menuiserie-${stamp}@exemple.test`, org_role: role })
+  const m = await leadLogin(as('membre', 'user'))
+  const mMe = await new Client().req('GET', '/api/me', undefined, { cookie: m.session })
+  check('membre d’abord (même organisation, entreprise d’avant le Compte Lead) : il entre dans l’entreprise, en membre, sans espace créé',
+    mMe.body.account?.id === shop && mMe.body.user?.role === 'member' && mMe.body.account?.lead_org === null
+    && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [org])).rows[0].n === 0, { account: mMe.body.account, role: mMe.body.user?.role })
+  const a = await leadLogin(as('admin', 'admin'))
+  const aMe = await new Client().req('GET', '/api/me', undefined, { cookie: a.session })
+  check('… l’administratrice ensuite : l’entreprise (et ses projets) devient celle de l’organisation, un seul espace',
+    aMe.body.account?.id === shop && aMe.body.account?.lead_org === org && aMe.body.user?.role === 'admin'
+    && (await pool.query('select count(*)::int as n from accounts where lead_org = $1', [org])).rows[0].n === 1, aMe.body.account)
+  const m2 = await leadLogin(as('membre', 'user'))
+  const m2Me = await new Client().req('GET', '/api/me', undefined, { cookie: m2.session })
+  check('… et le membre y revient, en membre, avec les projets', m2Me.body.account?.id === shop && m2Me.body.user?.role === 'member'
+    && (await new Client().req('GET', '/api/projects', undefined, { cookie: m2.session })).body?.some?.((p: any) => p.name === 'Cuisine Dupuis'), m2Me.body.account)
+}
+{
+  // Organisation en Gratuit (1 place) : une simple membre ouvre ProjectLead la première. Elle y entre en membre (rôle
+  // d'ERPlead), jamais en administratrice ; l'administratrice d'ERPlead n'est pas enfermée dehors ensuite.
+  const org = `gratuit-membre-org-${stamp}`
+  const as = (who: string, role: string) => (n: string) => ({ ...lead(n, false, org), sub: `sub-${who}-gm-${stamp}`, email: `${who}-gm-${stamp}@exemple.test`, org_role: role })
+  const m = await leadLogin(as('membre', 'user'))
+  const mMe = await new Client().req('GET', '/api/me', undefined, { cookie: m.session })
+  check('gratuit : une simple membre crée l’espace de son organisation en membre (rôle d’ERPlead), pas en administratrice',
+    mMe.body.account?.lead_org === org && mMe.body.user?.role === 'member', { account: mMe.body.account, role: mMe.body.user?.role })
+  const a = await leadLogin(as('admin', 'admin'))
+  const aMe = await new Client().req('GET', '/api/me', undefined, { cookie: a.session })
+  check('… l’administratrice d’ERPlead arrive ensuite : elle entre, administratrice, malgré la place prise (sinon personne ne gère l’espace)',
+    a.location === '/' && aMe.body.account?.lead_org === org && aMe.body.user?.role === 'admin', { loc: a.location, account: aMe.body.account, role: aMe.body.user?.role })
+  const n = await leadLogin(as('collegue', 'user'))
+  check('… une autre collègue voit ensuite « places prises » (un administrateur peut maintenant libérer une place ou changer de formule)',
+    n.location === '/login?erreur=places' && !n.session, n.location)
+  const b = await leadLogin(as('admin2', 'admin'))
+  check('… une 2e administratrice d’ERPlead aussi : la place garantie ne vaut que pour un espace sans administrateur',
+    b.location === '/login?erreur=places' && !b.session, b.location)
+  // Devenue administratrice chez ERPlead : elle le devient ici aussi, dans l'espace de son organisation (jamais l'inverse).
+  const up = await leadLogin(as('membre', 'admin'))
+  const upMe = await new Client().req('GET', '/api/me', undefined, { cookie: up.session })
+  check('membre devenue administratrice chez ERPlead : administratrice ici aussi à l’arrivée suivante', upMe.body.user?.role === 'admin', upMe.body.user)
+  const down = await leadLogin(as('membre', 'user'))
+  const downMe = await new Client().req('GET', '/api/me', undefined, { cookie: down.session })
+  check('… jamais rétrogradée automatiquement', downMe.body.user?.role === 'admin', downMe.body.user)
+}
 // L'administratrice d'une entreprise d'avant le Compte Lead, administratrice chez ERPlead aussi : l'entreprise devient la sienne.
 const oldAcc = (await pool.query(`insert into accounts (name) values ('Atelier ancien ${stamp}') returning id`)).rows[0].id
 const oldAdmin = (await pool.query(`insert into users (email, name) values ($1, 'Admin ancienne') returning id`, [`admin-ancienne-${stamp}@exemple.test`])).rows[0].id
@@ -892,7 +964,11 @@ void proSession
 
 section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul départ (src/lib/arrival.ts)')
 {
-  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone } = await import('../src/lib/arrival.js')
+  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED } = await import('../src/lib/arrival.js')
+  // Une personne sortie par ERPlead AVANT le passage (db/009_passage.sql : rien ne distingue cette sortie d'une
+  // désactivation par un administrateur) voit aussi cet écran : il ne doit pas accuser un administrateur, et donne le remède.
+  check('écran « accès désactivé » : juste quelle que soit la cause (administrateur, ou départ annoncé par ERPlead avant le passage), avec le remède',
+    !/a désactivé/.test(REFUSED.desactive.text) && /Réglages → Équipe/.test(REFUSED.desactive.text) && /Réglages → Équipe/.test(REFUSED.places.text), REFUSED.desactive)
   // Session ProjectLead ouverte : /login (adresse d'entrée du lanceur) mène tout droit dans l'espace, ou sur la page demandée.
   check('/login avec une session : l’accueil de l’espace', alreadyInTarget(null) === '/')
   check('/login?next=/projets avec une session : la page demandée', alreadyInTarget('/projets') === '/projets')

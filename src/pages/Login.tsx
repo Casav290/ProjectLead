@@ -4,7 +4,7 @@ import { api, errorText } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Button, Input, Spinner } from '../components/ui'
 import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
-import { departsAlone, leadStart, requestedPage } from '../lib/arrival'
+import { departsAlone, leadStart, REFUSED, requestedPage } from '../lib/arrival'
 import { leadEntry } from '../lib/leadFamily'
 
 const ERRORS: Record<string, string> = {
@@ -15,21 +15,6 @@ const ERRORS: Record<string, string> = {
   // Ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
   formule: 'La connexion doit être refaite. Réessayez.',
   lead_non_configure: "Le Compte Lead n'est pas encore branché sur ce serveur.",
-}
-
-/**
- * Les arrivées refusées sans autre issue (server/routes/auth.ts, ArrivalRefused) : jamais d'espace à part, un écran qui
- * dit quoi faire. Pas de nouveau départ automatique : il redonnerait le même refus.
- */
-const REFUSED: Record<string, { title: string; text: string }> = {
-  places: {
-    title: 'Toutes les places ProjectLead de votre entreprise sont prises',
-    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Un administrateur peut libérer une place (Réglages → Équipe) ou prendre une formule avec plus de places (Réglages → Entreprise).',
-  },
-  desactive: {
-    title: 'Votre accès à ProjectLead est désactivé',
-    text: 'Un administrateur de votre entreprise a désactivé votre accès à ProjectLead. Demandez-lui de le réactiver (Réglages → Équipe).',
-  },
 }
 
 // L'adresse de départ vers le Compte Lead (src/lib/arrival.ts), reprise par l'inscription et l'invitation.
@@ -67,10 +52,12 @@ export default function Login() {
 
   if (leadId === null || direct) return <AuthShell><Spinner label="Connexion au Compte Lead…" /></AuthShell>
 
-  if (leadId && REFUSED[code]) {
+  // Arrivée refusée (places prises, accès désactivé) : un écran qui dit quoi faire, textes dans src/lib/arrival.ts.
+  const refused = code === 'places' || code === 'desactive' ? REFUSED[code] : null
+  if (leadId && refused) {
     return (
-      <AuthShell title={REFUSED[code].title}>
-        <p role="alert" className="mb-6 text-sm text-muted-foreground">{REFUSED[code].text}</p>
+      <AuthShell title={refused.title}>
+        <p role="alert" className="mb-6 text-sm text-muted-foreground">{refused.text}</p>
         <a href={leadStart(next)} data-testid="lead-login"
           className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
           Réessayer</a>

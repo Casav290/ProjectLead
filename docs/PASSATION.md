@@ -42,12 +42,27 @@ L'e-mail et le mot de passe restent en secours sur `/login?acces=email` pour les
 **Passer d'une application à l'autre (demande d'Ève du 13.10.2026, branche `passage-apps`).** Connectée une fois à
 ERPlead, une personne entre dans ProjectLead sans aucun écran, par le lanceur d'une autre application, une adresse
 tapée ou un lien profond (`/login` et toute page sans session partent vers `/auth/lead/start?next=…`).
-- **L'espace** (`attachLeadPerson`, `server/routes/auth.ts`) : toujours celui de son organisation ERPlead
-  (`accounts.lead_org = claims.org`), rejoint (administratrice chez ERPlead : administratrice, sinon membre) ou créé
-  à son nom en Gratuit. Une entreprise d'avant le Compte Lead n'est reprise que si la personne en est
-  l'administratrice et l'est aussi chez ERPlead. Plus jamais d'espace personnel ni d'autre entreprise : places
-  prises → `/login?erreur=places` (« Toutes les places ProjectLead de votre entreprise sont prises ») ; désactivée
-  par un administrateur ProjectLead → `/login?erreur=desactive`. Rien n'est créé dans ces deux cas.
+- **L'espace** (`attachLeadPerson`, `server/routes/auth.ts`) : celui de son organisation ERPlead
+  (`accounts.lead_org = claims.org`), rejoint ou créé à son nom en Gratuit, avec son rôle d'ERPlead (administratrice
+  chez ERPlead : administratrice, gestionnaire : gestionnaire, sinon membre ; une simple membre qui ouvre ProjectLead
+  la première n'en devient donc pas l'administratrice). Une entreprise d'avant le Compte Lead devient celle de
+  l'organisation quand son administratrice l'est aussi chez ERPlead. Plus jamais d'espace personnel ni de détour :
+  places prises → `/login?erreur=places` (« Toutes les places ProjectLead de votre entreprise sont prises ») ; accès
+  désactivé → `/login?erreur=desactive`. Rien n'est créé dans ces deux cas.
+- **L'administratrice d'ERPlead** est administratrice dans l'espace de son organisation (promue à l'arrivée, jamais
+  rétrogradée automatiquement). Un espace sans administrateur actif (créé par une membre arrivée avant elle) la laisse
+  entrer même sans place libre : sinon personne n'y libère une place ni ne change de formule. S'il a déjà un
+  administrateur actif, la règle des places vaut pour elle aussi (décision P11 d'Ève).
+- **Organisation sans espace ici, personne déjà active dans une entreprise ProjectLead** (invitée par ProjectLead
+  depuis une autre organisation, souvent avec un Compte Lead créé pour accepter ; ou membre d'une entreprise d'avant
+  le Compte Lead pas encore reliée) : elle entre dans cette entreprise, comme avant le passage, sans la lier, sans y
+  poser sa formule et sans créer d'espace vide. Limite connue (comme avant le passage) : pas de sélecteur d'espace ;
+  quand son organisation aura un espace, c'est lui qui s'ouvrira.
+- **Désactivée avant le passage** : une personne sortie par ERPlead avant la migration 009 n'a pas le drapeau
+  `lead_disabled` (rien ne distingue alors une sortie d'ERPlead d'une désactivation par un administrateur, que le
+  journal ne trace pas). Par prudence elle reste traitée comme désactivée : l'écran ne dit pas qui l'a fait et donne
+  le remède (un administrateur la réactive, Réglages → Équipe). En production le 14.10.2026 : deux lignes inactives
+  en tout, deux personnes du banc (« Arrivée » de TEST Imprimerie Délèze), aucune vraie entreprise.
 - **Départ annoncé par ERPlead** (back-channel, `lead_status: disabled`) : `account_users.lead_disabled` (009). Si
   ERPlead la laisse revenir dans la même organisation, elle reprend sa place à la connexion suivante, s'il en reste.
   Un choix de l'administrateur (Réglages → Équipe) remet ce drapeau à faux.
@@ -66,8 +81,10 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
 **Arrivée et déconnexion (règle commune des six applications Lead, Ève, 13.10.2026).**
 - **Arrivée** : session ERPlead ouverte → directement dans l'espace de son entreprise (voir plus haut), dans la langue
   du Compte Lead. ProjectLead n'a pas d'essai silencieux (`prompt=none`) : sa racine est déjà l'application et part
-  vers `/auth/lead/start`. Cookies refusés : un seul passage chez ERPlead, puis `/login?erreur=session` (le retour
-  sans cookie de départ), et `/login?erreur=…` ne repart jamais seul (pas de boucle) ; contrôle « cookies refusés ».
+  vers `/auth/lead/start`. Cookies refusés : un seul passage chez ERPlead, puis `/login?erreur=session&next=…` (le
+  retour sans cookie de départ), et `/login?erreur=…` ne repart jamais seul (pas de boucle) ; contrôle « cookies
+  refusés ». Le cookie de départ (`pl_lead_login`) vit une heure, et la page demandée voyage aussi dans le `state`
+  (aléa, puis le chemin en base64url, jusqu'à 512 octets) : même un retour qui a perdu le cookie ramène au lien profond.
   Dans les applications qui ont un essai silencieux, il n'a lieu qu'une fois : cookie `lead_probe` ou marqueur
   `lead_probe=1` dans l'adresse de retour. Côté navigateur, la règle tient dans `src/lib/arrival.ts` (page demandée,
   départ, `/login` avec une session, un seul départ automatique), contrôlée par la section « Arrivée » de

@@ -40,12 +40,16 @@ export async function openSession(c: any, userId: string, accountId: string, idT
   return token
 }
 
-/** Crée l'entreprise, son premier administrateur et les réglages de départ. */
-async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string }, userId: string) {
+/**
+ * Crée l'entreprise, sa première personne et les réglages de départ. Inscription locale : son administrateur. Par le
+ * Compte Lead : le rôle qu'elle a chez ERPlead (une simple membre qui ouvre ProjectLead la première n'en devient pas
+ * l'administratrice ; l'administratrice d'ERPlead le devient à son arrivée, voir `placeIn`).
+ */
+async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string }, userId: string, role = 'admin') {
   // Une entreprise naît en Gratuit : la formule payante se prend dans ProjectLead (Réglages → Entreprise).
   const acc = (await db.query('insert into accounts (name, lead_org, plan) values ($1,$2,coalesce($3, \'free\')) returning id',
     [a.company, a.leadOrg ?? null, a.plan ?? null])).rows[0]
-  await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,'admin')`, [acc.id, userId])
+  await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,$3)`, [acc.id, userId, role])
   await seedAccount(db, acc.id, userId)
   return acc.id as string
 }
@@ -159,13 +163,28 @@ const startLeadLogin = async (c: any) => {
   const here = new URL(c.req.url)
   if (home && here.hostname === `www.${home.hostname}`) return c.redirect(`${home.origin}${here.pathname}${here.search}`)
   const s = startLogin({ locale: 'fr' })
+  const next = safeNext(c.req.query('next'))
+  // La page demandée voyage aussi dans `state` (rendu tel quel par ERPlead) : un retour qui a perdu le cookie de départ
+  // ramène quand même vers elle (`nextFromState`). Le `state` entier reste comparé à celui du cookie (finishLogin).
+  const state = stateWithNext(s.state, next)
+  const authorize = new URL(s.url)
+  authorize.searchParams.set('state', state)
   // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
-  const url = c.req.query('signup') === '1' ? `${s.url}&prompt=create` : s.url
-  const next = c.req.query('next')
-  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state: s.state, nonce: s.nonce, verifier: s.verifier,
-    next: safeNext(next) } satisfies Saved), cookieSecret(),
-    { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: 600 })
-  return c.redirect(url)
+  if (c.req.query('signup') === '1') authorize.searchParams.set('prompt', 'create')
+  // Une heure : le temps de remplir le formulaire d'ERPlead, de retrouver son mot de passe ou de confirmer son adresse.
+  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next } satisfies Saved),
+    cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
+  return c.redirect(authorize.toString())
+}
+const LOGIN_COOKIE_SECONDS = 3600
+/** `state` = aléa, puis la page demandée en base64url si elle est courte (rien de secret : c'est un chemin de ProjectLead). */
+const stateWithNext = (random: string, next?: string) =>
+  next && next !== '/' && Buffer.byteLength(next) <= 512 ? `${random}.${Buffer.from(next).toString('base64url')}` : random
+/** La page demandée lue dans un `state` revenu sans cookie : validée comme toute page demandée (`safeNext`). */
+const nextFromState = (state: unknown): string | undefined => {
+  const part = typeof state === 'string' ? state.split('.')[1] : undefined
+  if (!part || !/^[A-Za-z0-9_-]{1,700}$/.test(part)) return undefined
+  return safeNext(Buffer.from(part, 'base64url').toString('utf8'))
 }
 function callbackOrigin(): URL | null {
   try { return new URL(process.env.LEAD_ID_REDIRECT_URI ?? '') } catch { return null }
@@ -189,10 +208,14 @@ export const invitationToken = (next?: string | null) => /^\/invitation\/([A-Za-
  * étape 5) : par `sub` d'abord, par l'email **vérifié** ensuite, sinon création. Jamais par
  * un email non vérifié.
  *
- * L'espace (règle du passage entre applications, Ève, 13.10.2026) : TOUJOURS celui de l'organisation ERPlead de la
- * personne (`claims.org`), rejoint s'il existe, sinon créé à son nom en formule Gratuite. Ni choix d'espace, ni espace
- * personnel, ni celui d'une autre entreprise. Seule exception : une invitation ProjectLead acceptée avec le Compte Lead
- * (`opts.invitation`, même adresse vérifiée) ouvre l'entreprise qui a invité.
+ * L'espace (règle du passage entre applications, Ève, 13.10.2026) : celui de l'organisation ERPlead de la personne
+ * (`claims.org`), rejoint s'il existe (rôle d'ERPlead), sinon créé à son nom en formule Gratuite. Ni choix d'espace, ni
+ * espace personnel ; places prises ou accès désactivé : un écran, jamais un détour vers un autre espace. Deux exceptions,
+ * pour ne pas perdre une entreprise où elle travaille déjà :
+ * - une invitation ProjectLead acceptée avec le Compte Lead (`opts.invitation`, même adresse vérifiée) ouvre
+ *   l'entreprise qui a invité ;
+ * - quand son organisation n'a encore AUCUN espace ici et qu'elle est active dans une entreprise ProjectLead (invitée
+ *   depuis une autre organisation, ou membre d'une entreprise d'avant le Compte Lead), elle y entre, sans rien créer.
  */
 export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: string } = {}) {
   // Sans organisation ni formule (portée « lead » retirée de l'adresse d'autorisation), on ne saurait pas
@@ -214,27 +237,39 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
     }
     const userId = user.id as string
 
-    /** Une place dans cette entreprise : déjà active, reprise après un départ annoncé par ERPlead, ou prise maintenant s'il en reste. */
-    const placeIn = async (accountId: string, roleIfNew: string, inv?: { id: string; role: string } | null) => {
-      const already = (await db.query('select active, lead_disabled from account_users where account_id = $1 and user_id = $2',
+    /**
+     * Une place dans cette entreprise : déjà active, reprise après un départ annoncé par ERPlead, ou prise maintenant s'il
+     * en reste. `orgAdmin` : l'administratrice ERPlead de l'organisation, dans l'espace de cette organisation. Elle y est
+     * administratrice (jamais de rétrogradation automatique), et un espace sans administrateur actif (créé par une simple
+     * membre arrivée avant elle) la laisse entrer même s'il n'a plus de place : sinon personne ne pourrait y libérer une
+     * place ni changer de formule. Quand l'espace a déjà un administrateur actif, la règle des places vaut pour elle aussi.
+     */
+    const placeIn = async (accountId: string, roleIfNew: string, inv?: { id: string; role: string } | null, orgAdmin = false) => {
+      const already = (await db.query('select active, lead_disabled, role from account_users where account_id = $1 and user_id = $2',
         [accountId, userId])).rows[0]
       if (already?.active) {
         if (inv) await db.query('update invitations set accepted_at = now() where id = $1', [inv.id])
+        if (orgAdmin && already.role !== 'admin')
+          await db.query(`update account_users set role = 'admin' where account_id = $1 and user_id = $2`, [accountId, userId])
         return
       }
-      // Désactivée par un administrateur de l'espace : elle reste dehors tant qu'il ne la réactive pas (ou ne la réinvite pas).
-      if (already && !already.lead_disabled && !inv) throw new ArrivalRefused('desactive')
-      // Avec une invitation, sa place est déjà comptée : on vérifie seulement que la formule n'a pas baissé depuis.
-      try { await assertSeatFree(db, accountId, !inv) } catch (e) {
-        if (e instanceof HttpError && e.code === 'plan_limit_seats') throw new ArrivalRefused('places')
-        throw e
+      const adminless = orgAdmin && !(await db.query(
+        `select 1 from account_users where account_id = $1 and role = 'admin' and active`, [accountId])).rowCount
+      if (!adminless) {
+        // Désactivée par un administrateur de l'espace : elle reste dehors tant qu'il ne la réactive pas (ou ne la réinvite pas).
+        if (already && !already.lead_disabled && !inv) throw new ArrivalRefused('desactive')
+        // Avec une invitation, sa place est déjà comptée : on vérifie seulement que la formule n'a pas baissé depuis.
+        try { await assertSeatFree(db, accountId, !inv) } catch (e) {
+          if (e instanceof HttpError && e.code === 'plan_limit_seats') throw new ArrivalRefused('places')
+          throw e
+        }
       }
       if (inv) await db.query('update invitations set accepted_at = now() where id = $1', [inv.id])
       await db.query(
         `insert into account_users (account_id, user_id, role) values ($1,$2,$3)
          on conflict (account_id, user_id) do update set active = true, lead_disabled = false
-                                                   ${inv ? ', role = excluded.role' : ''}`,
-        [accountId, userId, inv?.role ?? roleIfNew])
+                                                   ${inv || orgAdmin ? ', role = excluded.role' : ''}`,
+        [accountId, userId, orgAdmin ? 'admin' : inv?.role ?? roleIfNew])
     }
 
     // Une invitation ProjectLead acceptée avec le Compte Lead : pour la personne connectée, à la même adresse vérifiée.
@@ -265,19 +300,29 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
             and lead_org is null
           returning id`, [claims.org, userId])).rows[0] ?? null
     }
+    if (!acc) {
+      // Son organisation n'a pas encore d'espace ici, mais la personne est déjà active dans une entreprise ProjectLead :
+      // invitée par ProjectLead (souvent avec un Compte Lead créé pour accepter, donc une organisation à elle, vide), ou
+      // membre d'une entreprise d'avant le Compte Lead que son administratrice n'a pas encore reliée. Elle y entre, comme
+      // avant le passage, sans la lier ni y poser sa formule. Lui créer un espace vide cacherait cette entreprise (aucun
+      // sélecteur d'espace ici), et en ferait l'administratrice d'un espace qui prendrait le nom de son organisation.
+      const elsewhere = (await db.query(
+        `select account_id from account_users where user_id = $1 and active order by joined_at limit 1`, [userId])).rows[0]
+      if (elsewhere) return { userId, accountId: elsewhere.account_id as string, invitation }
+    }
+    const role = claims.org_role === 'admin' ? 'admin' : claims.org_role === 'manager' ? 'manager' : 'member'
     let created = false
     if (!acc) {
-      acc = { id: await createAccount(db, { company: claims.org_name || claims.name || claims.email, leadOrg: claims.org, plan: 'free' }, userId) }
+      acc = { id: await createAccount(db, { company: claims.org_name || claims.name || claims.email, leadOrg: claims.org, plan: 'free' }, userId, role) }
       created = true
     }
     // La formule ProjectLead du jeton, calculée par ERPlead pour cette application et cette organisation.
     await savePlan(db, acc.id, claims.lead)
-    const role = claims.org_role === 'admin' ? 'admin' : claims.org_role === 'manager' ? 'manager' : 'member'
     if (!created) {
       const inv = (await db.query(
         `select id, role from invitations where account_id = $1 and lower(email) = lower($2) and accepted_at is null and expires_at > now()
           order by created_at desc limit 1`, [acc.id, claims.email])).rows[0] ?? null
-      await placeIn(acc.id, role, inv)
+      await placeIn(acc.id, role, inv, claims.org_role === 'admin')
     }
     return { userId, accountId: acc.id, invitation }
   })
@@ -327,8 +372,12 @@ app.post('/auth/lead/backchannel-logout', async (c) => {
 app.get('/auth/lead/callback', async (c) => {
   const raw = await getSignedCookie(c, cookieSecret(), 'pl_lead_login')
   // Pas de suppression du cookie de départ ici : la réponse pose déjà le cookie de session, et Neon Functions
-  // ne garde que le dernier Set-Cookie. Il expire seul en 10 minutes ; son `state` ne sert qu'une fois.
-  if (!raw) return c.redirect('/login?erreur=session')
+  // ne garde que le dernier Set-Cookie. Il expire seul en une heure ; son `state` ne sert qu'une fois.
+  // Sans lui (expiré, cookies refusés) : l'écran de connexion, qui garde la page demandée, et pas de nouveau départ seul.
+  if (!raw) {
+    const next = nextFromState(c.req.query('state'))
+    return c.redirect(`/login?erreur=session${next ? `&next=${encodeURIComponent(next)}` : ''}`)
+  }
   let saved: Saved = { state: '', nonce: '', verifier: '' }
   // Un refus garde la page demandée : « Réessayer » (ou « J'ai confirmé mon adresse ») y ramène, invitation comprise.
   const refused = (code: string) => c.redirect(`/login?erreur=${code}${saved.next ? `&next=${encodeURIComponent(saved.next)}` : ''}`)

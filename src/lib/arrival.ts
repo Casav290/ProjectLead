@@ -44,3 +44,21 @@ export const alreadyInTarget = (next: string | null) => {
  * arrive sans erreur ; jamais après un retour en erreur (`erreur=…`) ni sur l'accès par e-mail : pas de boucle.
  */
 export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean }) => o.leadId === true && !o.code && !o.withEmail
+
+/**
+ * Les arrivées refusées sans autre issue (server/routes/auth.ts, ArrivalRefused) : jamais d'espace à part, un écran qui
+ * dit quoi faire. Pas de nouveau départ automatique : il redonnerait le même refus.
+ * « desactive » ne dit pas QUI a désactivé : un administrateur ProjectLead, ou ERPlead pour une personne sortie de son
+ * organisation avant le passage (rien ne distingue ces deux cas dans les données d'avant db/009_passage.sql). Le remède
+ * est le même : un administrateur la réactive dans Réglages → Équipe.
+ */
+export const REFUSED: Record<'places' | 'desactive', { title: string; text: string }> = {
+  places: {
+    title: 'Toutes les places ProjectLead de votre entreprise sont prises',
+    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Un administrateur peut libérer une place (Réglages → Équipe) ou prendre une formule avec plus de places (Réglages → Entreprise).',
+  },
+  desactive: {
+    title: 'Votre accès à ProjectLead est désactivé',
+    text: 'Votre accès à l\'espace ProjectLead de votre entreprise est désactivé. Un administrateur de votre entreprise peut le réactiver (Réglages → Équipe).',
+  },
+}
