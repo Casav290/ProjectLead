@@ -345,11 +345,12 @@ app.get('/auth/lead/callback', async (c) => {
     return c.redirect(saved.next ?? '/')
   } catch (e) {
     // Des refus qui durent : un message précis, et pas de nouveau départ automatique (qui tournerait en boucle).
+    // La page demandée reste dans l'adresse : « Réessayer » ramène au lien profond (règle du passage, liens profonds).
     if (e instanceof ArrivalRefused) return refused(e.reason)
     if ((e as Error).message === 'email_not_verified') return refused('email')
-    if ((e as Error).message === 'lead_scope_missing') return c.redirect('/login?erreur=portee')
+    if ((e as Error).message === 'lead_scope_missing') return refused('portee')
     console.error('[compte lead]', (e as Error).message)
-    return c.redirect('/login?erreur=lead')
+    return refused('lead')
   }
 })
 

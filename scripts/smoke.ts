@@ -643,10 +643,17 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   const silent = await app.request('http://localhost/auth/lead/callback?error=login_required&state=perdu')
   check('retour d’ERPlead en erreur sans cookie de départ : page de connexion « erreur=session », pas de nouveau départ',
     silent.status === 302 && silent.headers.get('location') === '/login?erreur=session', silent.headers.get('location'))
-  const { readFileSync } = await import('node:fs')
-  const loginPage = readFileSync(new URL('../src/pages/Login.tsx', import.meta.url), 'utf8')
-  check('/login avec « erreur=… » ne repart pas seul vers le Compte Lead (seul un clic relance)',
-    /const direct = leadId === true && !code && !withEmail/.test(loginPage))
+  // Un retour d'ERPlead en erreur AVEC le cookie de départ (accès refusé, connexion silencieuse impossible) : la page
+  // de connexion avec l'erreur et la page demandée, sans session, et jamais un nouveau départ vers ERPlead.
+  for (const err of ['login_required', 'access_denied']) {
+    const start = await app.request('http://localhost/auth/lead/start?next=/projets/abc')
+    const to = new URL(start.headers.get('location') ?? 'http://x/')
+    const jar = (start.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+    const back = await app.request(`http://localhost/auth/lead/callback?error=${err}&state=${to.searchParams.get('state')}`, { headers: { cookie: jar } })
+    const loc = back.headers.get('location') ?? ''
+    check(`retour d’ERPlead « ${err} » : page de connexion avec l’erreur et la page demandée, sans session ni nouveau départ`,
+      back.status === 302 && loc === `/login?erreur=lead&next=${encodeURIComponent('/projets/abc')}` && !/projectlead_session=/.test(back.headers.get('set-cookie') ?? ''), loc)
+  }
 }
 // Neon Functions ne garde que le dernier Set-Cookie d'une réponse : au retour, la session doit être le seul cookie.
 check('retour du Compte Lead : un seul cookie posé, celui de la session', ll.cookies === 1, ll)
@@ -883,6 +890,62 @@ check('formule résiliée : on garde l’accès en gratuit, rien n’est effacé
   && r.body.plan.openProjects > 3, { status: r.status, plan: r.body.plan })
 void proSession
 
+section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul départ (src/lib/arrival.ts)')
+{
+  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone } = await import('../src/lib/arrival.js')
+  // Session ProjectLead ouverte : /login (adresse d'entrée du lanceur) mène tout droit dans l'espace, ou sur la page demandée.
+  check('/login avec une session : l’accueil de l’espace', alreadyInTarget(null) === '/')
+  check('/login?next=/projets avec une session : la page demandée', alreadyInTarget('/projets') === '/projets')
+  check('/login?next=… hors de ProjectLead ou vers /login : l’accueil, jamais un autre site ni une boucle',
+    ['//evil.test', '/\\evil.test', 'https://evil.test/', '/login', '/login?next=/login', '/signup'].every((v) => alreadyInTarget(v) === '/'))
+  check('page demandée : chemins de ProjectLead seulement (mêmes règles que safeNext du serveur)',
+    sameSitePath('/projets?x=1') === '/projets?x=1' && ['//a.b', '/\\a.b', 'a.b', '/a\u0000b', `/${'x'.repeat(2048)}`, null, undefined].every((v) => sameSitePath(v as string) === undefined))
+  // Sans session : la racine tapée, l'adresse d'entrée et un lien profond font UN départ vers le Compte Lead, sans prompt.
+  const root = leadStart(requestedPage('/', ''))
+  const entry = leadStart(requestedPage('/login', ''))
+  const deep = leadStart(requestedPage('/projets/abc', '?onglet=taches'))
+  const entryNext = leadStart(requestedPage('/login', `?next=${encodeURIComponent('/projets/abc')}`))
+  check('racine tapée sans session : un départ vers le Compte Lead, sans prompt (pas de page publique dans ProjectLead)', root === '/auth/lead/start', root)
+  check('adresse d’entrée /login sans session : le même départ', entry === '/auth/lead/start', entry)
+  check('lien profond sans session : départ qui garde la page demandée', deep === `/auth/lead/start?next=${encodeURIComponent('/projets/abc?onglet=taches')}`, deep)
+  check('/login?next=… sans session : départ qui garde la page demandée', entryNext === `/auth/lead/start?next=${encodeURIComponent('/projets/abc')}`, entryNext)
+  check('départ : jamais prompt=none ni une page hors de ProjectLead', ![root, entry, deep, entryNext].some((u) => /prompt/.test(u))
+    && leadStart('//evil.test') === '/auth/lead/start' && leadStart(requestedPage('/login', '?next=%2F%2Fevil.test')) === '/auth/lead/start')
+  check('inscription : départ avec signup=1', leadStart(null, true) === '/auth/lead/start?signup=1')
+  // Un seul départ automatique : après un retour en erreur, seul un clic relance (anti-boucle).
+  check('écran de connexion : part seul une fois (Compte Lead branché, sans erreur)', departsAlone({ leadId: true, code: '', withEmail: false }))
+  check('… jamais après un retour en erreur, ni sur l’accès par e-mail, ni sans Compte Lead',
+    ['lead', 'session', 'email', 'places', 'desactive', 'portee'].every((code) => !departsAlone({ leadId: true, code, withEmail: false }))
+    && !departsAlone({ leadId: true, code: '', withEmail: true }) && !departsAlone({ leadId: false, code: '', withEmail: false }) && !departsAlone({ leadId: null, code: '', withEmail: false }))
+  // Le parcours complet sans session ERPlead (simulé) : racine → départ → ERPlead (formulaire, pas de renvoi) ; avec une
+  // erreur au retour → /login?erreur=… qui ne repart pas : au plus UN passage chez ERPlead.
+  let trips = 0, url = `http://localhost${root}`, jar = ''
+  for (let hop = 0; hop < 12; hop++) {
+    const u = new URL(url)
+    if (u.pathname === '/oauth/authorize') { trips++; url = `http://localhost/auth/lead/callback?error=login_required&state=${u.searchParams.get('state')}`; continue }
+    if (u.pathname === '/login') {
+      const p = new URLSearchParams(u.search)
+      if (!departsAlone({ leadId: true, code: p.get('erreur') ?? '', withEmail: p.get('acces') === 'email' })) break
+      url = `http://localhost${leadStart(requestedPage(u.pathname, u.search))}`
+      continue
+    }
+    const res = await app.request(url, { headers: { cookie: jar } })
+    jar = (res.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? jar
+    const loc = res.headers.get('location')
+    if (!loc) break
+    url = new URL(loc, url).href
+  }
+  check('racine sans session, ERPlead en erreur : un seul passage chez ERPlead, puis l’écran de connexion qui attend un clic',
+    trips === 1 && new URL(url).pathname === '/login' && new URL(url).searchParams.get('erreur') === 'lead', { trips, url })
+  // L'adresse « fresh » des liens d'ERPlead (invitation acceptée, adresse confirmée) : repasse par ERPlead et remplace
+  // la session d'une autre personne sur ce navigateur ; la personne arrive dans l'espace de SON entreprise.
+  const before = await leadLogin((n) => lead(n, true, `fresh-a-${stamp}`))
+  const fresh = await leadLogin((n) => lead(n, true, `fresh-b-${stamp}`), '?locale=de&fresh=1')
+  const meFresh = await new Client().req('GET', '/api/me', undefined, { cookie: fresh.session })
+  check('adresse « fresh » d’ERPlead (/auth/lead/start?locale=de&fresh=1) : départ sans prompt, nouvelle session dans l’espace de son entreprise',
+    fresh.authorize.pathname === '/oauth/authorize' && !fresh.authorize.searchParams.has('prompt') && fresh.location === '/'
+    && fresh.session && fresh.session !== before.session && meFresh.body.account?.lead_org === `fresh-b-${stamp}`, { loc: fresh.location, account: meFresh.body.account })
+}
 section('Départ d’une personne : OpenID Back-Channel Logout')
 {
   const org = `bc-org-${stamp}`
@@ -975,6 +1038,37 @@ section('Déconnexion dans un navigateur : seulement ses sessions (sid d’ERPle
     && (await me(A.session)) === 401 && (await me(L.session)) === 401 && (await me(B.session)) === 200 && (await me(X)) === 200)
   check('déconnexion d’un navigateur sans session ici : rien ne tombe',
     (await post(logoutToken({ lead_status: 'logout', sid: `sid-z-${stamp}` }))) === 200 && (await me(B.session)) === 200 && (await me(X)) === 200)
+  // Compatibilité : l'ERPlead en ligne n'émet pas encore de `sid` (il est mis en ligne en dernier). Un `logout_token`
+  // sans `sid` (ou avec un `sid` illisible) ferme TOUTES les sessions de la personne : jamais une session laissée
+  // ouverte, jamais une erreur.
+  const A3 = await leadLogin((n) => carol(n, sidA))
+  check('logout SANS sid (ERPlead d’avant le sid) : 200, toutes ses sessions tombent (navigateurs A et B, autre entreprise)',
+    (await me(A3.session)) === 200 && (await me(B.session)) === 200 && (await me(X)) === 200
+    && (await post(logoutToken({ lead_status: 'logout' }))) === 200
+    && (await me(A3.session)) === 401 && (await me(B.session)) === 401 && (await me(X)) === 401)
+  const fresh2 = async () => {
+    const s = await leadLogin((n) => carol(n, sidB))
+    const t = `x-${randomUUID()}`
+    await pool.query(`insert into sessions (token_hash, user_id, account_id, expires_at, lead_sid) values ($1, $2, $3, now() + interval '1 day', $4)`,
+      [hashTokenSmoke(t), userId, other, sidA])
+    return [s.session, `projectlead_session=${t}`]
+  }
+  for (const [label, bad] of [['un nombre', 12345], ['vide', ''], ['trop long', 'x'.repeat(300)], ['un objet', { a: 1 }]] as const) {
+    const [s1, s2] = await fresh2()
+    const status = await post(logoutToken({ lead_status: 'logout', sid: bad }))
+    check(`logout avec un sid illisible (${label}) : 200 et repli sûr, toutes ses sessions tombent`, status === 200 && (await me(s1)) === 401 && (await me(s2)) === 401, { status })
+  }
+  {
+    const [s1, s2] = await fresh2()
+    const status = await post(logoutToken({ sid: sidB }))
+    check('jeton sans lead_status, avec un sid : comme une déconnexion, seules les sessions de ce navigateur tombent ; la place reste',
+      status === 200 && (await me(s1)) === 401 && (await me(s2)) === 200
+      && (await pool.query(`select bool_and(active) as a from account_users where user_id = $1`, [userId])).rows[0].a === true, { status })
+    await post(logoutToken({ lead_status: 'logout' }))
+  }
+  check('logout pour une personne inconnue ici : 200, rien ne casse', (await post(logoutToken({ sub: `inconnue-${stamp}`, lead_status: 'logout', sid: sidA }))) === 200
+    && (await me(owner.session)) === 200)
+  check('l’administratrice (autre personne) garde sa session pendant tout cela', (await me(owner.session)) === 200)
   // Des sessions toutes neuves, pour que le départ se prouve seul : navigateur B et autre entreprise.
   const B2 = await leadLogin((n) => carol(n, sidB))
   const x2Token = `x-${randomUUID()}`

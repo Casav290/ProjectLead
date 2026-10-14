@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import Layout from './components/Layout'
 import { Spinner, Toaster } from './components/ui'
+import { alreadyInTarget } from './lib/arrival'
 import { AppProvider, useApp } from './lib/store'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -40,11 +41,10 @@ const PUBLIC = [
   { path: '/conditions', el: <Legal kind="terms" /> },
 ]
 
-/** /login avec une session déjà ouverte : la page demandée (?next=), sinon l'accueil de l'espace. */
+/** /login (adresse d'entrée du lanceur) avec une session déjà ouverte : la page demandée (?next=), sinon l'accueil de l'espace. */
 function AlreadyIn() {
   const [params] = useSearchParams()
-  const next = params.get('next')
-  return <Navigate to={next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/'} replace />
+  return <Navigate to={alreadyInTarget(params.get('next'))} replace />
 }
 
 function Routed() {

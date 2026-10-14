@@ -69,12 +69,16 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   vers `/auth/lead/start`. Cookies refusés : un seul passage chez ERPlead, puis `/login?erreur=session` (le retour
   sans cookie de départ), et `/login?erreur=…` ne repart jamais seul (pas de boucle) ; contrôle « cookies refusés ».
   Dans les applications qui ont un essai silencieux, il n'a lieu qu'une fois : cookie `lead_probe` ou marqueur
-  `lead_probe=1` dans l'adresse de retour.
+  `lead_probe=1` dans l'adresse de retour. Côté navigateur, la règle tient dans `src/lib/arrival.ts` (page demandée,
+  départ, `/login` avec une session, un seul départ automatique), contrôlée par la section « Arrivée » de
+  `npm test`. Un retour d'ERPlead en erreur garde la page demandée (`/login?erreur=lead&next=…`).
 - **Se déconnecter** ferme le Compte Lead et les sessions des applications DANS CE NAVIGATEUR seulement : ses autres
   appareils restent connectés (se déconnecter sur l'ordinateur ne coupe pas le téléphone en plein salon). Norme
   OpenID Connect : ERPlead met `sid` (sa session de navigateur) dans le jeton d'identité, la session ProjectLead le
   garde (`sessions.lead_sid`, db/010) ; le `logout_token` « logout » porte ce `sid` et seules ces sessions tombent,
   plus celles ouvertes avant le `sid` (fermées par personne, comme avant). Un jeton sans `sid` ferme tout, comme avant.
+  Compatibilité : l'ERPlead en ligne avant le passage n'émet pas de `sid` ; ses jetons ferment donc toutes les
+  sessions de la personne (repli sûr, jamais de 500, jamais de session laissée ouverte), de même qu'un `sid` illisible.
   « Se déconnecter » dans ProjectLead ne ferme que la session de ce navigateur, puis ERPlead `/oauth/logout`
   (`id_token_hint`).
 - **Départ d'une personne** (`lead_status: disabled`) : TOUTES ses sessions tombent, dans toutes les entreprises, et

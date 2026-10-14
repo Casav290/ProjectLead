@@ -4,6 +4,7 @@ import { api, errorText } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Button, Input, Spinner } from '../components/ui'
 import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
+import { departsAlone, leadStart, requestedPage } from '../lib/arrival'
 import { leadEntry } from '../lib/leadFamily'
 
 const ERRORS: Record<string, string> = {
@@ -31,14 +32,8 @@ const REFUSED: Record<string, { title: string; text: string }> = {
   },
 }
 
-/** L'adresse de départ vers le Compte Lead, avec la page demandée pour y revenir ensuite. */
-export function leadStart(next: string | null, signup = false) {
-  const q = new URLSearchParams()
-  if (signup) q.set('signup', '1')
-  if (next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') && !/^\/(login|signup)\b/.test(next)) q.set('next', next)
-  const s = q.toString()
-  return `/auth/lead/start${s ? `?${s}` : ''}`
-}
+// L'adresse de départ vers le Compte Lead (src/lib/arrival.ts), reprise par l'inscription et l'invitation.
+export { leadStart }
 
 /**
  * Connexion. Comme InvoiceLead : pas d'écran intermédiaire, tout droit vers la connexion commune
@@ -57,8 +52,9 @@ export default function Login() {
   const [leadId, setLeadId] = useState<boolean | null>(null)
   const withEmail = params.get('acces') === 'email'
   // La page demandée avant la connexion : une adresse profonde ouverte sans session y ramène.
-  const next = params.get('next') ?? (loc.pathname !== '/' && loc.pathname !== '/login' ? loc.pathname + loc.search : null)
-  const direct = leadId === true && !code && !withEmail
+  const next = requestedPage(loc.pathname, loc.search)
+  // Un seul départ, jamais après un retour en erreur (pas de boucle) : src/lib/arrival.ts.
+  const direct = departsAlone({ leadId, code, withEmail })
 
   useEffect(() => { api.get<{ leadId: boolean }>('/auth/options').then((o) => setLeadId(o.leadId)).catch(() => setLeadId(false)) }, [])
   useEffect(() => { if (direct) window.location.replace(leadStart(next)) }, [direct, next])
