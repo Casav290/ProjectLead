@@ -82,11 +82,22 @@ function readJwks(iss: string): Promise<void> {
 /** Temps écoulé depuis `at` ; une horloge revenue en arrière compte comme « très ancien ». */
 const elapsed = (at: number) => { const d = Date.now() - at; return d < 0 ? Infinity : d }
 async function publicKey(kid: string, iss: string = issuer()) {
+  const mayRead = () => jwksReading.has(iss) || elapsed(jwksReadAt.get(iss) ?? -Infinity) >= UNKNOWN_KID_REFRESH_MS
+  // Clés absentes (démarrage à froid d'une instance) ou de plus d'une heure : relues, mais elles aussi au plus une fois
+  // toutes les 30 s (relecture du 15.10.2026, comme CRMlead : l'émetteur en erreur, chaque jeton forgé envoyé en série
+  // referait sinon une lecture). Une lecture ratée garde les clés déjà en mémoire : pendant une panne d'ERPlead, un vrai
+  // jeton passe encore.
   const hit = jwksCache.get(iss)
-  if (!hit || elapsed(hit.at) > 3_600_000) await readJwks(iss)
-  let jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid)
-  // Clé inconnue : le compte Lead a peut-être tourné sa clé, on relit (pas plus d'une fois toutes les 30 s).
-  if (!jwk && elapsed(jwksReadAt.get(iss) ?? -Infinity) >= UNKNOWN_KID_REFRESH_MS) {
+  if ((!hit || elapsed(hit.at) > 3_600_000) && mayRead()) {
+    try { await readJwks(iss) } catch (e) { if (!jwksCache.has(iss)) throw e }
+  }
+  const keys = jwksCache.get(iss)?.keys
+  if (!keys) throw new Error('jwks indisponible')
+  let jwk = keys.find((k) => k.kid === kid)
+  // Clé inconnue : le compte Lead a peut-être tourné sa clé, on relit (pas plus d'une fois toutes les 30 s). Une lecture
+  // déjà en cours (lancée par une autre requête) est attendue avant de conclure, sans nouvel appel (comme InvoiceLead) :
+  // sinon, juste après une rotation, de deux jetons légitimes arrivés ensemble seul le premier serait accepté.
+  if (!jwk && mayRead()) {
     await readJwks(iss); jwk = jwksCache.get(iss)!.keys.find((k) => k.kid === kid)
   }
   return jwk ? createPublicKey({ key: jwk, format: 'jwk' }) : null

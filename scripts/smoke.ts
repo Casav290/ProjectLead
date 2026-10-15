@@ -109,9 +109,17 @@ let issuerDown = false
 // Les clés publiées (une rotation les change) et le nombre de lectures du JWKS.
 let publishedKeys: unknown[] = [jwk]
 let jwksReads = 0
+// Panne simulée de la lecture des clés (503) et durée d'une lecture (ms), pour les contrôles « Clés d'ERPlead ».
+let jwksDown = false
+let jwksDelay = 0
 const issuerSrv = createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
-  if (req.url === '/oauth/jwks') { jwksReads++; return res.end(JSON.stringify({ keys: publishedKeys })) }
+  if (req.url === '/oauth/jwks') {
+    jwksReads++
+    if (jwksDelay) await new Promise((done) => setTimeout(done, jwksDelay))
+    if (jwksDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
+    return res.end(JSON.stringify({ keys: publishedKeys }))
+  }
   if (req.url === '/api/lead-id/v1/subscriptions' && req.method === 'POST') {
     if (issuerDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
     if (req.headers.authorization !== 'Bearer a') { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
@@ -1213,7 +1221,82 @@ section('Clés d’ERPlead : une clé inconnue ne fait relire le JWKS qu’une f
     const late = await post(logoutToken('rotated-key', rotatedPair.privateKey))
     check('31 s après la dernière lecture : la nouvelle clé est lue (une lecture de plus) et le jeton accepté', late === 200 && jwksReads - start === 2,
       { late, reads: jwksReads - start })
-  } finally { Date.now = realNow; publishedKeys = [jwk] }
+
+    // Relecture du 15.10.2026 (comme InvoiceLead) : juste après une rotation, une clé inventée lance la relecture et deux
+    // vraies notifications signées par la nouvelle clé arrivent pendant qu'elle est en cours (lecture de 50 ms). Elles
+    // l'attendent au lieu d'être refusées (sinon : 400 et une session laissée ouverte), sans nouvelle lecture.
+    const rotated2Pair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    publishedKeys = [jwk, rotated, { ...rotated2Pair.publicKey.export({ format: 'jwk' }), kid: 'rotated-key-2', alg: 'RS256', use: 'sig' }]
+    shift += 60_000
+    jwksDelay = 50
+    let mark = jwksReads
+    const together = await Promise.all([post(forged('inventee-pendant-rotation')),
+      post(logoutToken('rotated-key-2', rotated2Pair.privateKey)), post(logoutToken('rotated-key-2', rotated2Pair.privateKey))])
+    jwksDelay = 0
+    check('nouvelle rotation : clé inventée et deux vraies notifications ensemble, pendant la relecture → 400, 200, 200 et une seule lecture',
+      JSON.stringify(together) === '[400,200,200]' && jwksReads - mark === 1, { together, reads: jwksReads - mark })
+
+    // Relecture du 15.10.2026 (comme CRMlead) : clés de plus d'une heure et ERPlead en erreur (503). La lecture faite
+    // parce que les clés sont périmées suit elle aussi la règle des 30 s, et son échec garde les clés en mémoire.
+    shift += 2 * 3_600_000
+    jwksDown = true
+    mark = jwksReads
+    const staleOk = await post(logoutToken())
+    const stale: number[] = []
+    for (let i = 0; i < 10; i++) stale.push(await post(forged(`stale-${i}`)))
+    stale.push(...await Promise.all(Array.from({ length: 10 }, (_, i) => post(forged(`stale-burst-${i}`)))))
+    const staleOk2 = await post(logoutToken())
+    check('clés de plus d’une heure, ERPlead en erreur (503) : une vraie notification passe encore, avant et après (clés gardées)',
+      staleOk === 200 && staleOk2 === 200, { staleOk, staleOk2 })
+    check('… pendant la panne, 20 jetons forgés (10 en série, 10 en rafale) et 2 vrais : forgés refusés, au plus une lecture',
+      stale.every((s) => s === 400) && jwksReads - mark <= 1, { stale, reads: jwksReads - mark })
+    shift += 31_000
+    mark = jwksReads
+    const staleOk3 = await post(logoutToken())
+    check('… 31 s plus tard, toujours en panne : une seule nouvelle tentative, la vraie notification passe encore',
+      staleOk3 === 200 && jwksReads - mark === 1, { staleOk3, reads: jwksReads - mark })
+    jwksDown = false
+  } finally { Date.now = realNow; publishedKeys = [jwk]; jwksDown = false; jwksDelay = 0 }
+
+  // Démarrage à froid (chaque nouvelle instance : aucune clé en mémoire) et ERPlead en erreur. Un second faux ERPlead,
+  // jamais lu jusqu'ici, tient lieu d'instance neuve : ses lectures du JWKS suivent elles aussi la règle des 30 s.
+  let coldReads = 0
+  let coldDown = true
+  const cold = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.url !== '/oauth/jwks') { res.statusCode = 404; return res.end('{}') }
+    coldReads++
+    if (coldDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
+    res.end(JSON.stringify({ keys: [jwk] }))
+  })
+  const coldIss = `http://127.0.0.1:${await listen(cold)}`
+  const issuerBefore = process.env.LEAD_ID_ISSUER
+  const coldToken = (kid = 'k1') => {
+    const h = b64({ alg: 'RS256', kid, typ: 'JWT' })
+    const iat = Math.floor(Date.now() / 1000)
+    const p = b64({ iss: coldIss, aud: 'projectlead', iat, exp: iat + 120, sub: `jwks-froid-${stamp}`, lead_status: 'logout',
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} } })
+    return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+  }
+  const coldForged = (kid: string) => `${b64({ alg: 'RS256', kid })}.${b64({ iss: coldIss, aud: 'projectlead' })}.c2ln`
+  process.env.LEAD_ID_ISSUER = coldIss
+  const realNow2 = Date.now
+  let shift2 = 0
+  Date.now = () => realNow2() + shift2
+  try {
+    const refusedCold: number[] = []
+    for (let i = 0; i < 10; i++) refusedCold.push(await post(coldForged(`cold-${i}`)))
+    refusedCold.push(...await Promise.all(Array.from({ length: 10 }, (_, i) => post(coldForged(`cold-burst-${i}`)))))
+    const coldReal = await post(coldToken())
+    check('démarrage à froid, ERPlead en erreur (503) : 10 jetons forgés en série, 10 en rafale et un vrai, tous refusés, au plus une lecture',
+      refusedCold.every((s) => s === 400) && coldReal === 400 && coldReads <= 1, { refusedCold, coldReal, reads: coldReads })
+    coldDown = false
+    shift2 = 31_000
+    const before2 = coldReads
+    const recovered = await post(coldToken())
+    check('… ERPlead revenu, 31 s plus tard : clés lues une fois, la vraie notification passe', recovered === 200 && coldReads - before2 === 1,
+      { recovered, reads: coldReads - before2 })
+  } finally { Date.now = realNow2; process.env.LEAD_ID_ISSUER = issuerBefore; cold.close() }
 }
 
 section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six applications, adresses d’entrée')

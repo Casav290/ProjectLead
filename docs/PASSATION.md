@@ -103,7 +103,10 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
 - **Clés d'ERPlead** (`server/lib/leadId.ts`, comme ScanLead) : le back-channel et la boîte de réception de l'échange
   sont publics ; un jeton à clé (`kid`) inconnue ne fait relire le JWKS de l'émetteur qu'une fois toutes les 30 s au
   plus, une seule lecture à la fois (plus d'appel à ERPlead par jeton forgé). Une vraie rotation de clé est prise en
-  compte dans les 30 s. Contrôle : section « Clés d'ERPlead » de `npm test`.
+  compte dans les 30 s ; un jeton arrivé pendant une relecture en cours l'attend au lieu d'être refusé. Clés absentes
+  (démarrage à froid) ou de plus d'une heure : relues elles aussi au plus toutes les 30 s, et une lecture ratée garde
+  les clés en mémoire (une panne d'ERPlead ne refuse pas les vrais jetons). Contrôle : section « Clés d'ERPlead » de
+  `npm test`.
 - **Adresse confirmée** : ERPlead l'exige pour toutes les applications (`require_verified_email`) ; une personne non
   confirmée voit son écran « Confirmez votre adresse », avec le bouton pour renvoyer le lien.
 - **Lanceur** (audit indépendant CNX-12, CNX-13) : se ferme par Échap (focus rendu au bouton à 9 points), par un clic
