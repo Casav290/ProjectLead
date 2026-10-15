@@ -84,6 +84,8 @@ const MESSAGES: Record<string, string> = {
   url_not_allowed: 'Adresse refusée : https et serveur public uniquement.',
   key_required: 'La clé est obligatoire.',
   already_subscribed: "Vous avez déjà un abonnement ProjectLead : changez de formule dans « Gérer l'abonnement ».",
+  plan_not_above: 'Votre entreprise a déjà cette formule ou une formule supérieure : rien à payer.',
+  cannot_remove_self: 'Vous ne pouvez pas vous retirer vous-même : un autre administrateur peut le faire.',
   billing_not_configured: "Le paiement en ligne n'est pas encore ouvert.",
   no_customer: "Aucun abonnement ProjectLead à gérer pour l'instant.",
   stripe_error: "Le paiement n'a pas pu s'ouvrir. Réessayez dans un instant.",

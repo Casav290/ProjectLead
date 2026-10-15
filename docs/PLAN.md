@@ -29,6 +29,7 @@ Version 3, 13.10.2026 (hébergement Vercel).
 | 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10) ; depuis le 02.10 tout compte entre, même gratuit (limites dans `server/lib/plans.ts`) ; reste l'essai réel en gratuit après publication |
 | 5. Liens famille | Clés CRMlead et InvoiceLead posées dans l'entreprise d'Ève ; `projectlead` en `live` dans `lead_apps` de CRMlead | Une adresse reprise de CRMlead, un brouillon dans InvoiceLead | migration CRMlead `114_projectlead_live.sql` prête (session CRMlead), publication à confirmer ; clés à poser par Ève |
 | 6. Vercel | Hébergement comme les autres applications : projet Vercel, base Neon inchangée, tâches de fond sans VPS | projectlead.io et www servis par Vercel, connexion réelle par ERPlead (navigateur sans tête, compte de test), tâche de fond passée sur Vercel | fait (13.10) |
+| 7. Suites de l'abonnement | Aucune offre égale ou inférieure à la formule acquise (409 `plan_not_above` avant Stripe), liste des places avec dernière venue, « Retirer » et « Rétablir », refus « places » avec « Changer de compte » et conseil selon la formule, page publique `/formules` | `scripts/suites-check.ts` → `PROJECTLEAD_SUITES_UNIT_OK`, `npm test` (section « Suites de l'abonnement ») | enregistré (15.10), pas encore en ligne |
 
 ## Ce qui bloque
 

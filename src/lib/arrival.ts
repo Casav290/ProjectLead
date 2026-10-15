@@ -23,10 +23,14 @@ export function requestedPage(pathname: string, search: string): string | null {
   return pathname !== '/' && pathname !== '/login' ? sameSitePath(pathname + search) ?? null : null
 }
 
-/** L'adresse de départ vers le Compte Lead, avec la page demandée pour y revenir ensuite. */
-export function leadStart(next: string | null, signup = false) {
+/**
+ * L'adresse de départ vers le Compte Lead, avec la page demandée pour y revenir ensuite. `switchAccount` (« Changer de
+ * compte » d'un écran de refus) : le Compte Lead redemande l'identifiant (prompt=login), jamais la même session reprise.
+ */
+export function leadStart(next: string | null, signup = false, switchAccount = false) {
   const q = new URLSearchParams()
   if (signup) q.set('signup', '1')
+  else if (switchAccount) q.set('switch', '1')
   const page = sameSitePath(next)
   if (page && !/^\/(login|signup)\b/.test(page)) q.set('next', page)
   const s = q.toString()
@@ -45,20 +49,45 @@ export const alreadyInTarget = (next: string | null) => {
  */
 export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean }) => o.leadId === true && !o.code && !o.withEmail
 
+/** La formule de l'entreprise dans l'adresse d'un refus « places » (server/routes/auth.ts, refusalLocation). */
+export type Formule = 'free' | 'pro' | 'proplus'
+export const formuleOf = (v: string | null | undefined): Formule | null => (v === 'free' || v === 'pro' || v === 'proplus' ? v : null)
+
 /**
  * Les arrivées refusées sans autre issue (server/routes/auth.ts, ArrivalRefused) : jamais d'espace à part, un écran qui
- * dit quoi faire. Pas de nouveau départ automatique : il redonnerait le même refus.
- * « desactive » ne dit pas QUI a désactivé : un administrateur ProjectLead, ou ERPlead pour une personne sortie de son
- * organisation avant le passage (rien ne distingue ces deux cas dans les données d'avant db/009_passage.sql). Le remède
- * est le même : un administrateur la réactive dans Réglages → Équipe.
+ * dit quoi faire (src/components/RefusedScreen.tsx). Pas de nouveau départ automatique ni de « Réessayer » : ils
+ * redonneraient le même refus ; l'écran offre « Changer de compte » (prompt=login) et le Compte ERPlead.
+ * « desactive » ne dit pas QUI a désactivé : un administrateur ProjectLead (« Retirer »), ou ERPlead pour une personne
+ * sortie de son organisation avant le passage (rien ne distingue ces deux cas dans les données d'avant
+ * db/009_passage.sql). Le remède est le même : un administrateur la rétablit dans Réglages → Équipe.
+ * `upgrade` : l'écran offre « Voir les formules » (une formule avec plus de places existe).
  */
-export const REFUSED: Record<'places' | 'desactive', { title: string; text: string }> = {
+export type Refusal = { title: string; text: string; upgrade: boolean }
+const PLACES_TITLE = 'Toutes les places ProjectLead de votre entreprise sont prises'
+export const REFUSED: Record<'places' | 'desactive', Refusal> = {
+  // Formule inconnue (ancienne adresse sans « formule ») : les deux remèdes.
   places: {
-    title: 'Toutes les places ProjectLead de votre entreprise sont prises',
-    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Un administrateur peut libérer une place (Réglages → Équipe) ou prendre une formule avec plus de places (Réglages → Entreprise).',
+    title: PLACES_TITLE,
+    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Demandez à un administrateur de votre entreprise de libérer une place (Réglages → Équipe) ou, si elle n\'est pas encore en Pro+, de passer à Pro+, jusqu\'à 5 places (Réglages → Entreprise).',
+    upgrade: true,
   },
   desactive: {
     title: 'Votre accès à ProjectLead est désactivé',
-    text: 'Votre accès à l\'espace ProjectLead de votre entreprise est désactivé. Un administrateur de votre entreprise peut le réactiver (Réglages → Équipe).',
+    text: 'Votre accès à l\'espace ProjectLead de votre entreprise est désactivé. Un administrateur de votre entreprise peut le rétablir (Réglages → Équipe).',
+    upgrade: false,
   },
+}
+
+/**
+ * Le conseil d'un refus « places », juste pour la formule de l'entreprise (suites de l'abonnement, 15.10.2026, points
+ * 4 et 6a) : Pro+ plein → libérer une place, aucune offre (aucune formule ne donne plus de places) ; Gratuit ou Pro
+ * (1 place) → Pro+ en donne 5, ou libérer la place, avec « Voir les formules ». Un administrateur actif entre toujours :
+ * c'est à lui de le faire.
+ */
+export function placesRefusal(formule: Formule | null): Refusal {
+  if (formule === 'proplus') return { title: PLACES_TITLE, upgrade: false,
+    text: 'Votre entreprise utilise déjà les 5 places de sa formule Pro+ dans ProjectLead, la plus grande. Demandez à un administrateur de votre entreprise de libérer une place (Réglages → Équipe) : il peut toujours se connecter.' }
+  if (formule === 'free' || formule === 'pro') return { title: PLACES_TITLE, upgrade: true,
+    text: `Votre entreprise est en formule ${formule === 'free' ? 'Gratuite' : 'Pro'} dans ProjectLead : 1 place, déjà prise. Pro+ donne jusqu'à 5 places. Demandez à un administrateur de votre entreprise de passer à Pro+ (Réglages → Entreprise) ou de libérer la place (Réglages → Équipe) : il peut toujours se connecter.` }
+  return REFUSED.places
 }

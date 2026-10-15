@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Avatar, Badge, Button, Card, Checkbox, ColorDot, Confirm, Empty, ErrorNote, Field, Input, Modal, PeoplePicker, Select, Spinner, TableStack, toast } from '../ui'
+import { Avatar, Button, Card, ColorDot, Confirm, Empty, ErrorNote, Field, Input, Modal, PeoplePicker, Select, Spinner, TableStack, toast } from '../ui'
 import { api, errorText } from '../../lib/api'
 import { fmtDate, money, parseMoney, ROLE_LABEL } from '../../lib/format'
 import { useApp, useLoad } from '../../lib/store'
@@ -9,10 +9,12 @@ import { UpgradeLink } from '../PlanCard'
 import { CopyField, Note, SettingsHeader, useRole } from './kit'
 
 type TeamRow = { id: string; name: string; color: string; member_ids: string[] }
-type InvitationRow = { id: string; email: string; role: Member['role']; expires_at: string; created_at: string }
+export type InvitationRow = { id: string; email: string; role: Member['role']; expires_at: string; created_at: string }
 type TeamData = { members: Member[]; teams: TeamRow[]; invitations: InvitationRow[] }
 
 const hoursText = (min: number) => (min / 60).toLocaleString('fr-CH', { maximumFractionDigits: 1 })
+const seenDate = new Intl.DateTimeFormat('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
+const seenTime = new Intl.DateTimeFormat('fr-CH', { hour: '2-digit', minute: '2-digit' })
 
 export default function Team() {
   const { me, refreshTeam, refresh } = useApp()
@@ -22,6 +24,7 @@ export default function Team() {
   const [inviting, setInviting] = useState(false)
   const [team, setTeam] = useState<TeamRow | 'new' | null>(null)
   const [revoking, setRevoking] = useState<InvitationRow | null>(null)
+  const [removing, setRemoving] = useState<Member | null>(null)
   const changed = () => { reload(); refreshTeam(); refresh() }
 
   if (loading && !data) return <Spinner />
@@ -30,8 +33,15 @@ export default function Team() {
   const active = data.members.filter((m) => m.active)
 
   const revoke = async (i: InvitationRow) => {
-    try { await api.del(`/team/invitations/${i.id}`); toast('Invitation révoquée'); reload(); refresh() } catch (e) { toast(errorText(e)) }
+    try { await api.del(`/team/invitations/${i.id}`); toast(isAdmin ? 'Invitation retirée : sa place est libérée' : 'Invitation révoquée'); reload(); refresh() } catch (e) { toast(errorText(e)) }
   }
+  const remove = async (m: Member) => {
+    try { await api.post(`/team/members/${m.id}/remove`); toast('Personne retirée : sa place est libérée'); changed() } catch (e) { toast(errorText(e)) }
+  }
+  const restore = async (m: Member) => {
+    try { await api.post(`/team/members/${m.id}/restore`); toast('Personne rétablie : elle reprend sa place'); changed() } catch (e) { toast(errorText(e)) }
+  }
+  const who = (m: Member | null) => m?.name || m?.email || ''
 
   return (
     <>
@@ -46,63 +56,8 @@ export default function Team() {
         </p>
       )}
 
-      <section className="mb-8">
-        <h2 className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-muted-foreground">Membres ({active.length})</h2>
-        <TableStack>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left">
-                <th className="px-3 py-2">Personne</th>
-                <th className="px-3 py-2">Rôle</th>
-                {canManage && <th className="px-3 py-2 text-right">Vente / h</th>}
-                {isAdmin && <th className="px-3 py-2 text-right">Coût / h</th>}
-                <th className="px-3 py-2 text-right">Capacité / sem.</th>
-                {isAdmin && <th className="px-3 py-2"><span className="sr-only">Actions</span></th>}
-              </tr>
-            </thead>
-            <tbody>
-              {data.members.map((m) => (
-                <tr key={m.id} className={m.active ? '' : 'text-muted-foreground'}>
-                  <td className="px-3 py-2" data-label="">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Avatar person={m} size={28} />
-                      <span className="min-w-0">
-                        <span className="block font-bold break-words">{m.name || m.email}{m.id === me?.user.id && <span className="font-normal text-muted-foreground"> (vous)</span>}</span>
-                        <span className="block break-all text-xs text-muted-foreground">{m.email}</span>
-                      </span>
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{ROLE_LABEL[m.role]}{!m.active && <> <Badge>Désactivé</Badge></>}</td>
-                  {canManage && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.hourly_rate_cents ? money(m.hourly_rate_cents, cur) : '—'}</td>}
-                  {isAdmin && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.cost_rate_cents ? money(m.cost_rate_cents, cur) : '—'}</td>}
-                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{hoursText(m.capacity_minutes)} h</td>
-                  {isAdmin && <td className="px-3 py-2 text-right"><Button size="sm" variant="ghost" onClick={() => setEditing(m)}>Modifier</Button></td>}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </TableStack>
-      </section>
-
-      {canManage && (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-muted-foreground">Invitations en attente</h2>
-          {data.invitations.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Aucune invitation en attente.</p>
-          ) : (
-            <ul className="divide-y divide-border border border-border bg-card">
-              {data.invitations.map((i) => (
-                <li key={i.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-                  <span className="min-w-0 flex-1 font-semibold break-words">{i.email}</span>
-                  <span className="text-muted-foreground">{ROLE_LABEL[i.role]}</span>
-                  <span className="text-xs text-muted-foreground">valable jusqu'au {fmtDate(i.expires_at)}</span>
-                  <Button size="sm" variant="ghost" className="text-late" onClick={() => setRevoking(i)}>Révoquer</Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
+      <SeatList members={data.members} invitations={data.invitations} seatsMax={me?.plan.seats ?? null} meId={me?.user.id ?? ''}
+        isAdmin={isAdmin} canManage={canManage} currency={cur} onEdit={setEditing} onRemove={setRemoving} onRevoke={setRevoking} onRestore={restore} />
 
       <section>
         <div className="mb-2 flex items-center justify-between gap-3">
@@ -137,20 +92,162 @@ export default function Team() {
       <MemberDialog member={editing} currency={cur} onClose={() => setEditing(null)} onSaved={changed} />
       <InviteDialog open={inviting} onClose={() => setInviting(false)} onSent={reload} />
       <TeamDialog team={team} people={active} onClose={() => setTeam(null)} onSaved={changed} />
-      <Confirm open={Boolean(revoking)} onClose={() => setRevoking(null)} title="Révoquer l'invitation ?" danger confirmLabel="Révoquer"
-        onConfirm={() => revoking && revoke(revoking)}>Le lien envoyé à {revoking?.email} ne fonctionnera plus.</Confirm>
+      <Confirm open={Boolean(revoking)} onClose={() => setRevoking(null)} title={isAdmin ? "Retirer l'invitation ?" : "Révoquer l'invitation ?"} danger
+        confirmLabel={isAdmin ? 'Retirer' : 'Révoquer'} onConfirm={() => revoking && revoke(revoking)}>
+        Le lien envoyé à {revoking?.email} ne fonctionnera plus, et la place qu'il tenait se libère.</Confirm>
+      {/* « Retirer » en deux temps : la confirmation nomme la personne et dit l'effet (suites de l'abonnement, point 2). */}
+      <Confirm open={Boolean(removing)} onClose={() => setRemoving(null)} title={`Retirer ${who(removing)} ?`} danger confirmLabel="Retirer"
+        onConfirm={() => removing && remove(removing)}>
+        <p>{who(removing)} perd sa place dans ProjectLead tout de suite, et ses sessions ouvertes se ferment.</p>
+        <p className="mt-2">Elle n'entrera plus d'elle-même, même par le Compte Lead, tant qu'un administrateur ne la rétablit pas
+          (Personnes retirées, plus bas). Ses projets, tâches et temps restent à l'entreprise.</p>
+      </Confirm>
+    </>
+  )
+}
+
+/** La dernière venue d'une personne dans cette entreprise (`data-last-seen` : date ISO, ou « never » si aucune n'est notée). */
+function LastSeen({ at }: { at: string | null }) {
+  if (!at) return <span data-last-seen="never" title="Aucune venue notée">Inconnue</span>
+  const d = new Date(at)
+  return <span data-last-seen={at}>{seenDate.format(d)}, {seenTime.format(d)}</span>
+}
+
+/**
+ * Les places de la formule (Réglages → Équipe ; suites de l'abonnement, 15.10.2026, point 2) : une ligne par place
+ * occupée (personne active, invitation en attente), avec sa dernière venue ; « Retirer » pour l'administrateur sur
+ * chaque ligne sauf la sienne (une invitation se retire en la révoquant ; un responsable la révoque comme avant) ; les
+ * personnes retirées à part, avec « Rétablir ». Contrat de page du banc : [data-seat-list] (data-seats-used,
+ * data-seats-max), [data-seat-holder], [data-last-seen], [data-seat-remove], [data-seat-removed].
+ */
+export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canManage, currency, onEdit, onRemove, onRevoke, onRestore }: {
+  members: Member[]; invitations: InvitationRow[]; seatsMax: number | null; meId: string; isAdmin: boolean; canManage: boolean; currency: string
+  onEdit: (m: Member) => void; onRemove: (m: Member) => void; onRevoke: (i: InvitationRow) => void; onRestore: (m: Member) => void
+}) {
+  const active = members.filter((m) => m.active)
+  const removed = members.filter((m) => !m.active)
+  const used = active.length + invitations.length
+  const places = `${used} ${used > 1 ? 'places prises' : 'place prise'}${seatsMax === null ? '' : ` sur ${seatsMax}`}`
+    + (invitations.length ? `, dont ${invitations.length} ${invitations.length > 1 ? 'invitations en attente' : 'invitation en attente'}` : '')
+  return (
+    <>
+      <section className="mb-8" data-seat-list="" data-seats-used={used} data-seats-max={seatsMax ?? ''}>
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h2 className="text-sm font-extrabold uppercase tracking-[.06em] text-muted-foreground">Membres ({active.length})</h2>
+          <p className="text-xs text-muted-foreground">{places}</p>
+        </div>
+        <TableStack>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left">
+                <th className="px-3 py-2">Personne</th>
+                <th className="px-3 py-2">Rôle</th>
+                <th className="px-3 py-2">Dernière venue</th>
+                {canManage && <th className="px-3 py-2 text-right">Vente / h</th>}
+                {isAdmin && <th className="px-3 py-2 text-right">Coût / h</th>}
+                <th className="px-3 py-2 text-right">Capacité / sem.</th>
+                {canManage && <th className="px-3 py-2"><span className="sr-only">Actions</span></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {active.map((m) => (
+                <tr key={m.id} data-seat-holder={(m.email ?? '').toLowerCase()}>
+                  <td className="px-3 py-2" data-label="">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Avatar person={m} size={28} />
+                      <span className="min-w-0">
+                        <span className="block font-bold break-words">{m.name || m.email}{m.id === meId && <span className="font-normal text-muted-foreground"> (vous)</span>}</span>
+                        <span className="block break-all text-xs text-muted-foreground">{m.email}</span>
+                      </span>
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">{ROLE_LABEL[m.role]}</td>
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums"><LastSeen at={m.last_seen_at} /></td>
+                  {canManage && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.hourly_rate_cents ? money(m.hourly_rate_cents, currency) : '—'}</td>}
+                  {isAdmin && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.cost_rate_cents ? money(m.cost_rate_cents, currency) : '—'}</td>}
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{hoursText(m.capacity_minutes)} h</td>
+                  {canManage && (
+                    <td className="px-3 py-2 text-right">
+                      {isAdmin && (
+                        <span className="inline-flex flex-wrap justify-end gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => onEdit(m)}>Modifier</Button>
+                          {m.id !== meId && (
+                            <Button size="sm" variant="ghost" className="text-late" data-seat-remove="" aria-label={`Retirer ${m.name || m.email}`}
+                              onClick={() => onRemove(m)}>Retirer</Button>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {invitations.map((i) => (
+                <tr key={i.id} data-seat-holder={i.email.toLowerCase()}>
+                  <td className="px-3 py-2" data-label="">
+                    <span className="block font-bold break-all">{i.email}</span>
+                    <span className="block text-xs text-muted-foreground">Invitée le {fmtDate(i.created_at)}</span>
+                  </td>
+                  <td className="px-3 py-2">{ROLE_LABEL[i.role]}</td>
+                  <td className="px-3 py-2">
+                    <span data-last-seen="never">Invitation en attente</span>
+                    <span className="block text-xs text-muted-foreground">valable jusqu'au {fmtDate(i.expires_at)}</span>
+                  </td>
+                  {canManage && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
+                  {isAdmin && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
+                  <td className="px-3 py-2 text-right text-muted-foreground">—</td>
+                  {canManage && (
+                    <td className="px-3 py-2 text-right">
+                      {isAdmin
+                        ? <Button size="sm" variant="ghost" className="text-late" data-seat-remove="" aria-label={`Retirer l'invitation de ${i.email}`}
+                            onClick={() => onRevoke(i)}>Retirer</Button>
+                        : <Button size="sm" variant="ghost" className="text-late" onClick={() => onRevoke(i)}>Révoquer</Button>}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableStack>
+      </section>
+
+      {removed.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-1 text-sm font-extrabold uppercase tracking-[.06em] text-muted-foreground">Personnes retirées ({removed.length})</h2>
+          <p className="mb-2 text-sm text-muted-foreground">Elles n'occupent pas de place. Leurs projets, tâches et temps restent à l'entreprise.</p>
+          <ul className="divide-y divide-border border border-border bg-card">
+            {removed.map((m) => (
+              <li key={m.id} data-seat-removed={(m.email ?? '').toLowerCase()} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold break-words">{m.name || m.email}</span>
+                  <span className="block break-all text-xs text-muted-foreground">{m.email}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {m.lead_disabled ? 'Partie de votre entreprise dans le Compte Lead : elle reprend sa place si elle y revient.'
+                    : "Retirée par un administrateur : elle n'entre plus d'elle-même."}
+                  {' '}Dernière venue : <LastSeen at={m.last_seen_at} /></span>
+                {isAdmin && (
+                  <span className="inline-flex gap-1">
+                    {!m.lead_disabled && <Button size="sm" onClick={() => onRestore(m)}>Rétablir</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => onEdit(m)}>Modifier</Button>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   )
 }
 
 function MemberDialog({ member, currency, onClose, onSaved }: { member: Member | null; currency: string; onClose: () => void; onSaved: () => void }) {
   const { me } = useApp()
-  const [f, setF] = useState({ role: 'member' as Member['role'], active: true, rate: '', cost: '', capacity: '' })
+  const [f, setF] = useState({ role: 'member' as Member['role'], rate: '', cost: '', capacity: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   useEffect(() => {
     if (member) {
-      setF({ role: member.role, active: member.active, rate: member.hourly_rate_cents ? String(member.hourly_rate_cents / 100) : '',
+      setF({ role: member.role, rate: member.hourly_rate_cents ? String(member.hourly_rate_cents / 100) : '',
              cost: member.cost_rate_cents ? String(member.cost_rate_cents / 100) : '', capacity: hoursText(member.capacity_minutes) })
       setError(null)
     }
@@ -164,7 +261,8 @@ function MemberDialog({ member, currency, onClose, onSaved }: { member: Member |
     if (!member || !valid) return
     setBusy(true); setError(null)
     try {
-      await api.patch(`/team/members/${member.id}`, { role: f.role, active: f.active, hourly_rate_cents: rate, cost_rate_cents: cost,
+      // Sa place (retirer, rétablir) se règle dans la liste, pas ici.
+      await api.patch(`/team/members/${member.id}`, { role: f.role, hourly_rate_cents: rate, cost_rate_cents: cost,
         capacity_minutes: Math.round(capacity * 60) })
       toast('Enregistré'); onSaved(); onClose()
     } catch (err) { setError(err) } finally { setBusy(false) }
@@ -190,8 +288,6 @@ function MemberDialog({ member, currency, onClose, onSaved }: { member: Member |
         <Field label="Capacité (heures par semaine)" className="sm:col-span-2">
           <Input inputMode="decimal" value={f.capacity} onChange={(e) => setF({ ...f, capacity: e.target.value })} />
         </Field>
-        <Checkbox className="sm:col-span-2" checked={f.active} onChange={(v) => setF({ ...f, active: v })}
-          label="Actif : peut se connecter et recevoir des tâches" />
         {self && <p className="text-xs text-muted-foreground sm:col-span-2">C'est vous : l'entreprise garde toujours au moins un administrateur actif.</p>}
         {error != null && <div className="sm:col-span-2"><ErrorNote error={error} /></div>}
       </form>

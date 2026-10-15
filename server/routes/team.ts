@@ -1,15 +1,22 @@
 import { z } from 'zod'
 import { hashToken, newToken } from '../auth.js'
+import { anon } from '../db.js'
 import { body, email, HttpError, notFound, requireRole, router, tx, uuid } from '../lib/http.js'
 import { htmlParagraphs, layout, sendMail } from '../lib/email.js'
 import { assertSeatFree } from '../lib/plans.js'
 
-/** L'équipe : les personnes de l'entreprise, leurs rôles, leurs taux, leurs équipes. */
+/**
+ * L'équipe : les personnes de l'entreprise, leurs rôles, leurs taux, leurs équipes, et les places de la formule
+ * (Réglages → Équipe) : qui occupe une place (personnes actives et invitations en attente), sa dernière venue
+ * (`last_seen_at`), « Retirer » et « Rétablir » pour l'administrateur (suites de l'abonnement, 15.10.2026, point 2).
+ */
 const app = router()
 
 app.get('/', async (c) => tx(c, async (db) => {
+  // `lead_disabled` : partie de l'entreprise dans le Compte Lead (back-channel « disabled »), pas retirée ici.
   const members = (await db.query(
-    `select u.id, u.name, u.email, u.color, au.role, au.active, au.hourly_rate_cents, au.cost_rate_cents, au.capacity_minutes,
+    `select u.id, u.name, u.email, u.color, au.role, au.active, au.lead_disabled, au.last_seen_at,
+            au.hourly_rate_cents, au.cost_rate_cents, au.capacity_minutes,
             coalesce((select array_agg(tm.team_id) from team_members tm where tm.user_id = u.id), '{}') as team_ids
        from account_users au join users u on u.id = au.user_id
       where au.account_id = app_account() order by au.active desc, u.name`)).rows
@@ -77,6 +84,46 @@ app.patch('/members/:userId', async (c) => {
     // Jamais d'entreprise sans administrateur actif : ce serait s'enfermer dehors.
     const admins = (await db.query(`select count(*)::int as n from account_users where account_id = app_account() and role = 'admin' and active`)).rows[0].n
     if (!admins) throw new HttpError(400, 'last_admin')
+  })
+  return c.json({ ok: true })
+})
+
+/**
+ * « Retirer » (administrateur seulement, jamais soi-même) : la personne perd sa place tout de suite, ses sessions dans
+ * cette entreprise se ferment, et le retrait est gardé : à sa prochaine arrivée par le Compte Lead, même s'il reste une
+ * place, elle voit « accès désactivé » (`ArrivalRefused('desactive')`, routes/auth.ts) tant qu'un administrateur ne la
+ * rétablit pas. Ses projets, tâches et temps restent à l'entreprise. Jamais le dernier administrateur actif.
+ */
+app.post('/members/:userId/remove', async (c) => {
+  requireRole(c, 'admin')
+  const ctx = c.get('ctx')
+  const userId = c.req.param('userId')
+  if (!uuid.safeParse(userId).success) throw notFound()
+  if (userId === ctx.userId) throw new HttpError(400, 'cannot_remove_self')
+  await tx(c, async (db) => {
+    // Un retrait décidé ici, pas un départ annoncé par ERPlead : `lead_disabled` faux (elle ne revient pas d'elle-même).
+    const r = await db.query(
+      `update account_users set active = false, lead_disabled = false where account_id = app_account() and user_id = $1 and active`, [userId])
+    if (!r.rowCount) throw notFound()
+    const admins = (await db.query(`select count(*)::int as n from account_users where account_id = app_account() and role = 'admin' and active`)).rows[0].n
+    if (!admins) throw new HttpError(400, 'last_admin')
+  })
+  // Ses sessions dans cette entreprise (la garde de session les refuserait déjà : elle n'y est plus active).
+  await anon((db) => db.query('delete from sessions where user_id = $1 and account_id = $2', [userId, ctx.accountId]))
+  return c.json({ ok: true })
+})
+
+/** « Rétablir » (administrateur) : la personne reprend une place, s'il en reste une (invitations en attente comprises). */
+app.post('/members/:userId/restore', async (c) => {
+  requireRole(c, 'admin')
+  const userId = c.req.param('userId')
+  if (!uuid.safeParse(userId).success) throw notFound()
+  await tx(c, async (db, ctx) => {
+    const was = (await db.query('select active from account_users where account_id = app_account() and user_id = $1 for update', [userId])).rows[0]
+    if (!was) throw notFound()
+    if (was.active) return
+    await assertSeatFree(db, ctx.accountId)
+    await db.query('update account_users set active = true, lead_disabled = false where account_id = app_account() and user_id = $1', [userId])
   })
   return c.json({ ok: true })
 })

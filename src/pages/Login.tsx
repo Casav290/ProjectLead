@@ -4,8 +4,8 @@ import { api, errorText } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Button, Input, Spinner } from '../components/ui'
 import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
-import { departsAlone, leadStart, REFUSED, requestedPage } from '../lib/arrival'
-import { leadEntry } from '../lib/leadFamily'
+import { RefusedScreen } from '../components/RefusedScreen'
+import { departsAlone, formuleOf, leadStart, requestedPage } from '../lib/arrival'
 
 const ERRORS: Record<string, string> = {
   lead: 'La connexion par le Compte Lead a échoué. Réessayez.',
@@ -52,18 +52,10 @@ export default function Login() {
 
   if (leadId === null || direct) return <AuthShell><Spinner label="Connexion au Compte Lead…" /></AuthShell>
 
-  // Arrivée refusée (places prises, accès désactivé) : un écran qui dit quoi faire, textes dans src/lib/arrival.ts.
-  const refused = code === 'places' || code === 'desactive' ? REFUSED[code] : null
-  if (leadId && refused) {
-    return (
-      <AuthShell title={refused.title}>
-        <p role="alert" className="mb-6 text-sm text-muted-foreground">{refused.text}</p>
-        <a href={leadStart(next)} data-testid="lead-login"
-          className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
-          Réessayer</a>
-        <AuthSwitch><a href={leadEntry('erplead')} className={authLink}>Retour à mon Compte Lead</a></AuthSwitch>
-      </AuthShell>
-    )
+  // Arrivée refusée (places prises, accès retiré) : un écran qui dit quoi faire selon la formule de l'entreprise (lue
+  // dans l'adresse), « Changer de compte » et le Compte ERPlead (src/components/RefusedScreen.tsx).
+  if (leadId && (code === 'places' || code === 'desactive')) {
+    return <RefusedScreen reason={code} formule={formuleOf(params.get('formule'))} next={next} />
   }
 
   if (leadId && !withEmail) {

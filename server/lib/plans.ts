@@ -43,8 +43,15 @@ export const OPEN_STATUSES = ['planned', 'active', 'on_hold'] as const
 export const isOpenStatus = (s: string | null | undefined) => (OPEN_STATUSES as readonly string[]).includes(s ?? 'active')
 
 export const tierOf = (plan: string | null | undefined): Tier => plan === 'pro_plus' ? 'pro_plus' : plan === 'pro' ? 'pro' : 'free'
-const RANK: Record<Tier, number> = { free: 0, pro: 1, pro_plus: 2 }
+export const RANK: Record<Tier, number> = { free: 0, pro: 1, pro_plus: 2 }
 const best = (a: Tier, b: Tier): Tier => (RANK[a] >= RANK[b] ? a : b)
+
+/**
+ * Une formule se vend-elle à une entreprise qui a déjà `acquired` ? Seulement si elle est STRICTEMENT au-dessus
+ * (suites de l'abonnement, 15.10.2026, point 1) : jamais la même, jamais une inférieure. `acquired` est la formule
+ * acquise (`paidTier` : abonnement ProjectLead, ou formule propre lue au Compte Lead), jamais l'héritage, qui prend fin.
+ */
+export const isAbove = (plan: Tier, acquired: Tier) => RANK[plan] > RANK[acquired]
 
 /** Le code de ProjectLead chez ERPlead (claim `app` des droits). */
 const APP_CODE = () => process.env.LEAD_ID_APP || 'projectlead'
@@ -67,8 +74,13 @@ export async function planOf(db: Db, accountId: string, lock = false) {
   const erpTier = erpValid ? tierOf(u.plan) : 'free'
   // Ce qui est payé dans ProjectLead : l'abonnement local, ou un abonnement ProjectLead connu d'ERPlead (source
   // « own »). Une formule d'origine inconnue (recopiée avant le calcul par application) ne compte pas comme payée ici.
-  const paidTier = best(tierOf(u.own_plan), u.plan_source === 'own' ? erpTier : 'free')
+  const ownTier = tierOf(u.own_plan)
+  const paidTier = best(ownTier, u.plan_source === 'own' ? erpTier : 'free')
   const tier = best(paidTier, erpTier)
+  // Formule propre lue au Compte Lead qu'aucun abonnement ProjectLead ne donne (déclarée chez ERPlead par une autre voie) :
+  // la page Formule dit son origine et sa date de fin, elle se gère dans ERPlead (suites de l'abonnement, point 1).
+  const lead = u.plan_source === 'own' && RANK[erpTier] > RANK[ownTier]
+    ? { tier: erpTier, until: until ? until.toISOString() : null } : null
   const erpSeats = erpValid && Number.isInteger(u.plan_seats) ? (u.plan_seats as number) : 0
   const seats = linked ? Math.max(LIMITS[tier].seats, erpSeats) : Number.POSITIVE_INFINITY
   const limit = linked ? LIMITS[tier].openProjects : Number.POSITIVE_INFINITY
@@ -78,7 +90,7 @@ export async function planOf(db: Db, accountId: string, lock = false) {
   return {
     linked, tier, name: TIER_NAME[tier], upgradeUrl: DEFAULT_UPGRADE_URL,
     source: (tier === 'free' ? 'free' : inherited ? 'family' : 'own') as 'free' | 'family' | 'own',
-    paidTier, inherited,
+    paidTier, inherited, lead,
     seats: Number.isFinite(seats) ? seats as number : null,
     openProjects: (u.open_projects ?? 0) as number, projectLimit: Number.isFinite(limit) ? limit : null,
     members: (u.members ?? 0) as number, invited: (u.invited ?? 0) as number,

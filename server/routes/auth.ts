@@ -6,7 +6,7 @@ import { anon, anonTx, type Db } from '../db.js'
 import { isProduction, leadIdOn } from '../lib/env.js'
 import { body, email, HttpError, type Env } from '../lib/http.js'
 import { finishLogin, logoutUrl, startLogin, verifyLeadJwt, type LeadClaims } from '../lib/leadId.js'
-import { assertSeatFree, savePlan } from '../lib/plans.js'
+import { assertSeatFree, savePlan, type Tier } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
 
 /**
@@ -29,10 +29,14 @@ export const leadSid = (v: unknown): string | null => (typeof v === 'string' && 
 
 export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null, sid?: string | null) {
   const token = newToken()
-  await anon((db) => db.query(
-    `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token, lead_sid)
-     values ($1,$2,$3, now() + make_interval(days => $4), $5, $6, $7)`,
-    [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null, leadSid(sid)]))
+  await anon(async (db) => {
+    await db.query(
+      `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token, lead_sid)
+       values ($1,$2,$3, now() + make_interval(days => $4), $5, $6, $7)`,
+      [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null, leadSid(sid)])
+    // La dernière venue dans cette entreprise (Réglages → Équipe, db/011_seat_last_seen.sql) : chaque arrivée l'écrit.
+    await db.query('update account_users set last_seen_at = now() where account_id = $1 and user_id = $2', [accountId, userId])
+  })
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: SESSION_DAYS * 86400,
   })
@@ -171,6 +175,9 @@ const startLeadLogin = async (c: any) => {
   authorize.searchParams.set('state', state)
   // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
   if (c.req.query('signup') === '1') authorize.searchParams.set('prompt', 'create')
+  // « Changer de compte » (écran de refus, suites de l'abonnement du 15.10.2026) : le Compte Lead redemande l'adresse et
+  // le mot de passe (prompt=login), jamais la session en cours reprise sans formulaire, qui ramènerait au même refus.
+  else if (c.req.query('switch') === '1') authorize.searchParams.set('prompt', 'login')
   // Une heure : le temps de remplir le formulaire d'ERPlead, de retrouver son mot de passe ou de confirmer son adresse.
   await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next } satisfies Saved),
     cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
@@ -194,10 +201,23 @@ app.get('/auth/lead/login', startLeadLogin)
 
 /**
  * Arrivée refusée sans autre issue (passage entre applications, 13.10.2026) : l'espace de l'entreprise n'a plus de
- * place (`places`), ou un administrateur ProjectLead a désactivé la personne (`desactive`). Jamais d'espace à part.
+ * place (`places`, avec la formule de l'entreprise), ou un administrateur ProjectLead a retiré (désactivé) la personne
+ * (`desactive`). Jamais d'espace à part.
  */
 export class ArrivalRefused extends Error {
-  constructor(readonly reason: 'places' | 'desactive') { super(`arrival_${reason}`) }
+  constructor(readonly reason: 'places' | 'desactive', readonly tier?: Tier) { super(`arrival_${reason}`) }
+}
+
+/** La formule dans l'adresse d'un refus « places » (comme Greetlead : free, pro, proplus). */
+const FORMULE: Record<Tier, string> = { free: 'free', pro: 'pro', pro_plus: 'proplus' }
+
+/**
+ * L'écran d'un refus : `/login?erreur=<code>`, la formule de l'entreprise pour « places » (l'écran donne le conseil de
+ * cette formule, src/lib/arrival.ts) et la page demandée (une invitation, un lien profond).
+ */
+export function refusalLocation(code: string, o: { tier?: Tier; next?: string }) {
+  const formule = code === 'places' && o.tier ? `&formule=${FORMULE[o.tier]}` : ''
+  return `/login?erreur=${code}${formule}${o.next ? `&next=${encodeURIComponent(o.next)}` : ''}`
 }
 
 /** Le jeton d'une invitation ProjectLead quand la page demandée est `/invitation/<jeton>`. */
@@ -260,7 +280,7 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
         if (already && !already.lead_disabled && !inv) throw new ArrivalRefused('desactive')
         // Avec une invitation, sa place est déjà comptée : on vérifie seulement que la formule n'a pas baissé depuis.
         try { await assertSeatFree(db, accountId, !inv) } catch (e) {
-          if (e instanceof HttpError && e.code === 'plan_limit_seats') throw new ArrivalRefused('places')
+          if (e instanceof HttpError && e.code === 'plan_limit_seats') throw new ArrivalRefused('places', e.extra.plan as Tier)
           throw e
         }
       }
@@ -379,8 +399,9 @@ app.get('/auth/lead/callback', async (c) => {
     return c.redirect(`/login?erreur=session${next ? `&next=${encodeURIComponent(next)}` : ''}`)
   }
   let saved: Saved = { state: '', nonce: '', verifier: '' }
-  // Un refus garde la page demandée : « Réessayer » (ou « J'ai confirmé mon adresse ») y ramène, invitation comprise.
-  const refused = (code: string) => c.redirect(`/login?erreur=${code}${saved.next ? `&next=${encodeURIComponent(saved.next)}` : ''}`)
+  // Un refus garde la page demandée : « Réessayer », « Changer de compte » ou « J'ai confirmé mon adresse » y ramène,
+  // invitation comprise. « places » dit aussi la formule de l'entreprise (conseil de l'écran).
+  const refused = (code: string, tier?: Tier) => c.redirect(refusalLocation(code, { tier, next: saved.next }))
   try {
     saved = JSON.parse(raw) as Saved
     saved.next = safeNext(saved.next)
@@ -395,7 +416,7 @@ app.get('/auth/lead/callback', async (c) => {
   } catch (e) {
     // Des refus qui durent : un message précis, et pas de nouveau départ automatique (qui tournerait en boucle).
     // La page demandée reste dans l'adresse : « Réessayer » ramène au lien profond (règle du passage, liens profonds).
-    if (e instanceof ArrivalRefused) return refused(e.reason)
+    if (e instanceof ArrivalRefused) return refused(e.reason, e.tier)
     if ((e as Error).message === 'email_not_verified') return refused('email')
     if ((e as Error).message === 'lead_scope_missing') return refused('portee')
     console.error('[compte lead]', (e as Error).message)

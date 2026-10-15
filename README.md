@@ -46,6 +46,7 @@ npm run dev                  # API sur 3002, interface sur http://localhost:5174
 ```bash
 npm run typecheck
 npm test                     # scripts/smoke.ts sur TEST_DATABASE_URL : tout doit être vert
+npx tsx scripts/suites-check.ts   # suites de l'abonnement, sans base : PROJECTLEAD_SUITES_UNIT_OK
 npm run build
 ```
 

@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { publicUrl } from '../lib/env.js'
 import { body, HttpError, router, tx, type Env } from '../lib/http.js'
-import { planOf } from '../lib/plans.js'
+import { isAbove, planOf } from '../lib/plans.js'
 import type { Db } from '../db.js'
 import { APP, PRICES, StripeError, portalConfiguration, priceIds, stripe, stripeConfigured, verifyStripeSignature,
          webhookConfigured, type Interval, type PaidPlan } from '../lib/stripe.js'
@@ -14,7 +14,8 @@ import { customerOf, GRANTING, processEvent, syncErplead } from '../lib/subscrip
  * propre formule, valable chez elle seule). Modèle : CRMlead (server/routes/billing.ts).
  *
  * - `GET  /api/billing`          : la formule, l'abonnement et les prix (tout membre ; seul l'administrateur agit).
- * - `POST /api/billing/checkout` : une session Stripe Checkout (administrateur).
+ * - `POST /api/billing/checkout` : une session Stripe Checkout (administrateur), pour une formule au-dessus de la formule
+ *                                  acquise seulement (409 `plan_not_above` sinon, sans appel à Stripe).
  * - `POST /api/billing/portal`   : le portail client Stripe propre à ProjectLead (administrateur).
  * - `POST /api/stripe/webhook`   : les événements Stripe, signés (sans session : `webhook`, monté avant la garde).
  */
@@ -76,9 +77,13 @@ app.post('/billing/checkout', async (c) => {
   const b = await body(c, z.object({ plan: z.enum(['pro', 'pro_plus']), interval: z.enum(['month', 'year']) }))
   const { plan, interval } = b as { plan: PaidPlan; interval: Interval }
   const ctx = c.get('ctx')
+  const { s, acquired } = await tx(c, async (db) => ({ s: await currentSubscription(db), acquired: (await planOf(db, ctx.accountId)).paidTier }))
   // Déjà abonné à ProjectLead : on change de formule dans le portail, jamais par un second abonnement.
-  const s = await tx(c, (db) => currentSubscription(db))
   if (s && BLOCKING.includes(s.status)) throw new HttpError(409, 'already_subscribed')
+  // Formule acquise égale ou supérieure (formule propre lue au Compte Lead comprise, suites de l'abonnement du
+  // 15.10.2026) : rien à vendre, refusé AVANT tout appel à Stripe (ni client, ni session). L'héritage d'un abonnement
+  // payé ailleurs ne compte pas : il prend fin, l'entreprise doit pouvoir s'abonner ici.
+  if (!isAbove(plan, acquired)) throw new HttpError(409, 'plan_not_above', { plan: acquired })
   try {
     const customer = await customerOf(ctx.accountId, c.get('email'))
     const meta = { app: APP, account_id: ctx.accountId, plan, interval }

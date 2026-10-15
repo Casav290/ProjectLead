@@ -752,7 +752,7 @@ ll = await leadLogin((n) => ({ ...lead(n, false, freeOrg), sub: `sub-collegue-${
 r = await pool.query(`select (select count(*)::int from accounts) as accounts,
   (select count(*)::int from account_users au join users u on u.id = au.user_id where u.lead_sub = $1) as places`, [`sub-collegue-${stamp}`])
 check('gratuit (1 place) : une deuxième personne de l’organisation voit « Toutes les places ProjectLead de votre entreprise sont prises », sans session ni espace à part',
-  ll.location === '/login?erreur=places' && !ll.session && r.rows[0].accounts === accountsBefore && r.rows[0].places === 0,
+  ll.location === '/login?erreur=places&formule=free' && !ll.session && r.rows[0].accounts === accountsBefore && r.rows[0].places === 0,
   { loc: ll.location, session: Boolean(ll.session), ...r.rows[0], accountsBefore })
 // Une adresse pas encore confirmée chez le Compte Lead : un message clair, pas de boucle, rien de créé.
 ll = await leadLogin((n) => ({ ...lead(n, false, `non-confirme-${stamp}`), email_verified: false }))
@@ -879,10 +879,10 @@ check('… il entre dans l’entreprise dont il est membre (comme avant le passa
     a.location === '/' && aMe.body.account?.lead_org === org && aMe.body.user?.role === 'admin', { loc: a.location, account: aMe.body.account, role: aMe.body.user?.role })
   const n = await leadLogin(as('collegue', 'user'))
   check('… une autre collègue voit ensuite « places prises » (un administrateur peut maintenant libérer une place ou changer de formule)',
-    n.location === '/login?erreur=places' && !n.session, n.location)
+    n.location === '/login?erreur=places&formule=free' && !n.session, n.location)
   const b = await leadLogin(as('admin2', 'admin'))
   check('… une 2e administratrice d’ERPlead aussi : la place garantie ne vaut que pour un espace sans administrateur',
-    b.location === '/login?erreur=places' && !b.session, b.location)
+    b.location === '/login?erreur=places&formule=free' && !b.session, b.location)
   // Devenue administratrice chez ERPlead : elle le devient ici aussi, dans l'espace de son organisation (jamais l'inverse).
   const up = await leadLogin(as('membre', 'admin'))
   const upMe = await new Client().req('GET', '/api/me', undefined, { cookie: up.session })
@@ -910,7 +910,7 @@ check('formule descendue en gratuit : une ancienne invitation ne fait plus entre
 ll = await leadLogin((n) => ({ ...lead(n, false, `yves-org-${stamp}`), sub: `sub-yves-${stamp}`, email: `yves-${stamp}@exemple.test`, org_role: 'admin' }),
   `?next=/invitation/${yvesToken}`)
 check('… ni par le Compte Lead : écran « places prises », pas de session, invitation gardée',
-  ll.location === `/login?erreur=places&next=${encodeURIComponent(`/invitation/${yvesToken}`)}` && !ll.session
+  ll.location === `/login?erreur=places&formule=free&next=${encodeURIComponent(`/invitation/${yvesToken}`)}` && !ll.session
   && (await pool.query('select accepted_at from invitations where token_hash = $1', [hashTokenSmoke(yvesToken)])).rows[0]?.accepted_at === null, ll)
 const paulId = (await pool.query('select id from users where lower(email) = lower($1)', [`paul-${stamp}@exemple.test`])).rows[0].id
 r = await plus.patch(`/api/team/members/${paulId}`, { active: false })
@@ -999,6 +999,8 @@ section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul 
   check('départ : jamais prompt=none ni une page hors de ProjectLead', ![root, entry, deep, entryNext].some((u) => /prompt/.test(u))
     && leadStart('//evil.test') === '/auth/lead/start' && leadStart(requestedPage('/login', '?next=%2F%2Fevil.test')) === '/auth/lead/start')
   check('inscription : départ avec signup=1', leadStart(null, true) === '/auth/lead/start?signup=1')
+  check('« Changer de compte » (refus) : départ avec switch=1, page demandée gardée', leadStart(null, false, true) === '/auth/lead/start?switch=1'
+    && leadStart('/projets', false, true) === `/auth/lead/start?switch=1&next=${encodeURIComponent('/projets')}`, leadStart('/projets', false, true))
   // Un seul départ automatique : après un retour en erreur, seul un clic relance (anti-boucle).
   check('écran de connexion : part seul une fois (Compte Lead branché, sans erreur)', departsAlone({ leadId: true, code: '', withEmail: false }))
   check('… jamais après un retour en erreur, ni sur l’accès par e-mail, ni sans Compte Lead',
@@ -1707,6 +1709,141 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
   check('résiliation de l\'entreprise : seulement SES abonnements ProjectLead en cours (DELETE), jamais ceux d\'une autre application',
     n === 2 && deletes.length === 2 && deletes.every((p) => new RegExp(`sub_${stamp}_[23]$`).test(p)) && !deletes.some((p) => p.includes(`sub_${stamp}_crm`))
     && (await boss.get('/api/me')).body.plan.tier === 'free', { n, deletes })
+
+  // ================================================================ suites de l'abonnement (15.10.2026)
+  // Spécification : ~/projets/.unlazy/lead-vercel/billing-followups-design.md (points 1, 2, 4 et 6a) ; les contrôles
+  // sans base sont dans scripts/suites-check.ts.
+  section('Suites de l’abonnement (15.10.2026) : offres au-dessus de la formule acquise, « Retirer », dernière venue, refus « places »')
+  {
+    const future = new Date(Date.now() + 30 * 86400e3).toISOString()
+    const past = new Date(Date.now() - 86400e3).toISOString()
+    /** L'administratrice d'une nouvelle organisation, arrivée par le Compte Lead avec les droits donnés. */
+    const arrive = async (k: string, plan: Record<string, unknown>) => {
+      const org = `suites-${k}-${stamp}`
+      const s = await leadLogin((n) => ({ ...lead(n, true, org), sub: `sub-suites-${k}-${stamp}`, email: `suites-${k}-${stamp}@exemple.test`, lead: plan }))
+      const c = new Client(); c.cookie = s.session
+      return { c, org, acc: (await pool.query('select id from accounts where lead_org = $1', [org])).rows[0]?.id as string }
+    }
+
+    // ---- point 1 : formule propre Pro+ lue au Compte Lead, aucun abonnement ProjectLead (TEST 08 en production)
+    const pp = await arrive('pp', rights('pro_plus', { valid_until: future }))
+    r = await pp.c.get('/api/billing')
+    check('formule propre Pro+ du Compte Lead, sans abonnement ProjectLead : formule acquise Pro+, son origine et sa date de fin (plan.lead)',
+      r.status === 200 && r.body.plan.paidTier === 'pro_plus' && r.body.plan.lead?.tier === 'pro_plus' && r.body.plan.lead?.until === future
+      && r.body.subscription === null, r.body.plan)
+    let n0 = calls.length
+    const ppPro = await pp.c.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+    const ppPlus = await pp.c.post('/api/billing/checkout', { plan: 'pro_plus', interval: 'year' })
+    check('… Checkout Pro et Pro+ refusés (409 plan_not_above) AVANT Stripe : zéro appel au faux Stripe, aucun client Stripe créé',
+      ppPro.status === 409 && ppPro.body.error === 'plan_not_above' && ppPlus.status === 409 && ppPlus.body.error === 'plan_not_above'
+      && calls.length === n0 && !(await pool.query('select stripe_customer_id from accounts where id = $1', [pp.acc])).rows[0].stripe_customer_id,
+      { pro: ppPro, plus: ppPlus, appelsStripe: calls.length - n0 })
+    // Formule propre Pro : Pro refusé, Pro+ accepté.
+    const op = await arrive('pro', rights('pro', { valid_until: future }))
+    n0 = calls.length
+    r = await op.c.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+    check('formule propre Pro du Compte Lead : Checkout Pro refusé (409 plan_not_above), zéro appel au faux Stripe',
+      r.status === 409 && r.body.error === 'plan_not_above' && calls.length === n0, { r, appelsStripe: calls.length - n0 })
+    r = await op.c.post('/api/billing/checkout', { plan: 'pro_plus', interval: 'month' })
+    check('… Checkout Pro+ accepté (au-dessus de la formule acquise) : session Stripe', r.status === 200
+      && /^https:\/\/checkout\.stripe\.test\//.test(r.body.url) && calls.length > n0, r)
+    // Héritage d'un abonnement payé ailleurs (source « family ») : il prend fin, on doit pouvoir s'abonner.
+    const fam = await arrive('famille', rights('pro_plus', { source: 'family', valid_until: future, from_app: 'crmlead' }))
+    const famPlan = (await fam.c.get('/api/billing')).body.plan
+    const famPro = await fam.c.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+    const famPlus = await fam.c.post('/api/billing/checkout', { plan: 'pro_plus', interval: 'month' })
+    check('héritage Pro+ (source family, jusqu’à une date figée) : formule acquise Gratuit, Checkout Pro et Pro+ acceptés',
+      famPlan.tier === 'pro_plus' && famPlan.paidTier === 'free' && famPlan.lead === null && famPlan.inherited?.app === 'crmlead'
+      && famPro.status === 200 && famPlus.status === 200, { famPlan, famPro: famPro.status, famPlus: famPlus.status })
+    // Formule propre échue (valid_until passée) : plus acquise.
+    const old = await arrive('echue', rights('pro_plus', { valid_until: past }))
+    r = await old.c.post('/api/billing/checkout', { plan: 'pro', interval: 'month' })
+    const oldPlan = (await old.c.get('/api/billing')).body.plan
+    check('formule propre du Compte Lead échue (valid_until passée) : ni acquise ni affichée, Checkout Pro accepté',
+      r.status === 200 && oldPlan.paidTier === 'free' && oldPlan.lead === null, { status: r.status, oldPlan })
+
+    // ---- point 2 : la liste des places, dernière venue, « Retirer » (désactivation gardée), « Rétablir »
+    const seatOrg = `suites-places-${stamp}`
+    const seatPlan = rights('pro_plus', { valid_until: future })
+    const as = (who: string, role = 'user') => (n: string) => ({ ...lead(n, true, seatOrg), lead: seatPlan, sub: `sub-sp-${who}-${stamp}`,
+      email: `sp-${who}-${stamp}@exemple.test`, org_role: role })
+    const ada = new Client(); ada.cookie = (await leadLogin(as('ada', 'admin'))).session
+    const people: Record<string, Client> = {}
+    for (const who of ['bea', 'cyd', 'dan', 'eve']) { const c = new Client(); c.cookie = (await leadLogin(as(who))).session; people[who] = c }
+    const idOf = async (who: string) => (await pool.query('select id from users where lead_sub = $1', [`sub-sp-${who}-${stamp}`])).rows[0]?.id as string
+    const [adaId, beaId, cydId, danId] = await Promise.all(['ada', 'bea', 'cyd', 'dan'].map(idOf))
+    const lastSeen = async (id: string) => (await pool.query(
+      'select au.last_seen_at from account_users au join accounts a on a.id = au.account_id where au.user_id = $1 and a.lead_org = $2', [id, seatOrg])).rows[0]?.last_seen_at as Date | null
+    r = await ada.get('/api/team')
+    const seen = Object.fromEntries((r.body.members ?? []).map((m: any) => [m.id, m.last_seen_at]))
+    check('dernière venue (account_users.last_seen_at) écrite à l’arrivée par le Compte Lead, rendue par /api/team',
+      [adaId, beaId, cydId, danId].every((id) => seen[id] && Date.now() - Date.parse(seen[id]) < 120_000), seen)
+    await pool.query(`update account_users set last_seen_at = now() - interval '2 hours' where user_id = $1`, [beaId])
+    await people.bea.get('/api/me')
+    const active1 = await lastSeen(beaId)
+    check('dernière venue reprise à l’activité (une requête avec une session) quand elle date de plus d’une heure',
+      active1 && Date.now() - active1.getTime() < 60_000, active1)
+    await pool.query(`update account_users set last_seen_at = now() - interval '10 minutes' where user_id = $1`, [beaId])
+    const tenMinutes = await lastSeen(beaId)
+    await people.bea.get('/api/me')
+    check('… au plus une fois par heure (pas une écriture à chaque requête)', (await lastSeen(beaId))?.getTime() === tenMinutes?.getTime(),
+      { tenMinutes, now: await lastSeen(beaId) })
+
+    // ---- point 4 : refus « places », la formule de l'entreprise dans l'adresse
+    const proOrg = `suites-pro-plein-${stamp}`
+    await leadLogin((n) => ({ ...lead(n, true, proOrg), lead: rights('pro', { valid_until: future }), sub: `sub-pp1-${stamp}`, email: `pp1-${stamp}@exemple.test` }))
+    const proFull = await leadLogin((n) => ({ ...lead(n, true, proOrg), lead: rights('pro', { valid_until: future }), sub: `sub-pp2-${stamp}`,
+      email: `pp2-${stamp}@exemple.test`, org_role: 'user' }))
+    check('Pro plein (1 place) : une 2e personne → écran « places prises » de la formule Pro', proFull.location === '/login?erreur=places&formule=pro'
+      && !proFull.session, proFull.location)
+    const sixth = await leadLogin(as('fay'))
+    check('Pro+ plein (5 places sur 5) : une 6e personne → écran « places prises » de la formule Pro+, sans session',
+      sixth.location === '/login?erreur=places&formule=proplus' && !sixth.session, sixth.location)
+    const sw = await app.request('http://localhost/auth/lead/start?switch=1&next=/projets')
+    const swTo = new URL(sw.headers.get('location') ?? 'http://x/')
+    check('« Changer de compte » (/auth/lead/start?switch=1) : autorisation du Compte Lead avec prompt=login (formulaire, jamais la session reprise)',
+      sw.status === 302 && swTo.pathname === '/oauth/authorize' && swTo.searchParams.get('prompt') === 'login', swTo.href)
+
+    // ---- point 2 (suite) : « Retirer »
+    r = await people.bea.post(`/api/team/members/${danId}/remove`)
+    const byMember = r.status
+    await ada.patch(`/api/team/members/${cydId}`, { role: 'manager' })
+    r = await people.cyd.post(`/api/team/members/${danId}/remove`)
+    const byManager = r.status
+    check('« Retirer » par une membre → 403, par un responsable → 403 (réservé à l’administrateur)', byMember === 403 && byManager === 403, { byMember, byManager })
+    r = await ada.post(`/api/team/members/${adaId}/remove`)
+    check('« Retirer » sur sa propre ligne → 400 cannot_remove_self', r.status === 400 && r.body.error === 'cannot_remove_self', r)
+    r = await ada.post(`/api/team/members/${randomUUID()}/remove`)
+    check('« Retirer » une personne inconnue de l’entreprise → 404', r.status === 404, r)
+    const usedBefore = (await ada.get('/api/me')).body.plan.members
+    const beaSeen = await lastSeen(beaId)
+    r = await ada.post(`/api/team/members/${beaId}/remove`)
+    const usedAfter = (await ada.get('/api/me')).body.plan.members
+    const beaSessions = (await pool.query(`select count(*)::int as n from sessions s join accounts a on a.id = s.account_id
+                                            where s.user_id = $1 and a.lead_org = $2`, [beaId, seatOrg])).rows[0].n
+    const beaMe = await people.bea.get('/api/me')
+    check('« Retirer » par l’administratrice : place libérée tout de suite, sessions de la personne dans l’entreprise fermées (401), dernière venue gardée',
+      r.status === 200 && usedAfter === usedBefore - 1 && beaSessions === 0 && beaMe.status === 401 && (await lastSeen(beaId))?.getTime() === beaSeen?.getTime(),
+      { status: r.status, usedBefore, usedAfter, beaSessions, me: beaMe.status })
+    const beaRow = (await ada.get('/api/team')).body.members.find((m: any) => m.id === beaId)
+    check('… listée à part : inactive, retirée par un administrateur (lead_disabled faux), dernière venue gardée',
+      beaRow?.active === false && beaRow?.lead_disabled === false && Boolean(beaRow?.last_seen_at), beaRow)
+    const back = await leadLogin(as('bea'))
+    check('retrait gardé : à sa connexion suivante par le Compte Lead, « accès désactivé », même s’il reste une place (elle ne revient pas d’elle-même)',
+      back.location === '/login?erreur=desactive' && !back.session, back.location)
+    r = await people.dan.post(`/api/team/members/${beaId}/restore`)
+    check('« Rétablir » par une membre → 403', r.status === 403, r)
+    // Une invitation en attente tient la place libérée : rétablir est alors refusé, comme inviter.
+    await ada.post('/api/team/invite', { email: `sp-gil-${stamp}@exemple.test` })
+    r = await ada.post(`/api/team/members/${beaId}/restore`)
+    check('« Rétablir » quand une invitation en attente a repris la place → 402 plan_limit_seats', r.status === 402 && r.body.error === 'plan_limit_seats', r)
+    const gil = (await ada.get('/api/team')).body.invitations.find((i: any) => i.email === `sp-gil-${stamp}@exemple.test`)
+    await ada.del(`/api/team/invitations/${gil?.id}`)
+    r = await ada.post(`/api/team/members/${beaId}/restore`)
+    const again = await leadLogin(as('bea'))
+    check('« Rétablir » par l’administratrice : 200, et elle rentre à sa connexion suivante', r.status === 200 && again.location === '/' && Boolean(again.session),
+      { status: r.status, loc: again.location })
+  }
   fakeStripe.close()
   for (const k of ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_PRO_MONTHLY', 'STRIPE_PRICE_PRO_YEARLY', 'STRIPE_PRICE_PROPLUS_MONTHLY',
     'STRIPE_PRICE_PROPLUS_YEARLY', 'STRIPE_PORTAL_CONFIGURATION', 'STRIPE_API_BASE']) delete process.env[k]

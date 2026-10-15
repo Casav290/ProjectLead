@@ -244,6 +244,36 @@ CRMlead). Aucun achat réel n'a été fait.
   Objets Stripe jamais supprimés : prix et portail en `active=false`, endpoint désactivé. La migration 008 est additive ; l'ancien code ignore ses
   colonnes (seul le défaut `free` et le passage en Gratuit des 27 comptes de contrôle restent).
 
+## Suites de l'abonnement (15.10.2026, enregistrées, pas encore en ligne)
+
+Spécification : `~/projets/.unlazy/lead-vercel/billing-followups-design.md` (points 1, 2, 4 et 6a pour ProjectLead) ;
+portes : `GATES-billing-followups.md` (L4 en local).
+
+- **Offres (point 1)** : rien ne se vend à une formule égale ou inférieure à la formule acquise (`paidTier` :
+  abonnement ProjectLead, ou formule propre lue au Compte Lead ; jamais l'héritage, qui prend fin). Le serveur refuse
+  `POST /api/billing/checkout` en 409 `plan_not_above` AVANT tout appel à Stripe (`isAbove`, `server/lib/plans.ts`).
+  Une formule propre du Compte Lead qu'aucun abonnement ProjectLead ne donne (`plan.lead`) est dite sous « Votre
+  formule » : « Pro+ par votre compte ERPlead, jusqu'au … Cette formule se gère dans ERPlead, pas ici. » Contrat de page
+  du banc : `data-plan-current`, `data-plan-acquired`, `data-plan-offer` (`PlanStatus`, `PlanTiers`).
+- **Places (point 2)** : Réglages → Équipe liste les places prises (personnes actives et invitations en attente), avec
+  la dernière venue (`account_users.last_seen_at`, `db/011_seat_last_seen.sql`, écrite à chaque ouverture de session
+  et à l'activité au plus une fois par heure). « Retirer » (administrateur, jamais soi-même, deux temps) :
+  `POST /api/team/members/:id/remove`, place libérée, sessions de l'entreprise fermées, retrait gardé (« accès
+  désactivé » à la reconnexion, même s'il reste une place) ; « Rétablir » : `POST /api/team/members/:id/restore`
+  (402 s'il n'y a plus de place). Personnes parties du Compte Lead (`lead_disabled`, back-channel « disabled ») : à
+  part, sans « Rétablir ». Contrat : `data-seat-list`, `data-seat-holder`, `data-last-seen`, `data-seat-remove`,
+  `data-seat-removed`. lt07e (retirée au Compte Lead, encore active en production) sera rattrapée par
+  `scripts/resync-departures.mjs` d'ERPlead.
+- **Refus « places » (points 4 et 6a)** : `/login?erreur=places&formule=<free|pro|proplus>` (la formule de
+  l'entreprise, `refusalLocation`), servi sans session (`src/components/RefusedScreen.tsx`) : « Changer de compte »
+  (`/auth/lead/start?switch=1` → prompt=login chez ERPlead), « Retour à mon Compte Lead » (erplead.io/account),
+  conseil selon la formule (Pro+ plein : libérer une place, aucune offre ; Gratuit ou Pro : Pro+ et 5 places, « Voir
+  les formules » vers la page publique `/formules`). Plus de « Réessayer » qui ramenait au même refus.
+- **Langue** : français, comme tout ProjectLead (`docs/FONCTIONNALITES.md`).
+- **Contrôles** : `npx tsx scripts/suites-check.ts` (sans base) et `npm test` (section « Suites de l'abonnement »).
+- **Mise en ligne** : la migration 011 est additive et rejouable ; l'ancien code ignore `last_seen_at` (retour arrière :
+  revenir au commit précédent de `vercel`).
+
 ## Fait le 01.10
 
 - Domaine projectlead.io : répond (`/api/health`), contrôle en ligne et README dessus.

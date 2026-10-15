@@ -29,6 +29,7 @@ const Billing = lazy(() => import('./pages/Billing'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Search = lazy(() => import('./pages/Search'))
 const Legal = lazy(() => import('./pages/Legal'))
+const Plans = lazy(() => import('./pages/Plans'))
 
 /** Les pages publiques s'ouvrent avec ou sans session : le client n'a pas de compte. */
 const PUBLIC = [
@@ -39,6 +40,8 @@ const PUBLIC = [
   { path: '/invitation/:token', el: <Invitation /> },
   { path: '/confidentialite', el: <Legal kind="privacy" /> },
   { path: '/conditions', el: <Legal kind="terms" /> },
+  // Les formules (« Voir les formules » d'un écran de refus « places ») : sans session aussi.
+  { path: '/formules', el: <Plans /> },
 ]
 
 /** /login (adresse d'entrée du lanceur) avec une session déjà ouverte : la page demandée (?next=), sinon l'accueil de l'espace. */
@@ -50,7 +53,7 @@ function AlreadyIn() {
 function Routed() {
   const { me, loading } = useApp()
   const loc = useLocation()
-  const isPublic = /^\/(suivi|rdv|demande|invitation)\/|^\/(confidentialite|conditions)$/.test(loc.pathname)
+  const isPublic = /^\/(suivi|rdv|demande|invitation)\/|^\/(confidentialite|conditions|formules)$/.test(loc.pathname)
   if (isPublic) return <Routes>{PUBLIC.map((p) => <Route key={p.path} path={p.path} element={p.el} />)}</Routes>
   if (loading) return <Spinner />
   if (!me) {

@@ -56,3 +56,8 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   événement d'une autre application reçoit 200 sans aucune écriture (`own`, `server/lib/stripe.ts`).
 - Les pages publiques (`/suivi`, `/rdv`, `/demande`) ne rendent que ce qui est destiné au client : ni compte,
   ni jeton, ni email interne, ni ce qui n'est pas coché « visible par le client ».
+- Suites de l'abonnement (15.10.2026, `docs/PASSATION.md`) : jamais une offre égale ou inférieure à la formule acquise
+  (`paidTier`, formule propre du Compte Lead comprise ; le serveur refuse en 409 `plan_not_above` avant Stripe) ;
+  « Retirer » (administrateur, jamais soi-même) = désactivation gardée, dernière venue dans `account_users.last_seen_at` ;
+  refus « places » à `/login?erreur=places&formule=…` avec « Changer de compte » (`switch=1` → prompt=login), jamais un
+  « Réessayer » qui ramène au même refus. Contrats `data-plan-*` et `data-seat-*` lus par le banc : ne pas les retirer.

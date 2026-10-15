@@ -121,11 +121,17 @@ app.delete('/api/ops/secrets/:name', async (c) => {
 app.use('/api/*', async (c, next) => {
   const token = getCookie(c, SESSION_COOKIE)
   if (!token) return c.json({ error: 'unauthenticated' }, 401)
-  const s = await anon(async (db) => (await db.query(
-    `select s.user_id, s.account_id, au.role, u.name, u.email
-       from sessions s join account_users au on au.user_id = s.user_id and au.account_id = s.account_id and au.active
-       join users u on u.id = s.user_id
-      where s.token_hash = $1 and s.expires_at > now()`, [hashToken(token)])).rows[0])
+  const s = await anon(async (db) => {
+    const row = (await db.query(
+      `select s.user_id, s.account_id, au.role, u.name, u.email,
+              (au.last_seen_at is null or au.last_seen_at < now() - interval '1 hour') as seen_stale
+         from sessions s join account_users au on au.user_id = s.user_id and au.account_id = s.account_id and au.active
+         join users u on u.id = s.user_id
+        where s.token_hash = $1 and s.expires_at > now()`, [hashToken(token)])).rows[0]
+    // La dernière venue (Réglages → Équipe) suit aussi l'activité, au plus une fois par heure : pas une écriture par requête.
+    if (row?.seen_stale) await db.query('update account_users set last_seen_at = now() where account_id = $1 and user_id = $2', [row.account_id, row.user_id])
+    return row
+  })
   if (!s) return c.json({ error: 'unauthenticated' }, 401)
   c.set('ctx', { accountId: s.account_id, userId: s.user_id, role: s.role })
   c.set('name', s.name)

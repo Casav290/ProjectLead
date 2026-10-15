@@ -2,20 +2,13 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { api, errorText } from '../lib/api'
+import { leadEntry } from '../lib/leadFamily'
 import { useApp } from '../lib/store'
+import { euros, PLAN_FEATURES as FEATURES, PLAN_NAME as NAME, PLAN_RANK as RANK } from '../lib/plans'
 import type { Billing, Plan } from '../lib/types'
 import { Button, Card, Spinner } from './ui'
 
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`
-const RANK: Record<Plan['tier'], number> = { free: 0, pro: 1, pro_plus: 2 }
-const NAME: Record<Plan['tier'], string> = { free: 'Gratuit', pro: 'Pro', pro_plus: 'Pro+' }
-const FEATURES: Record<Plan['tier'], string[]> = {
-  free: ['3 projets en cours à la fois', '1 personne', 'Toutes les fonctions de ProjectLead'],
-  pro: ['Projets sans limite', '1 personne', 'Toutes les fonctions de ProjectLead'],
-  pro_plus: ['Projets sans limite', "Jusqu'à 5 personnes", 'Toutes les fonctions de ProjectLead'],
-}
-const euros = (n: number) => new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'EUR',
-  minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n)
 const day = (d: string) => new Date(d).toLocaleDateString('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
 const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'ScanLead', invoicelead: 'InvoiceLead', greetlead: 'Greetlead' } as Record<string, string>)[code ?? ''] ?? code ?? 'Lead'
 
@@ -61,10 +54,6 @@ export function PlanCard() {
 
   const plan = b.plan
   const sub = b.subscription
-  const subscribed = Boolean(sub?.active)
-  // Un abonnement en cours ou impayé se règle ou se change au portail, jamais par un second abonnement.
-  const locked = Boolean(sub?.blocking)
-  const current = plan.paidTier
   const seats = plan.seats === null ? 'sans limite' : plural(plan.seats, 'personne', 'personnes')
 
   async function go(path: string, body?: unknown) {
@@ -79,39 +68,6 @@ export function PlanCard() {
   }
   const checkout = (p: 'pro' | 'pro_plus') => go('/billing/checkout', { plan: p, interval: annual ? 'year' : 'month' })
   const portal = () => go('/billing/portal')
-
-  const card = (p: Plan['tier']) => {
-    // « Formule actuelle » seulement sur la période prise : l'autre période se change au portail.
-    const here = p === current && (p === 'free' || !subscribed || !sub?.interval || sub.interval === (annual ? 'year' : 'month'))
-    const price = p === 'free' ? 0 : b.prices[p][annual ? 'year' : 'month']
-    let action: ReactNode = null
-    if (here) {
-      action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">Formule actuelle</p>
-    } else if (b.configured && b.canManage && p !== 'free') {
-      action = locked
-        // Déjà abonné : on change de formule dans le portail, jamais par un second abonnement.
-        ? (b.portal ? <Button className="w-full" onClick={portal} disabled={!!busy}>Changer de formule</Button> : null)
-        : RANK[p] > RANK[current]
-          ? <Button variant="primary" className="w-full" onClick={() => checkout(p)} disabled={!!busy}>
-              {busy === '/billing/checkout' ? 'Ouverture du paiement…' : p === 'pro' ? 'Passer à Pro' : 'Passer à Pro+'}</Button>
-          : null
-    }
-    return (
-      <article key={p} className={clsx('flex flex-col bg-card p-4', here ? 'border-2 border-accent' : 'border border-input')}>
-        <h3 className="text-base font-extrabold">{NAME[p]}</h3>
-        <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5">
-          <span className="text-2xl font-extrabold leading-none tracking-[-.02em]">{euros(price)}</span>
-          <span className="text-xs text-muted-foreground">{p === 'free' ? 'sans limite de durée' : annual ? '/ an HT' : '/ mois HT'}</span>
-        </p>
-        <p className="mt-1 h-4 text-xs text-muted-foreground">
-          {p !== 'free' && annual ? `soit ${euros(Math.round((price / 12) * 100) / 100)} / mois` : ''}</p>
-        <ul className="mt-3 flex-1 space-y-1.5 text-sm">
-          {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
-        </ul>
-        <div className="mt-4 min-h-[36px]">{action}</div>
-      </article>
-    )
-  }
 
   const toggle = (on: boolean, label: ReactNode) => (
     <button type="button" aria-pressed={annual === on} onClick={() => { setIntervalSet(true); setAnnual(on) }}
@@ -133,20 +89,7 @@ export function PlanCard() {
         )}
 
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="space-y-1">
-            <p>Votre formule : <span className="font-bold">{plan.name}</span>
-              {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
-            {sub && subscribed && (
-              <p className="text-muted-foreground">Abonnement ProjectLead {NAME[sub.plan]}{sub.interval === 'year' ? ', annuel' : sub.interval === 'month' ? ', mensuel' : ''}
-                {sub.endsAt ? <> · se termine le {day(sub.endsAt)}, puis Gratuit</>
-                  : sub.currentPeriodEnd ? <> · renouvellement le {day(sub.currentPeriodEnd)}</> : null}</p>
-            )}
-            {plan.inherited && (
-              <p className="text-muted-foreground">
-                {NAME[plan.inherited.tier]}{plan.inherited.until ? ` jusqu'au ${day(plan.inherited.until)}` : ''} grâce à votre abonnement {appName(plan.inherited.app)},
-                puis Gratuit, sauf si vous prenez une formule ici.</p>
-            )}
-          </div>
+          <PlanStatus b={b} />
           {b.portal && b.canManage && b.hasCustomer && (
             <Button onClick={portal} disabled={!!busy}>{busy === '/billing/portal' ? 'Ouverture…' : "Gérer l'abonnement"}</Button>
           )}
@@ -174,7 +117,7 @@ export function PlanCard() {
           </div>
           {!b.canManage && <p className="text-xs text-muted-foreground">Seul un administrateur peut changer la formule.</p>}
         </div>
-        <div className="grid gap-3 md:grid-cols-3">{card('free')}{card('pro')}{card('pro_plus')}</div>
+        <PlanTiers b={b} annual={annual} busy={busy} onCheckout={checkout} onPortal={portal} />
         {error && <p className="text-late">{error}</p>}
 
         <p className="text-xs text-muted-foreground">Les demandes à qualifier, les projets terminés, archivés et les modèles ne comptent pas.
@@ -185,6 +128,86 @@ export function PlanCard() {
       </div>
     </Card>
   )
+}
+
+/**
+ * « Votre formule » : la formule appliquée et ce qui la donne (abonnement ProjectLead, héritage jusqu'à une date, ou
+ * formule propre lue au Compte Lead, qui se gère dans ERPlead). Contrat de page des suites de l'abonnement (15.10.2026,
+ * § 1.1.4) : `data-plan-current` (formule appliquée) et `data-plan-acquired` (formule acquise : la seule au-dessus de
+ * laquelle une formule se vend ; jamais l'héritage).
+ */
+export function PlanStatus({ b }: { b: Billing }) {
+  const plan = b.plan
+  const sub = b.subscription
+  const subscribed = Boolean(sub?.active)
+  return (
+    <div className="space-y-1">
+      <p data-plan-current={plan.tier} data-plan-acquired={plan.paidTier}>Votre formule : <span className="font-bold">{plan.name}</span>
+        {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
+      {sub && subscribed && (
+        <p className="text-muted-foreground">Abonnement ProjectLead {NAME[sub.plan]}{sub.interval === 'year' ? ', annuel' : sub.interval === 'month' ? ', mensuel' : ''}
+          {sub.endsAt ? <> · se termine le {day(sub.endsAt)}, puis Gratuit</>
+            : sub.currentPeriodEnd ? <> · renouvellement le {day(sub.currentPeriodEnd)}</> : null}</p>
+      )}
+      {plan.lead && (
+        <p className="text-muted-foreground">
+          {NAME[plan.lead.tier]} par votre compte ERPlead{plan.lead.until ? `, jusqu'au ${day(plan.lead.until)}` : ''}. Cette formule se gère dans
+          ERPlead, pas ici. <a href={leadEntry('erplead')} className="font-semibold text-accent-dark hover:underline">Ouvrir mon compte ERPlead</a></p>
+      )}
+      {plan.inherited && (
+        <p className="text-muted-foreground">
+          {NAME[plan.inherited.tier]}{plan.inherited.until ? ` jusqu'au ${day(plan.inherited.until)}` : ''} grâce à votre abonnement {appName(plan.inherited.app)},
+          puis Gratuit, sauf si vous prenez une formule ici.</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Les trois formules et ce que l'administrateur peut en faire : « Formule actuelle », « Passer à … » seulement au-dessus
+ * de la formule acquise (`paidTier`, comme le refus du serveur, 409 `plan_not_above`), « Changer de formule » au portail
+ * pour un abonné. Chaque bouton d'achat porte `data-plan-offer` (contrat de page des suites de l'abonnement).
+ */
+export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
+  { b: Billing; annual: boolean; busy: string | null; onCheckout: (p: 'pro' | 'pro_plus') => void; onPortal: () => void }) {
+  const sub = b.subscription
+  const subscribed = Boolean(sub?.active)
+  // Un abonnement en cours ou impayé se règle ou se change au portail, jamais par un second abonnement.
+  const locked = Boolean(sub?.blocking)
+  const current = b.plan.paidTier
+  const card = (p: Plan['tier']) => {
+    // « Formule actuelle » seulement sur la période prise : l'autre période se change au portail.
+    const here = p === current && (p === 'free' || !subscribed || !sub?.interval || sub.interval === (annual ? 'year' : 'month'))
+    const price = p === 'free' ? 0 : b.prices[p][annual ? 'year' : 'month']
+    let action: ReactNode = null
+    if (here) {
+      action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">Formule actuelle</p>
+    } else if (b.configured && b.canManage && p !== 'free') {
+      action = locked
+        // Déjà abonné : on change de formule dans le portail, jamais par un second abonnement.
+        ? (b.portal ? <Button className="w-full" onClick={onPortal} disabled={!!busy}>Changer de formule</Button> : null)
+        : RANK[p] > RANK[current]
+          ? <Button variant="primary" className="w-full" data-plan-offer={p} onClick={() => onCheckout(p)} disabled={!!busy}>
+              {busy === '/billing/checkout' ? 'Ouverture du paiement…' : p === 'pro' ? 'Passer à Pro' : 'Passer à Pro+'}</Button>
+          : null
+    }
+    return (
+      <article key={p} className={clsx('flex flex-col bg-card p-4', here ? 'border-2 border-accent' : 'border border-input')}>
+        <h3 className="text-base font-extrabold">{NAME[p]}</h3>
+        <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5">
+          <span className="text-2xl font-extrabold leading-none tracking-[-.02em]">{euros(price)}</span>
+          <span className="text-xs text-muted-foreground">{p === 'free' ? 'sans limite de durée' : annual ? '/ an HT' : '/ mois HT'}</span>
+        </p>
+        <p className="mt-1 h-4 text-xs text-muted-foreground">
+          {p !== 'free' && annual ? `soit ${euros(Math.round((price / 12) * 100) / 100)} / mois` : ''}</p>
+        <ul className="mt-3 flex-1 space-y-1.5 text-sm">
+          {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
+        </ul>
+        <div className="mt-4 min-h-[36px]">{action}</div>
+      </article>
+    )
+  }
+  return <div className="grid gap-3 md:grid-cols-3">{card('free')}{card('pro')}{card('pro_plus')}</div>
 }
 
 /** Le lien « Passer à Pro » : vers la page Formule pour un administrateur, une indication pour les autres. */

@@ -14,12 +14,16 @@ export type Me = {
 }
 
 /**
- * La formule ProjectLead et ce qu'en utilise l'entreprise (server/lib/plans.ts). `paidTier` : la formule payée dans
- * ProjectLead ; `inherited` : celle d'un abonnement payé ailleurs avant la bascule, jusqu'à une date figée.
+ * La formule ProjectLead et ce qu'en utilise l'entreprise (server/lib/plans.ts). `tier` : la formule appliquée ;
+ * `paidTier` : la formule acquise (abonnement ProjectLead, ou formule propre lue au Compte Lead), la seule au-dessus de
+ * laquelle une formule se vend ; `inherited` : celle d'un abonnement payé ailleurs avant la bascule, jusqu'à une date
+ * figée ; `lead` : une formule propre lue au Compte Lead qu'aucun abonnement ProjectLead ne donne (elle se gère dans
+ * ERPlead), avec sa date de fin.
  */
 export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: string; upgradeUrl: string; seats: number | null
   source: 'free' | 'own' | 'family'; paidTier: 'free' | 'pro' | 'pro_plus'
   inherited: { tier: 'free' | 'pro' | 'pro_plus'; app: string | null; until: string | null } | null
+  lead: { tier: 'free' | 'pro' | 'pro_plus'; until: string | null } | null
   openProjects: number; projectLimit: number | null; members: number; invited: number }
 
 /** L'abonnement ProjectLead (server/routes/billing.ts, GET /api/billing). */
@@ -32,8 +36,13 @@ export type Billing = {
 
 export type Person = { id: string; name: string; color: string; email?: string; role?: string }
 
-export type Member = Person & { role: 'admin' | 'manager' | 'member'; active: boolean; hourly_rate_cents: number; cost_rate_cents: number
-  capacity_minutes: number; team_ids: string[] }
+/**
+ * Une personne de l'entreprise (Réglages → Équipe). `active` : elle occupe une place ; inactive, `lead_disabled` dit
+ * qu'elle est partie de l'entreprise dans le Compte Lead (sinon un administrateur l'a retirée) ; `last_seen_at` : sa
+ * dernière venue dans cette entreprise (null : jamais venue depuis que ProjectLead la note).
+ */
+export type Member = Person & { role: 'admin' | 'manager' | 'member'; active: boolean; lead_disabled: boolean; last_seen_at: string | null
+  hourly_rate_cents: number; cost_rate_cents: number; capacity_minutes: number; team_ids: string[] }
 
 export type Column = { id: string; name: string; position: number; is_done: boolean; wip_limit: number | null }
 
