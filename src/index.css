@@ -21,8 +21,8 @@
   --input:             33 10% 79%;   /* #cfcac4 trait marqué : champs, panneau */
   --head:              30 20% 96%;   /* #f7f5f3 en-tête de tableau, pied */
 
-  /* Action : la couleur de l'app. Scanlead agit en bleu, CRMlead en vert canard, InvoiceLead en prune, ProjectLead en ocre
-     (complémentaire du bleu de Scanlead ; l'orange plus rouge et le rouge restent aux statuts). */
+  /* Action : la couleur de l'app. ScanLead agit en bleu, CRMlead en vert canard, InvoiceLead en prune, ProjectLead en ocre
+     (complémentaire du bleu de ScanLead ; l'orange plus rouge et le rouge restent aux statuts). */
   --primary:           41 100% 30%;  /* #9a6a00 ocre — 4,7:1 sur blanc */
   --primary-foreground:0 0% 100%;
   --accent:            41 100% 30%;  /* #9a6a00 */
@@ -65,7 +65,7 @@
   --dur-panel: 200ms;
 }
 
-/* Etiquettes libres : palette Notion, identique a Scanlead */
+/* Etiquettes libres : palette Notion, identique a ScanLead */
 :root {
   --tag-red-bg:#FBE4E4;    --tag-red-text:#C4554D;
   --tag-orange-bg:#FAEBDD; --tag-orange-text:#D9730D;

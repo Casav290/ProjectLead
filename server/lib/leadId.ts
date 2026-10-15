@@ -1,5 +1,5 @@
 /**
- * Kit « compte Lead » pour les applications de la famille (Scanlead, ProjectLead, InvoiceLead…).
+ * Kit « compte Lead » pour les applications de la famille (ScanLead, ProjectLead, InvoiceLead…).
  *
  * Un seul fichier, aucune dépendance : Node 18 ou plus (fetch et crypto intégrés). À copier tel
  * quel dans le serveur de l'application (ex. `server/leadId.ts`). Mode d'emploi : LEAD-ID.md.
@@ -195,7 +195,7 @@ export async function appToken(scope: 'exchange' | 'billing', audience?: string)
 /**
  * Déclarer un abonnement encaissé ici (webhook Stripe, RevenueCat…). À appeler à CHAQUE
  * changement : création, changement de formule, échec de paiement, résiliation.
- * `plan` = le nom de la formule DANS VOTRE APPLICATION (ex. Scanlead : free, solo, team).
+ * `plan` = le nom de la formule DANS VOTRE APPLICATION (ex. ScanLead : free, solo, team).
  */
 export async function reportSubscription(s: {
   org?: string; email?: string; external_id: string; plan: string

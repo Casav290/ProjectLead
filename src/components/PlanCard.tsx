@@ -17,7 +17,7 @@ const FEATURES: Record<Plan['tier'], string[]> = {
 const euros = (n: number) => new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'EUR',
   minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n)
 const day = (d: string) => new Date(d).toLocaleDateString('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
-const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'Scanlead', invoicelead: 'InvoiceLead', greetlead: 'Greetlead' } as Record<string, string>)[code ?? ''] ?? code ?? 'Lead'
+const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'ScanLead', invoicelead: 'InvoiceLead', greetlead: 'Greetlead' } as Record<string, string>)[code ?? ''] ?? code ?? 'Lead'
 
 /**
  * La carte Formule (Réglages → Entreprise) : ProjectLead encaisse lui-même son abonnement, valable dans ProjectLead

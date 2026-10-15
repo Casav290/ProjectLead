@@ -1233,7 +1233,7 @@ section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six
     check(`src/lib/leadFamily.ts identique à la liste de référence (${ref.replace(homedir(), '~')})`, JSON.stringify(fam) === JSON.stringify(LEAD_FAMILY))
   } else console.log('  (lead-family.json absent : seule la forme attendue est contrôlée)')
   const CODES = ['erplead', 'scanlead', 'crmlead', 'projectlead', 'invoicelead', 'greetlead']
-  check('six applications, dans l’ordre ERPlead, Scanlead, CRMlead, ProjectLead, InvoiceLead, Greetlead', JSON.stringify(LEAD_FAMILY.apps.map((a) => a.code)) === JSON.stringify(CODES))
+  check('six applications, dans l’ordre ERPlead, ScanLead, CRMlead, ProjectLead, InvoiceLead, Greetlead', JSON.stringify(LEAD_FAMILY.apps.map((a) => a.code)) === JSON.stringify(CODES))
   check('adresses d’entrée : /login de chaque application (ERPlead : /account), jamais une racine publique',
     LEAD_FAMILY.apps.every((a) => a.entry === (a.code === 'erplead' ? 'https://erplead.io/account' : `${a.origin}/login`)), LEAD_FAMILY.apps.map((a) => a.entry))
   check('ProjectLead se reconnaît : PL, #9a6a00, https://projectlead.io/login', HERE_APP === 'projectlead'

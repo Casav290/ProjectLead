@@ -71,7 +71,7 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   l'adresse vérifiée est la même (sinon `?erreur=adresse`), et l'entreprise qui invite s'ouvre. Plus de nouveau mot
   de passe ProjectLead avec le Compte Lead branché (403 `invitation_via_lead`) ; celui d'un accès d'avant reste accepté.
 - **Lanceur à 9 points** (`src/components/AppSwitcher.tsx`) : les six applications de `src/lib/leadFamily.ts`
-  (copie telle quelle de `~/projets/lead-e2e/lead-family.json`), dans l'ordre ERPlead, Scanlead, CRMlead, ProjectLead,
+  (copie telle quelle de `~/projets/lead-e2e/lead-family.json`), dans l'ordre ERPlead, ScanLead, CRMlead, ProjectLead,
   InvoiceLead, Greetlead, chacune vers son adresse d'entrée (`https://<app>/login`, ERPlead `/account`), jamais sa
   page publique ; ProjectLead « Vous êtes ici » sans lien ; panneau fixe sous 480 px. Points d'accroche des contrôles :
   `data-lead-launcher`, `data-lead-app`, et `data-lead-org` (organisation ERPlead) sur la racine de l'espace.
@@ -112,7 +112,7 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
 
 **Règle d'Ève (13.10.2026) : chaque application vend son propre abonnement, valable chez elle seule.** La
 formule ProjectLead se prend dans ProjectLead (Réglages → Entreprise, voir « Abonnement ProjectLead »
-ci-dessous). Un abonnement CRMlead, Scanlead, InvoiceLead ou Greetlead n'ouvre plus rien ici. Transition : un
+ci-dessous). Un abonnement CRMlead, ScanLead, InvoiceLead ou Greetlead n'ouvre plus rien ici. Transition : un
 abonnement payé ailleurs AVANT la bascule garde Pro ou Pro+ ici jusqu'à la fin de sa période déjà payée, date
 figée par ERPlead (`family_until`), sans grâce ; ensuite Gratuit. Seul abonné concerné au 13.10 : Quantum Liquid
 (CRMlead Pro), jusqu'au 25.10.2026 à 11:40 UTC ; il n'a pas d'entreprise dans ProjectLead.

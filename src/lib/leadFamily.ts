@@ -50,7 +50,7 @@ export const LEAD_FAMILY = {
     },
     {
       "code": "scanlead",
-      "name": "Scanlead",
+      "name": "ScanLead",
       "mark": "SL",
       "color": "#2563eb",
       "origin": "https://scanlead.io",
