@@ -13,9 +13,11 @@ import { assertSeatFree } from '../lib/plans.js'
 const app = router()
 
 app.get('/', async (c) => tx(c, async (db) => {
-  // `lead_disabled` : partie de l'entreprise dans le Compte Lead (back-channel « disabled »), pas retirée ici.
+  // `lead_disabled` : partie de l'entreprise dans le Compte Lead (back-channel « disabled »), pas retirée ici. La dernière
+  // venue des autres n'est donnée qu'à l'administrateur (comme le coût horaire) : chacun voit la sienne.
   const members = (await db.query(
-    `select u.id, u.name, u.email, u.color, au.role, au.active, au.lead_disabled, au.last_seen_at,
+    `select u.id, u.name, u.email, u.color, au.role, au.active, au.lead_disabled,
+            case when app_role() = 'admin' or u.id = app_user() then au.last_seen_at end as last_seen_at,
             au.hourly_rate_cents, au.cost_rate_cents, au.capacity_minutes,
             coalesce((select array_agg(tm.team_id) from team_members tm where tm.user_id = u.id), '{}') as team_ids
        from account_users au join users u on u.id = au.user_id

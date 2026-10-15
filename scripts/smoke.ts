@@ -1778,6 +1778,9 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
     const seen = Object.fromEntries((r.body.members ?? []).map((m: any) => [m.id, m.last_seen_at]))
     check('dernière venue (account_users.last_seen_at) écrite à l’arrivée par le Compte Lead, rendue par /api/team',
       [adaId, beaId, cydId, danId].every((id) => seen[id] && Date.now() - Date.parse(seen[id]) < 120_000), seen)
+    const seenByMember = Object.fromEntries(((await people.dan.get('/api/team')).body.members ?? []).map((m: any) => [m.id, m.last_seen_at]))
+    check('… la dernière venue des autres n’est donnée qu’à l’administrateur (une membre ne voit que la sienne)',
+      seenByMember[danId] && [adaId, beaId, cydId].every((id) => id in seenByMember && seenByMember[id] === null), seenByMember)
     await pool.query(`update account_users set last_seen_at = now() - interval '2 hours' where user_id = $1`, [beaId])
     await people.bea.get('/api/me')
     const active1 = await lastSeen(beaId)

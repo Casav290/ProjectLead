@@ -115,7 +115,8 @@ function LastSeen({ at }: { at: string | null }) {
 
 /**
  * Les places de la formule (Réglages → Équipe ; suites de l'abonnement, 15.10.2026, point 2) : une ligne par place
- * occupée (personne active, invitation en attente), avec sa dernière venue ; « Retirer » pour l'administrateur sur
+ * occupée (personne active, invitation en attente), avec sa dernière venue pour l'administrateur (le serveur ne la
+ * donne qu'à lui, comme le coût horaire) ; « Retirer » pour l'administrateur sur
  * chaque ligne sauf la sienne (une invitation se retire en la révoquant ; un responsable la révoque comme avant) ; les
  * personnes retirées à part, avec « Rétablir ». Contrat de page du banc : [data-seat-list] (data-seats-used,
  * data-seats-max), [data-seat-holder], [data-last-seen], [data-seat-remove], [data-seat-removed].
@@ -142,7 +143,7 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
               <tr className="text-left">
                 <th className="px-3 py-2">Personne</th>
                 <th className="px-3 py-2">Rôle</th>
-                <th className="px-3 py-2">Dernière venue</th>
+                {isAdmin && <th className="px-3 py-2">Dernière venue</th>}
                 {canManage && <th className="px-3 py-2 text-right">Vente / h</th>}
                 {isAdmin && <th className="px-3 py-2 text-right">Coût / h</th>}
                 <th className="px-3 py-2 text-right">Capacité / sem.</th>
@@ -162,7 +163,7 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
                     </span>
                   </td>
                   <td className="px-3 py-2">{ROLE_LABEL[m.role]}</td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums"><LastSeen at={m.last_seen_at} /></td>
+                  {isAdmin && <td className="whitespace-nowrap px-3 py-2 tabular-nums"><LastSeen at={m.last_seen_at} /></td>}
                   {canManage && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.hourly_rate_cents ? money(m.hourly_rate_cents, currency) : '—'}</td>}
                   {isAdmin && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.cost_rate_cents ? money(m.cost_rate_cents, currency) : '—'}</td>}
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{hoursText(m.capacity_minutes)} h</td>
@@ -185,13 +186,15 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
                 <tr key={i.id} data-seat-holder={i.email.toLowerCase()}>
                   <td className="px-3 py-2" data-label="">
                     <span className="block font-bold break-all">{i.email}</span>
-                    <span className="block text-xs text-muted-foreground">Invitée le {fmtDate(i.created_at)}</span>
+                    <span className="block text-xs text-muted-foreground">{isAdmin ? `Invitée le ${fmtDate(i.created_at)}` : 'Invitation en attente'}</span>
                   </td>
                   <td className="px-3 py-2">{ROLE_LABEL[i.role]}</td>
-                  <td className="px-3 py-2">
-                    <span data-last-seen="never">Invitation en attente</span>
-                    <span className="block text-xs text-muted-foreground">valable jusqu'au {fmtDate(i.expires_at)}</span>
-                  </td>
+                  {isAdmin && (
+                    <td className="px-3 py-2">
+                      <span data-last-seen="never">Invitation en attente</span>
+                      <span className="block text-xs text-muted-foreground">valable jusqu'au {fmtDate(i.expires_at)}</span>
+                    </td>
+                  )}
                   {canManage && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
                   {isAdmin && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
                   <td className="px-3 py-2 text-right text-muted-foreground">—</td>
@@ -224,7 +227,7 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
                 <span className="text-xs text-muted-foreground">
                   {m.lead_disabled ? 'Partie de votre entreprise dans le Compte Lead : elle reprend sa place si elle y revient.'
                     : "Retirée par un administrateur : elle n'entre plus d'elle-même."}
-                  {' '}Dernière venue : <LastSeen at={m.last_seen_at} /></span>
+                  {isAdmin && <> Dernière venue : <LastSeen at={m.last_seen_at} /></>}</span>
                 {isAdmin && (
                   <span className="inline-flex gap-1">
                     {!m.lead_disabled && <Button size="sm" onClick={() => onRestore(m)}>Rétablir</Button>}

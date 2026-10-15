@@ -145,8 +145,9 @@ await block('2. Places : liste dans Réglages → Équipe, dernière venue, « R
     && /Rétablir/.test(admin.removed[0]?.text ?? '') && !/Rétablir/.test(admin.removed[1]?.text ?? '') && /Compte Lead/.test(admin.removed[1]?.text ?? ''),
     admin.removed)
   const member = view('id-lt08b', false, false)
-  check('vue d\'une membre : la liste, mais aucun « Retirer » ni « Rétablir »', member.rows.length === 4 && !/data-seat-remove(?!d)/.test(member.html)
-    && !/>\s*Retirer\s*</.test(member.html) && !/Rétablir/.test(member.html), member.rows.map((r) => [r.email, r.remove]))
+  check('vue d\'une membre : la liste, mais aucun « Retirer » ni « Rétablir », ni la dernière venue des autres (réservée à l\'administrateur)',
+    member.rows.length === 4 && !/data-seat-remove(?!d)/.test(member.html) && !/>\s*Retirer\s*</.test(member.html) && !/Rétablir/.test(member.html)
+    && !/data-last-seen|Dernière venue/.test(member.html), member.rows.map((r) => [r.email, r.remove, r.lastSeen]))
   const manager = view('id-lt08c', false, true)
   check('vue d\'un responsable : aucun « Retirer » (réservé à l\'administrateur) ; l\'invitation se révoque comme avant',
     !/data-seat-remove(?!d)/.test(manager.html) && !/>\s*Retirer\s*</.test(manager.html) && /Révoquer/.test(manager.rows.find((r) => r.email === 'invitee@exemple.test')?.text ?? ''),
