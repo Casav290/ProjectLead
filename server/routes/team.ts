@@ -3,6 +3,7 @@ import { hashToken, newToken } from '../auth.js'
 import { anon } from '../db.js'
 import { body, email, HttpError, notFound, requireRole, router, tx, uuid } from '../lib/http.js'
 import { htmlParagraphs, layout, sendMail } from '../lib/email.js'
+import { assertStillAdmin, lockAdmins } from '../lib/admins.js'
 import { assertSeatFree } from '../lib/plans.js'
 
 /**
@@ -62,27 +63,31 @@ app.delete('/invitations/:id', async (c) => {
 
 app.patch('/members/:userId', async (c) => {
   requireRole(c, 'admin')
+  const userId = c.req.param('userId')
+  if (!uuid.safeParse(userId).success) throw notFound()
   const b = await body(c, z.object({
-    role: z.enum(['admin', 'manager', 'member']).optional(), active: z.boolean().optional(),
+    role: z.enum(['admin', 'manager', 'member']).optional(),
+    // La place ne se règle plus ici : « Retirer » et « Rétablir » (invitations comptées, jamais soi-même, sessions fermées).
+    // `active` n'est lu que pour refuser un changement ; la même valeur, envoyée par un onglet resté sur la version
+    // d'avant (case « Actif » du dialogue), passe sans effet.
+    active: z.boolean().optional(),
     hourly_rate_cents: z.number().int().min(0).max(10_000_00).optional(),
     cost_rate_cents: z.number().int().min(0).max(10_000_00).optional(),
     capacity_minutes: z.number().int().min(0).max(10080).optional(),
   }))
   await tx(c, async (db, ctx) => {
-    // Réactiver une personne reprend une place de la formule.
-    if (b.active === true) {
-      const was = (await db.query('select active from account_users where account_id = app_account() and user_id = $1', [c.req.param('userId')])).rows[0]
-      if (was && !was.active) await assertSeatFree(db, ctx.accountId, false)
-    }
-    const r = await db.query(
-      // Un choix de l'administrateur (désactiver, réactiver) l'emporte sur un départ annoncé par ERPlead (db/009_passage.sql).
-      `update account_users set role = coalesce($2, role), active = coalesce($3, active),
-              lead_disabled = case when $3::boolean is null then lead_disabled else false end,
-              hourly_rate_cents = coalesce($4, hourly_rate_cents), cost_rate_cents = coalesce($5, cost_rate_cents),
-              capacity_minutes = coalesce($6, capacity_minutes)
+    // Un changement de rôle peut retirer un administrateur : un seul à la fois par entreprise (lib/admins.ts).
+    await lockAdmins(db, ctx.accountId)
+    await assertStillAdmin(db)
+    const was = (await db.query('select active from account_users where account_id = app_account() and user_id = $1', [userId])).rows[0]
+    if (!was) throw notFound()
+    if (b.active !== undefined && b.active !== was.active) throw new HttpError(400, 'use_remove_restore')
+    await db.query(
+      `update account_users set role = coalesce($2, role),
+              hourly_rate_cents = coalesce($3, hourly_rate_cents), cost_rate_cents = coalesce($4, cost_rate_cents),
+              capacity_minutes = coalesce($5, capacity_minutes)
         where account_id = app_account() and user_id = $1`,
-      [c.req.param('userId'), b.role ?? null, b.active ?? null, b.hourly_rate_cents ?? null, b.cost_rate_cents ?? null, b.capacity_minutes ?? null])
-    if (!r.rowCount) throw notFound()
+      [userId, b.role ?? null, b.hourly_rate_cents ?? null, b.cost_rate_cents ?? null, b.capacity_minutes ?? null])
     // Jamais d'entreprise sans administrateur actif : ce serait s'enfermer dehors.
     const admins = (await db.query(`select count(*)::int as n from account_users where account_id = app_account() and role = 'admin' and active`)).rows[0].n
     if (!admins) throw new HttpError(400, 'last_admin')
@@ -103,6 +108,10 @@ app.post('/members/:userId/remove', async (c) => {
   if (!uuid.safeParse(userId).success) throw notFound()
   if (userId === ctx.userId) throw new HttpError(400, 'cannot_remove_self')
   await tx(c, async (db) => {
+    // Un seul changement à la fois sur les administrateurs de l'entreprise (lib/admins.ts), par un administrateur encore
+    // actif : deux administrateurs qui se retirent l'un l'autre au même instant ne passent pas tous les deux.
+    await lockAdmins(db, ctx.accountId)
+    await assertStillAdmin(db)
     // Un retrait décidé ici, pas un départ annoncé par ERPlead : `lead_disabled` faux (elle ne revient pas d'elle-même).
     const r = await db.query(
       `update account_users set active = false, lead_disabled = false where account_id = app_account() and user_id = $1 and active`, [userId])

@@ -22,8 +22,8 @@
  * 4. Tarifs publics (/formules) : les mêmes prix que le serveur (server/lib/stripe.ts), aucune offre d'achat.
  * 5. Les parcours avec base (Checkout refusé 409 sans aucun appel au faux Stripe, héritage accepté, « Retirer »
  *    réservé à l'administrateur et gardé à la reconnexion, dernière venue écrite à l'arrivée et à l'activité, refus
- *    avec la formule dans l'adresse) sont dans scripts/smoke.ts (npm test, section « Suites de l'abonnement ») :
- *    vérifié ici qu'ils y sont.
+ *    avec la formule dans l'adresse, un seul changement à la fois sur les administrateurs, `active` refusé par PATCH)
+ *    sont dans scripts/smoke.ts (npm test, section « Suites de l'abonnement ») : vérifié ici qu'ils y sont.
  */
 import fs from 'node:fs'
 import { createElement, type ReactElement } from 'react'
@@ -243,6 +243,8 @@ await block('5. Parcours avec base : présents dans scripts/smoke.ts (npm test)'
     ['héritage (source family) accepté', /source: 'family'[\s\S]{0,1500}héritage/],
     ['« Retirer » : 403 pour une membre et un responsable, 400 sur soi, retrait gardé à la reconnexion', /\/remove`[\s\S]{0,300}403[\s\S]*cannot_remove_self[\s\S]*retrait gardé/],
     ['dernière venue écrite à l\'arrivée et à l\'activité (au plus une fois par heure)', /last_seen_at[\s\S]*arrivée[\s\S]*une fois par heure/],
+    ['un seul changement à la fois sur les administrateurs (deux retraits croisés, retrait et rétrogradation, départ annoncé par ERPlead) : jamais zéro administrateur actif', /lined\(\[[\s\S]*\/remove`[\s\S]*rr\.admins\(\)[\s\S]*rp\.admins\(\)[\s\S]*backchannel-logout[\s\S]*rb\.admins\(\)/],
+    ['PATCH /members/:id ne règle plus la place : {active} refusé (400 use_remove_restore), même valeur acceptée', /patch\(`\/api\/team\/members\/\$\{peId\}`, \{ active: true \}\)[\s\S]*use_remove_restore[\s\S]*\{ active: false \}[\s\S]*use_remove_restore[\s\S]*role: 'manager', active: true/],
   ]
   for (const [name, re] of need) check(name, re.test(smoke))
   check('refus avec la formule dans l\'adresse (free, pro, proplus)', ['free', 'pro', 'proplus'].every((f) => smoke.includes(`erreur=places&formule=${f}'`)

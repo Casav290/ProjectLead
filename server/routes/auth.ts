@@ -6,6 +6,7 @@ import { anon, anonTx, type Db } from '../db.js'
 import { isProduction, leadIdOn } from '../lib/env.js'
 import { body, email, HttpError, type Env } from '../lib/http.js'
 import { finishLogin, logoutUrl, startLogin, verifyLeadJwt, type LeadClaims } from '../lib/leadId.js'
+import { lockAdmins } from '../lib/admins.js'
 import { assertSeatFree, savePlan, type Tier } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
 
@@ -379,12 +380,15 @@ app.post('/auth/lead/backchannel-logout', async (c) => {
     if (claims.lead_status !== 'disabled' && sid)
       await db.query('delete from sessions where user_id = $1 and (lead_sid = $2 or lead_sid is null)', [user.id, sid])
     else await db.query('delete from sessions where user_id = $1', [user.id])
-    if (claims.lead_status === 'disabled' && account)
+    if (claims.lead_status === 'disabled' && account) {
+      // Jamais le dernier administrateur actif : en file avec « Retirer » et les changements de rôle (lib/admins.ts).
+      await lockAdmins(db, account.id)
       await db.query(
         `update account_users set active = false, lead_disabled = true
           where account_id = $1 and user_id = $2 and active
             and (role <> 'admin' or exists (select 1 from account_users o where o.account_id = $1 and o.user_id <> $2
                                              and o.role = 'admin' and o.active))`, [account.id, user.id])
+    }
   })
   return c.body(null, 200)
 })

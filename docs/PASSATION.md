@@ -260,7 +260,11 @@ portes : `GATES-billing-followups.md` (L4 en local).
   et à l'activité au plus une fois par heure). « Retirer » (administrateur, jamais soi-même, deux temps) :
   `POST /api/team/members/:id/remove`, place libérée, sessions de l'entreprise fermées, retrait gardé (« accès
   désactivé » à la reconnexion, même s'il reste une place) ; « Rétablir » : `POST /api/team/members/:id/restore`
-  (402 s'il n'y a plus de place). Personnes parties du Compte Lead (`lead_disabled`, back-channel « disabled ») : à
+  (402 s'il n'y a plus de place). La place ne se règle que par ces deux routes : `PATCH /api/team/members/:id` refuse
+  un changement de `active` (400 `use_remove_restore` ; la même valeur, envoyée par un onglet de la version d'avant,
+  passe sans effet). « Retirer », le changement de rôle par PATCH et le départ annoncé par ERPlead passent un par un
+  pour une entreprise (verrou `admins:<compte>`, `server/lib/admins.ts`), l'appelant relu administrateur actif : jamais
+  zéro administrateur actif, même quand deux administrateurs se retirent l'un l'autre au même instant. Personnes parties du Compte Lead (`lead_disabled`, back-channel « disabled ») : à
   part, sans « Rétablir ». Contrat : `data-seat-list`, `data-seat-holder`, `data-last-seen`, `data-seat-remove`,
   `data-seat-removed`. lt07e (retirée au Compte Lead, encore active en production) sera rattrapée par
   `scripts/resync-departures.mjs` d'ERPlead.

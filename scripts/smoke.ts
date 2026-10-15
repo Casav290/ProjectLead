@@ -777,8 +777,8 @@ ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan }))
 const annAdmin = new Client(); annAdmin.cookie = ll.session
 ll = await leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
 const annId = (await pool.query('select id from users where lead_sub = $1', [`sub-ann-${stamp}`])).rows[0]?.id
-r = await annAdmin.patch(`/api/team/members/${annId}`, { active: false })
-check('l’administrateur désactive Ann', r.status === 200, r)
+r = await annAdmin.post(`/api/team/members/${annId}/remove`)
+check('l’administrateur retire Ann', r.status === 200, r)
 const annLogin = () => leadLogin((n) => ({ ...lead(n, true, annOrg), lead: annPlan, sub: `sub-ann-${stamp}`, email: `ann-${stamp}@exemple.test`, org_role: 'user' }))
 ll = await annLogin()
 r = await pool.query(`select count(*)::int as n from account_users au where au.user_id = $1`, [annId])
@@ -913,10 +913,10 @@ check('… ni par le Compte Lead : écran « places prises », pas de session, i
   ll.location === `/login?erreur=places&formule=free&next=${encodeURIComponent(`/invitation/${yvesToken}`)}` && !ll.session
   && (await pool.query('select accepted_at from invitations where token_hash = $1', [hashTokenSmoke(yvesToken)])).rows[0]?.accepted_at === null, ll)
 const paulId = (await pool.query('select id from users where lower(email) = lower($1)', [`paul-${stamp}@exemple.test`])).rows[0].id
-r = await plus.patch(`/api/team/members/${paulId}`, { active: false })
-check('désactiver une personne passe', r.status === 200, r)
-r = await plus.patch(`/api/team/members/${paulId}`, { active: true })
-check('la réactiver quand toutes les places sont prises → 402', r.status === 402 && r.body.error === 'plan_limit_seats', r)
+r = await plus.post(`/api/team/members/${paulId}/remove`)
+check('retirer une personne passe', r.status === 200, r)
+r = await plus.post(`/api/team/members/${paulId}/restore`)
+check('la rétablir quand toutes les places sont prises → 402', r.status === 402 && r.body.error === 'plan_limit_seats', r)
 // Course : trois ouvertures simultanées pour une seule place libre, une seule passe.
 const raceOrg = `course-org-${stamp}`
 ll = await leadLogin((n) => ({ ...lead(n, false, raceOrg), sub: `sub-course-${stamp}`, email: `course-${stamp}@exemple.test` }))
@@ -1846,6 +1846,98 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
     const again = await leadLogin(as('bea'))
     check('« Rétablir » par l’administratrice : 200, et elle rentre à sa connexion suivante', r.status === 200 && again.location === '/' && Boolean(again.session),
       { status: r.status, loc: again.location })
+
+    // ---- relecture (15.10.2026) : un seul changement à la fois sur les administrateurs ; `active` ne se règle plus par PATCH
+    /**
+     * Fait attendre des requêtes au même point, puis les lâche ensemble : le contrôle tient un verrou SHARE sur
+     * account_users (aucune écriture n'y passe), lance chaque requête, attend qu'elle soit bloquée (verrou de la table ou
+     * verrou des administrateurs de l'entreprise), puis lâche le verrou. Sans mise en file côté serveur, les requêtes
+     * écrivent alors en même temps et chacune voit encore l'autre administrateur actif.
+     */
+    type Res = { status: number; body?: any }
+    const lined = async (calls: (() => Promise<Res>)[]) => {
+      const waiting = async () => (await pool.query(
+        `select count(*)::int as n from pg_stat_activity where datname = current_database() and backend_type = 'client backend'
+            and wait_event_type = 'Lock' and pid <> pg_backend_pid() and query not ilike '%last_seen_at%'`)).rows[0].n as number
+      const hold = await pool.connect()
+      const pending: Promise<Res>[] = []
+      try {
+        await hold.query('begin')
+        await hold.query('lock table account_users in share mode')
+        for (const call of calls) {
+          pending.push(call())
+          for (let i = 0; i < 200 && (await waiting()) < pending.length; i++) await new Promise((res) => setTimeout(res, 25))
+        }
+      } finally { await hold.query('commit').catch(() => {}); hold.release() }
+      return Promise.all(pending)
+    }
+    /** Une organisation Pro+ et ses deux administrateurs (administrateurs aussi chez ERPlead), arrivés par le Compte Lead. */
+    const adminPair = async (k: string) => {
+      const org = `suites-admins-${k}-${stamp}`
+      const sub = (w: string) => `sub-adm-${k}-${w}-${stamp}`
+      const who = (w: string) => (n: string) => ({ ...lead(n, true, org), lead: rights('pro_plus', { valid_until: future }), sub: sub(w),
+        email: `adm-${k}-${w}-${stamp}@exemple.test`, org_role: 'admin' })
+      const a = new Client(); a.cookie = (await leadLogin(who('a'))).session
+      const b = new Client(); b.cookie = (await leadLogin(who('b'))).session
+      const [aId, bId] = await Promise.all(['a', 'b'].map(async (w) => (await pool.query('select id from users where lead_sub = $1', [sub(w)])).rows[0]?.id as string))
+      const admins = async () => (await pool.query(`select count(*)::int as n from account_users au join accounts ac on ac.id = au.account_id
+                                                     where ac.lead_org = $1 and au.role = 'admin' and au.active`, [org])).rows[0].n as number
+      return { org, sub, a, b, aId, bId, admins, start: await admins() }
+    }
+    const rr = await adminPair('rr')
+    let duel = await lined([() => rr.a.post(`/api/team/members/${rr.bId}/remove`), () => rr.b.post(`/api/team/members/${rr.aId}/remove`)])
+    let left = await rr.admins()
+    check('deux administrateurs qui se retirent l’un l’autre au même instant : un seul retrait passe, l’entreprise garde un administrateur actif',
+      rr.start === 2 && left === 1 && duel.filter((x) => x.status === 200).length === 1 && duel.filter((x) => x.status === 403).length === 1,
+      { avant: rr.start, apres: left, statuts: duel.map((x) => [x.status, x.body?.error]) })
+    const rp = await adminPair('rp')
+    duel = await lined([() => rp.a.post(`/api/team/members/${rp.bId}/remove`), () => rp.b.patch(`/api/team/members/${rp.aId}`, { role: 'member' })])
+    left = await rp.admins()
+    check('« Retirer » l’un et rétrograder l’autre (PATCH rôle) au même instant : un seul changement passe, jamais zéro administrateur actif',
+      rp.start === 2 && left === 1 && duel.filter((x) => x.status === 200).length === 1, { avant: rp.start, apres: left, statuts: duel.map((x) => [x.status, x.body?.error]) })
+    const rb = await adminPair('rb')
+    const departure = () => {
+      const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+      const iat = Math.floor(Date.now() / 1000)
+      const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', iat, exp: iat + 120, sub: rb.sub('a'), org: rb.org, lead_status: 'disabled',
+        events: { 'http://schemas.openid.net/event/backchannel-logout': {} } })
+      return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+    }
+    duel = await lined([() => rb.a.post(`/api/team/members/${rb.bId}/remove`), async () => ({ status: (await app.request('http://localhost/auth/lead/backchannel-logout', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ logout_token: departure() }) })).status })])
+    left = await rb.admins()
+    check('départ d’un administrateur annoncé par ERPlead (back-channel « disabled ») pendant qu’il retire l’autre : jamais zéro administrateur actif',
+      rb.start === 2 && left === 1 && duel.every((x) => x.status === 200), { avant: rb.start, apres: left, statuts: duel.map((x) => x.status) })
+
+    // PATCH /members/:id ne règle plus la place : « Retirer » et « Rétablir » seuls (invitations comptées, jamais soi-même, sessions fermées).
+    const patchOrg = `suites-patch-${stamp}`
+    const patchWho = (who: string, role = 'user') => (n: string) => ({ ...lead(n, true, patchOrg), lead: rights('pro_plus', { valid_until: future }),
+      sub: `sub-pa-${who}-${stamp}`, email: `pa-${who}-${stamp}@exemple.test`, org_role: role })
+    const pa = new Client(); pa.cookie = (await leadLogin(patchWho('ada', 'admin'))).session
+    const pc: Record<string, Client> = {}
+    for (const who of ['bea', 'cyd', 'dan', 'eve']) { const c = new Client(); c.cookie = (await leadLogin(patchWho(who))).session; pc[who] = c }
+    const [paId, pbId, pcId, peId] = await Promise.all(['ada', 'bea', 'cyd', 'eve'].map(async (who) =>
+      (await pool.query('select id from users where lead_sub = $1', [`sub-pa-${who}-${stamp}`])).rows[0]?.id as string))
+    const seatOf = async (id: string) => (await pool.query(`select au.active, au.role from account_users au join accounts a on a.id = au.account_id
+                                                           where au.user_id = $1 and a.lead_org = $2`, [id, patchOrg])).rows[0] as { active: boolean; role: string } | undefined
+    await pa.post(`/api/team/members/${peId}/remove`)
+    await pa.post('/api/team/invite', { email: `pa-gus-${stamp}@exemple.test` })
+    const viaRestore = (await pa.post(`/api/team/members/${peId}/restore`)).status
+    r = await pa.patch(`/api/team/members/${peId}`, { active: true })
+    check('Pro+ 5 places sur 5 (4 personnes et 1 invitation en attente) : réactiver par PATCH {active:true} refusé comme « Rétablir » (402), la personne reste retirée',
+      viaRestore === 402 && r.status === 400 && r.body.error === 'use_remove_restore' && (await seatOf(peId))?.active === false,
+      { viaRestore, patch: [r.status, r.body], seat: await seatOf(peId) })
+    r = await pa.patch(`/api/team/members/${pbId}`, { active: false })
+    check('désactiver par PATCH {active:false} refusé (seul « Retirer » libère une place et ferme les sessions) : la personne reste active et connectée',
+      r.status === 400 && r.body.error === 'use_remove_restore' && (await seatOf(pbId))?.active === true && (await pc.bea.get('/api/me')).status === 200,
+      { patch: [r.status, r.body], seat: await seatOf(pbId) })
+    await pa.patch(`/api/team/members/${pcId}`, { role: 'admin' })
+    r = await pa.patch(`/api/team/members/${paId}`, { active: false })
+    check('se désactiver soi-même par PATCH refusé, même avec un autre administrateur actif (comme « Retirer » sur sa propre ligne)',
+      r.status === 400 && r.body.error === 'use_remove_restore' && (await seatOf(paId))?.active === true, { patch: [r.status, r.body], seat: await seatOf(paId) })
+    r = await pa.patch(`/api/team/members/${pbId}`, { role: 'manager', active: true })
+    check('onglet resté sur la version d’avant (la même valeur `active` envoyée avec le rôle) : le rôle est enregistré, la place ne bouge pas',
+      r.status === 200 && (await seatOf(pbId))?.role === 'manager' && (await seatOf(pbId))?.active === true, { patch: [r.status, r.body], seat: await seatOf(pbId) })
   }
   fakeStripe.close()
   for (const k of ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_PRO_MONTHLY', 'STRIPE_PRICE_PRO_YEARLY', 'STRIPE_PRICE_PROPLUS_MONTHLY',
