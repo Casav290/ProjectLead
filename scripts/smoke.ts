@@ -1199,10 +1199,11 @@ section('Clés d’ERPlead : une clé inconnue ne fait relire le JWKS qu’une f
   let shift = 0
   Date.now = () => realNow() + shift
   try {
-    shift = 2 * 3_600_000 // cache d'une heure échu : une relecture
+    shift = 2 * 3_600_000 // cache d'une heure échu : une relecture, une seule pour des requêtes simultanées
     const start = jwksReads
-    const first = await post(logoutToken())
-    check('cache d’une heure échu : une relecture, le jeton est accepté', first === 200 && jwksReads - start === 1, { first, reads: jwksReads - start })
+    const first = await Promise.all(Array.from({ length: 10 }, () => post(logoutToken())))
+    check('cache d’une heure échu : 10 notifications simultanées, une seule relecture du JWKS, toutes acceptées',
+      first.every((s) => s === 200) && jwksReads - start === 1, { first, reads: jwksReads - start })
     publishedKeys = [jwk, rotated]
     shift += 5_000
     const early = await post(logoutToken('rotated-key', rotatedPair.privateKey))
