@@ -44,10 +44,25 @@ export const alreadyInTarget = (next: string | null) => {
 }
 
 /**
- * L'écran de connexion part-il seul vers le Compte Lead ? Oui une fois, quand le Compte Lead est branché et qu'on
- * arrive sans erreur ; jamais après un retour en erreur (`erreur=…`) ni sur l'accès par e-mail : pas de boucle.
+ * « Se déconnecter » en route (15.10.2026). La session ProjectLead est déjà fermée et la page attend la déconnexion du
+ * Compte Lead (ERPlead /oauth/logout), parfois plusieurs secondes. Pendant ce temps, rien ne doit la renvoyer vers la
+ * connexion : la relecture de /me (toutes les minutes) y voyait un 401, l'écran de connexion partait seul vers le
+ * Compte Lead et remplaçait la déconnexion encore en route ; la session ERPlead restait ouverte et la personne rentrait
+ * aussitôt dans l'espace, sans formulaire (même défaut que ScanLead sous un Compte Lead lent). `stopLeaving` : la
+ * déconnexion a échoué, ou la page revient du cache arrière du navigateur.
  */
-export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean }) => o.leadId === true && !o.code && !o.withEmail
+let leavingNow = false
+export const startLeaving = () => { leavingNow = true }
+export const stopLeaving = () => { leavingNow = false }
+export const isLeaving = () => leavingNow
+
+/**
+ * L'écran de connexion part-il seul vers le Compte Lead ? Oui une fois, quand le Compte Lead est branché et qu'on
+ * arrive sans erreur ; jamais après un retour en erreur (`erreur=…`) ni sur l'accès par e-mail : pas de boucle. Jamais
+ * non plus pendant « Se déconnecter » (`startLeaving`) : ce départ remplacerait la déconnexion du Compte Lead.
+ */
+export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean }) =>
+  o.leadId === true && !o.code && !o.withEmail && !leavingNow
 
 /** La formule de l'entreprise dans l'adresse d'un refus « places » (server/routes/auth.ts, refusalLocation). */
 export type Formule = 'free' | 'pro' | 'proplus'

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { api } from './api'
+import { isLeaving, stopLeaving } from './arrival'
 import type { Me, Member } from './types'
 
 /** L'état commun : la personne connectée, son entreprise, et l'équipe (pour les sélecteurs). */
@@ -13,8 +14,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
   const [loading, setLoading] = useState(true)
   const [team, setTeam] = useState<Member[]>([])
+  // Pendant « Se déconnecter » (src/lib/arrival.ts, startLeaving), un 401 ne ferme pas l'espace : l'écran de connexion
+  // repartirait vers le Compte Lead et couperait sa déconnexion encore en route.
   const refresh = useCallback(async () => {
-    try { setMe(await api.get<Me>('/me')) } catch { setMe(null) } finally { setLoading(false) }
+    if (isLeaving()) return
+    try { setMe(await api.get<Me>('/me')) } catch { if (!isLeaving()) setMe(null) } finally { setLoading(false) }
   }, [])
   const refreshTeam = useCallback(async () => {
     try { setTeam((await api.get<{ members: Member[] }>('/team')).members) } catch { /* hors connexion */ }
@@ -22,10 +26,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => { if (me) refreshTeam() }, [me?.user.id, refreshTeam])
   useEffect(() => {
-    const h = () => setMe(null)
+    const h = () => { if (!isLeaving()) setMe(null) }
     window.addEventListener('pl:unauthenticated', h)
     return () => window.removeEventListener('pl:unauthenticated', h)
   }, [])
+  // La page quittée par « Se déconnecter » revient du cache arrière (bouton Précédent) : elle relit la session.
+  useEffect(() => {
+    const h = (e: PageTransitionEvent) => { if (e.persisted && isLeaving()) { stopLeaving(); refresh() } }
+    window.addEventListener('pageshow', h)
+    return () => window.removeEventListener('pageshow', h)
+  }, [refresh])
   // Le compteur de notifications et le chronomètre restent à jour sans recharger la page.
   useEffect(() => {
     if (!me) return

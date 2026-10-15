@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { startLeaving, stopLeaving } from '../lib/arrival'
 import { fmtRelative } from '../lib/format'
 import { useApp } from '../lib/store'
 import type { Notification } from '../lib/types'
@@ -112,9 +113,16 @@ function UserMenu() {
   const [open, setOpen] = useState(false)
   const ref = useClickOutside(open, () => setOpen(false))
   if (!me) return null
+  // La page part vers la déconnexion du Compte Lead : rien ne la renvoie vers la connexion entre-temps (startLeaving).
   const logout = async () => {
-    const r = await api.post<{ redirect: string | null }>('/auth/logout')
-    window.location.href = r.redirect ?? '/login'
+    startLeaving()
+    try {
+      const r = await api.post<{ redirect: string | null }>('/auth/logout')
+      window.location.href = r.redirect ?? '/login'
+    } catch (e) {
+      stopLeaving()
+      throw e
+    }
   }
   return (
     <div ref={ref} className="relative">

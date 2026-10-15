@@ -975,7 +975,7 @@ void proSession
 
 section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul départ (src/lib/arrival.ts)')
 {
-  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED } = await import('../src/lib/arrival.js')
+  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED, startLeaving, stopLeaving, isLeaving } = await import('../src/lib/arrival.js')
   // Une personne sortie par ERPlead AVANT le passage (db/009_passage.sql : rien ne distingue cette sortie d'une
   // désactivation par un administrateur) voit aussi cet écran : il ne doit pas accuser un administrateur, et donne le remède.
   check('écran « accès désactivé » : juste quelle que soit la cause (administrateur, ou départ annoncé par ERPlead avant le passage), avec le remède',
@@ -1006,6 +1006,13 @@ section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul 
   check('… jamais après un retour en erreur, ni sur l’accès par e-mail, ni sans Compte Lead',
     ['lead', 'session', 'email', 'places', 'desactive', 'portee'].every((code) => !departsAlone({ leadId: true, code, withEmail: false }))
     && !departsAlone({ leadId: true, code: '', withEmail: true }) && !departsAlone({ leadId: false, code: '', withEmail: false }) && !departsAlone({ leadId: null, code: '', withEmail: false }))
+  // « Se déconnecter » en route (startLeaving, 15.10.2026) : sous un Compte Lead lent, la relecture de /me voyait un 401 et
+  // l'écran de connexion repartait seul, coupant la déconnexion d'ERPlead (la personne rentrait sans formulaire).
+  startLeaving()
+  check('pendant « Se déconnecter » : l’écran de connexion ne part pas seul vers le Compte Lead (la déconnexion d’ERPlead va au bout)',
+    isLeaving() && !departsAlone({ leadId: true, code: '', withEmail: false }))
+  stopLeaving()
+  check('… et repart seul une fois la déconnexion abandonnée (échec, retour par le cache arrière)', !isLeaving() && departsAlone({ leadId: true, code: '', withEmail: false }))
   // Le parcours complet sans session ERPlead (simulé) : racine → départ → ERPlead (formulaire, pas de renvoi) ; avec une
   // erreur au retour → /login?erreur=… qui ne repart pas : au plus UN passage chez ERPlead.
   let trips = 0, url = `http://localhost${root}`, jar = ''
