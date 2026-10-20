@@ -59,6 +59,9 @@ Connexion (règle commune des applications Lead, 13.10.2026) : on arrive sans é
 se déconnecter ferme le Compte Lead et les sessions DE CE NAVIGATEUR seulement (`sid` d'ERPlead gardé avec la
 session), les autres appareils restent connectés ; un départ annoncé par ERPlead ferme toutes les sessions. Voir
 `docs/PASSATION.md`, « Arrivée et déconnexion ».
+« Se déconnecter » sous un Compte Lead lent, navigateur sans tête et faux Compte Lead locaux (après `npm run build`) :
+`TEST_DATABASE_URL=… node scripts/e2e-deconnexion.mjs` → `E2E_DECONNEXION_OK` (manches : un clic, double clic, Échap,
+relecture de /me, Précédent ; en-tête du fichier).
 
 Abonnement en mode test Stripe réel, navigateur sans tête : `node scripts/stripe-setup.mjs --portal …` (clé
 de test), puis `scripts/e2e-abonnement.mjs` (en-tête du fichier) → `E2E_ABONNEMENT_OK`.
