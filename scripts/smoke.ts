@@ -528,6 +528,118 @@ check('tâche d’un projet réservé non modifiable par un non-membre', r.statu
 r = await marc.post(`/api/tasks/${hiddenTask}/comments`, { body: 'vu' })
 check('ni commentable', r.status === 404, r.body)
 
+section('Emails : seulement de qui voit le projet ou la boîte (projet réservé, boîte privée, boîte débranchée)')
+{
+  // Zoé intervient sur un projet réservé ; Marc n'y est pas. Chacun a sa boîte privée ; Ève, une boîte partagée.
+  // (Zoé entre directement en base : la formule de l'espace n'a plus de place libre à ce point du banc.)
+  const zoeId = (await pool.query(`insert into users (email, name) values ($1, 'Zoé Rey') returning id`, [`zoe-emails-${stamp}@exemple.test`])).rows[0].id
+  await pool.query(`insert into account_users (account_id, user_id, role) values ($1, $2, 'member')`, [accountId, zoeId])
+  const zoeToken = `zoe-${randomUUID()}`
+  await pool.query(`insert into sessions (token_hash, user_id, account_id, expires_at) values ($1, $2, $3, now() + interval '1 day')`,
+    [hashTokenSmoke(zoeToken), zoeId, accountId])
+  const zoe = new Client()
+  zoe.cookie = `projectlead_session=${zoeToken}`
+  check('Zoé, membre, entre', (await zoe.get('/api/me')).body?.user?.id === zoeId)
+  // Le projet réservé : celui ouvert depuis l'email de Julie (réservé plus haut, Marc retiré) ; Zoé y intervient.
+  const resId = fromMail
+  r = await eve.post(`/api/projects/${resId}/members`, { user_id: zoeId })
+  check('Zoé ajoutée au projet réservé', r.status < 300, r.body)
+  const kId = (await eve.get(`/api/projects/${resId}`)).body.client.id
+  check('projet réservé : invisible de Marc, visible de Zoé',
+    (await marc.get(`/api/projects/${resId}`)).status === 404 && (await zoe.get(`/api/projects/${resId}`)).status === 200)
+  const box = async (userId: string, mail: string, shared = false) => (await pool.query(
+    `insert into mailboxes (account_id, user_id, provider, email, secret_enc, shared) values ($1,$2,'imap',$3,'x',$4) returning id`,
+    [accountId, userId, mail, shared])).rows[0].id as string
+  const zBox = await box(zoeId, `zoe-${stamp}@boite.test`)
+  const mBox = await box(marcId, `marc-${stamp}@boite.test`)
+  const sBox = await box(eveId, `info-${stamp}@boite.test`, true)
+  const me = async (cl: Client) => (await cl.get('/api/me')).body.inbox as number
+  const dash = async (cl: Client) => (await cl.get('/api/dashboard')).body.counts.inbox as number
+  const counts0 = { marcMe: await me(marc), marcDash: await dash(marc), zoeMe: await me(zoe), zoeDash: await dash(zoe) }
+  const mail = (mailbox: string | null, subject: string, projectId: string | null) => pool.query(
+    `insert into email_messages (account_id, mailbox_id, message_id, from_email, subject, body, status, project_id, client_id)
+     values ($1,$2,$3,$4,$5,'texte',$6,$7,$8)`,
+    [accountId, mailbox, `<${subject}-${stamp}@discret.test>`, 'julie@martin-archi.ch', `${subject} ${stamp}`,
+     projectId ? 'linked' : 'new', projectId, kId])
+  await mail(null, 'R-capture', resId)     // adresse de capture, rattaché au projet réservé
+  await mail(zBox, 'Z-prive', null)        // boîte privée de Zoé, à trier
+  await mail(zBox, 'Z-projet', resId)      // boîte privée de Zoé, rattaché au projet réservé
+  await mail(mBox, 'M-prive', null)        // boîte privée de Marc, à trier
+  await mail(sBox, 'S-projet', resId)      // boîte partagée, rattaché au projet réservé
+  await mail(sBox, 'S-libre', null)        // boîte partagée, à trier
+  const subj = (rows: any[]) => (Array.isArray(rows) ? rows : []).map((m: any) => String(m.subject).replace(` ${stamp}`, '')).filter((s) => /^[RZMS]-/.test(s)).sort()
+
+  // Fuite 1 : les emails d'un projet réservé, par son identifiant.
+  r = await marc.get(`/api/projects/${resId}/emails`)
+  check('fuite 1 : emails d’un projet réservé → 404 pour un non-intervenant', r.status === 404, { status: r.status, emails: subj(r.body) })
+  r = await zoe.get(`/api/projects/${resId}/emails`)
+  check('fuite 1, contre-épreuve : l’intervenante lit les emails du projet',
+    r.status === 200 && subj(r.body).join() === 'R-capture,S-projet,Z-projet', subj(r.body))
+  r = await marc.get(`/api/projects/${resId}/activity`)
+  check('fil d’un projet réservé (objets des emails) → 404 pour un non-intervenant', r.status === 404, r.status)
+  check('fil, contre-épreuve : l’intervenante le lit', (await zoe.get(`/api/projects/${resId}/activity`)).status === 200)
+
+  // Fuite 2 : la fiche client.
+  r = await marc.get(`/api/clients/${kId}`)
+  check('fuite 2 : fiche client → ni boîte privée d’un autre, ni projet réservé (Marc : sa boîte et la partagée libre)',
+    subj(r.body.emails).join() === 'M-prive,S-libre', subj(r.body.emails))
+  r = await zoe.get(`/api/clients/${kId}`)
+  check('fuite 2, contre-épreuve : Zoé voit sa boîte, le projet réservé et la partagée',
+    subj(r.body.emails).join() === 'R-capture,S-libre,S-projet,Z-prive,Z-projet', subj(r.body.emails))
+
+  // La boîte de réception et ses compteurs suivent la même règle.
+  r = await marc.get('/api/mail/inbox?status=all')
+  check('boîte de réception de Marc : rien du projet réservé ni de la boîte de Zoé', subj(r.body).join() === 'M-prive,S-libre', subj(r.body))
+  r = await zoe.get('/api/mail/inbox?status=all')
+  check('boîte de réception de Zoé : la sienne, le projet réservé, la partagée',
+    subj(r.body).join() === 'R-capture,S-libre,S-projet,Z-prive,Z-projet', subj(r.body))
+  check('compteur « À trier » (/me, accueil) : Marc ne compte pas l’email privé de Zoé',
+    (await me(marc)) - counts0.marcMe === 2 && (await dash(marc)) - counts0.marcDash === 2,
+    { me: (await me(marc)) - counts0.marcMe, dash: (await dash(marc)) - counts0.marcDash })
+  check('compteur, contre-épreuve : Zoé compte le sien et la partagée',
+    (await me(zoe)) - counts0.zoeMe === 2 && (await dash(zoe)) - counts0.zoeDash === 2)
+
+  // Fuite 3 : débrancher une boîte privée (soi-même, ou un administrateur pour un autre).
+  r = await zoe.del(`/api/mail/mailboxes/${zBox}`)
+  check('Zoé débranche sa boîte', r.status === 200, r.body)
+  r = await eve.del(`/api/mail/mailboxes/${mBox}`)
+  check('Ève (administratrice) débranche la boîte de Marc', r.status === 200, r.body)
+  r = await marc.get('/api/mail/inbox?status=all')
+  check('fuite 3 : boîte débranchée → ses emails à trier ne deviennent pas visibles des collègues (Marc)',
+    subj(r.body).join() === 'S-libre', subj(r.body))
+  r = await zoe.get('/api/mail/inbox?status=all')
+  check('fuite 3 : … ni de Zoé (email privé de Marc débranché par l’administratrice)',
+    !subj(r.body).includes('M-prive') && subj(r.body).join() === 'R-capture,S-libre,S-projet,Z-projet', subj(r.body))
+  r = await marc.get(`/api/clients/${kId}`)
+  check('fuite 3 : fiche client de Marc, rien de la boîte débranchée de Zoé', subj(r.body.emails).join() === 'S-libre', subj(r.body.emails))
+  r = await zoe.get(`/api/projects/${resId}/emails`)
+  check('fuite 3, contre-épreuve : l’email rattaché au projet reste au projet, pour l’intervenante',
+    subj(r.body).join() === 'R-capture,S-projet,Z-projet', subj(r.body))
+  r = await eve.get(`/api/projects/${resId}/emails`)
+  check('… et pour l’administratrice', subj(r.body).join() === 'R-capture,S-projet,Z-projet', subj(r.body))
+  const left = (await pool.query(`select subject from email_messages where account_id = $1 and subject like '%${stamp}'`, [accountId])).rows
+  check('fuite 3 : les emails à trier d’une boîte privée débranchée sont effacés, ceux des projets gardés',
+    subj(left).join() === 'R-capture,S-libre,S-projet,Z-projet', subj(left))
+  r = await eve.del(`/api/mail/mailboxes/${sBox}`)
+  r = await marc.get('/api/mail/inbox?status=all')
+  check('contre-épreuve : boîte partagée débranchée, ses emails restent à l’équipe', subj(r.body).join() === 'S-libre', subj(r.body))
+  // L'email de la boîte débranchée, rattaché au projet, remis « à trier » : sans boîte ni projet, il ne va à personne.
+  const zProjet = (await zoe.get(`/api/projects/${resId}/emails`)).body.find((m: any) => m.subject === `Z-projet ${stamp}`)
+  const rCapture = (await zoe.get(`/api/projects/${resId}/emails`)).body.find((m: any) => m.subject === `R-capture ${stamp}`)
+  await zoe.post(`/api/mail/messages/${zProjet.id}/status`, { status: 'new' })
+  await zoe.post(`/api/mail/messages/${rCapture.id}/status`, { status: 'new' })
+  r = await marc.get('/api/mail/inbox?status=all')
+  check('boîte débranchée : son email remis « à trier » ne devient pas visible des collègues ; celui de la capture, si',
+    subj(r.body).join() === 'R-capture,S-libre', subj(r.body))
+  r = await marc.get(`/api/clients/${kId}`)
+  check('… ni sur la fiche client', subj(r.body.emails).join() === 'R-capture,S-libre', subj(r.body.emails))
+  r = await new Client().req('POST', `/api/inbound/${inboundToken}`, { from: 'julie@martin-archi.ch', subject: `R-capture2 ${stamp}`, text: 'x', message_id: `<c2-${stamp}@discret.test>` })
+  r = await marc.get('/api/mail/inbox?status=all')
+  check('adresse de capture : l’email d’un client, rattaché au projet réservé, reste réservé', !subj(r.body).includes('R-capture2'), subj(r.body))
+  r = await zoe.get('/api/mail/inbox?status=all')
+  check('… contre-épreuve : l’intervenante le voit', subj(r.body).includes('R-capture2'), subj(r.body))
+}
+
 section('API publique')
 r = await eve.post('/api/api-keys', { name: 'Make' })
 const key = r.body.key

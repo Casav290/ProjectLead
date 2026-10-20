@@ -5,6 +5,7 @@ import { leadIdConfigured } from './auth.js'
 import { body, HttpError, requireRole, router, tx } from '../lib/http.js'
 import { mailboxSecretConfigured } from '../lib/mailbox/secret.js'
 import { planOf } from '../lib/plans.js'
+import { EMAIL_VISIBLE } from './mail.js'
 
 const app = router()
 
@@ -24,7 +25,7 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
     `select t.id, t.started_at, t.project_id, p.name as project_name, t.task_id, k.title as task_title
        from time_entries t join projects p on p.id = t.project_id left join tasks k on k.id = t.task_id
       where t.user_id = app_user() and t.minutes is null`)).rows[0] ?? null
-  const inbox = (await db.query(`select count(*)::int as n from email_messages where status = 'new'`)).rows[0].n
+  const inbox = (await db.query(`select count(*)::int as n from email_messages e where e.status = 'new' and ${EMAIL_VISIBLE}`)).rows[0].n
   const plan = await planOf(db, ctx.accountId)
   return c.json({
     user: me, account, integrations: settings, unread, running, inbox, plan,

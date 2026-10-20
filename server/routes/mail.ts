@@ -133,8 +133,14 @@ app.post('/mailboxes/:id/sync', async (c) => {
 
 // ------------------------------------------------------------------ boîte de réception
 
-/** Les emails visibles : ceux de mes boîtes, des boîtes partagées, et de l'adresse de capture. */
-const VISIBLE = `(e.mailbox_id is null or exists (select 1 from mailboxes m where m.id = e.mailbox_id and (m.user_id = app_user() or m.shared)))`
+/**
+ * Les emails visibles : ceux de mes boîtes, des boîtes partagées, et ceux sans boîte (adresse de capture, boîte
+ * débranchée ou effacée avec la fiche d'une personne partie). Un email sans boîte rattaché à un projet ne se voit que
+ * de qui voit ce projet (la RLS de `projects` décide) : sinon la boîte privée d'une personne partie ouvrirait à toute
+ * l'entreprise les emails d'un projet réservé aux intervenants.
+ */
+const VISIBLE = `(case when e.mailbox_id is null then e.project_id is null or exists (select 1 from projects p where p.id = e.project_id)
+  else exists (select 1 from mailboxes m where m.id = e.mailbox_id and (m.user_id = app_user() or m.shared)) end)`
 
 app.get('/inbox', async (c) => tx(c, async (db) => {
   const status = c.req.query('status') ?? 'new'
@@ -145,7 +151,7 @@ app.get('/inbox', async (c) => tx(c, async (db) => {
               where c2.archived_at is null and (lower(c2.email) = e.from_email or lower(cc.email) = e.from_email) limit 1) as known_client
        from email_messages e left join projects p on p.id = e.project_id left join clients cl on cl.id = e.client_id
        left join mailboxes m on m.id = e.mailbox_id
-      where ${VISIBLE} and ($1 = 'all' or e.status = $1) and e.direction = 'in'
+      where ${EMAIL_VISIBLE} and ($1 = 'all' or e.status = $1) and e.direction = 'in'
         and ($2 = '' or e.subject ilike '%' || $2 || '%' or e.from_email ilike '%' || $2 || '%')
       order by e.received_at desc limit 300`, [status, (c.req.query('q') ?? '').trim()])).rows
   return c.json(rows)
@@ -155,7 +161,7 @@ app.get('/inbox', async (c) => tx(c, async (db) => {
 async function loadMessage(c: any, id: string) {
   const m = await tx(c, async (db) => (await db.query(
     `select e.*, mb.provider, mb.secret_enc from email_messages e left join mailboxes mb on mb.id = e.mailbox_id
-      where e.id = $1 and ${VISIBLE.replace(/\be\./g, 'e.')}`, [id])).rows[0])
+      where e.id = $1 and ${EMAIL_VISIBLE}`, [id])).rows[0])
   if (!m) throw notFound()
   if (m.body === null && m.provider_id && m.provider) {
     try {
@@ -248,7 +254,7 @@ app.post('/messages/:id/link', async (c) => {
 app.post('/messages/:id/status', async (c) => {
   const b = await body(c, z.object({ status: z.enum(['new', 'ignored']) }))
   await tx(c, (db) => db.query(`update email_messages e set status = $2, project_id = case when $2 = 'new' then null else project_id end
-                                where id = $1 and ${VISIBLE}`, [c.req.param('id'), b.status]))
+                                where id = $1 and ${EMAIL_VISIBLE}`, [c.req.param('id'), b.status]))
   return c.json({ ok: true })
 })
 
@@ -260,12 +266,22 @@ app.post('/messages/:id/reply', async (c) => {
   const quoted = m.body ? `\n\n---\n${m.from_name ?? m.from_email} a écrit :\n${m.body.slice(0, 5000).split('\n').map((l: string) => '> ' + l).join('\n')}` : ''
   const r = await sendMail({ accountId: ctx.accountId, to: [m.from_email, ...b.cc], subject, text: b.body + quoted, fromUserId: ctx.userId, fromName: c.get('name') })
   await tx(c, (db) => db.query(
-    `insert into email_messages (account_id, mailbox_id, message_id, direction, from_email, to_emails, subject, body, status, project_id, client_id)
-     values ($1,$2,$3,'out',$4,$5,$6,$7,$8,$9,$10)`,
+    `insert into email_messages (account_id, mailbox_id, message_id, direction, from_email, to_emails, subject, body, status, project_id, client_id,
+                                 orphaned_private)
+     values ($1,$2,$3,'out',$4,$5,$6,$7,$8,$9,$10,$11)`,
     [ctx.accountId, m.mailbox_id, newMessageId(c.get('email')), c.get('email'), [m.from_email, ...b.cc], subject, b.body,
-     m.project_id ? 'linked' : 'new', m.project_id, m.client_id]))
+     m.project_id ? 'linked' : 'new', m.project_id, m.client_id, m.orphaned_private]))
   return c.json({ ok: true, via: r.via })
 })
+
+/**
+ * La règle entière, pour toutes les lectures d'emails (boîte de réception, fiche client, compteurs ; alias `e`) :
+ * VISIBLE, et un email rattaché à un projet que je ne vois pas (réservé aux intervenants) ne se voit que dans ma propre
+ * boîte. Un email d'une boîte privée débranchée qui a perdu son projet (`orphaned_private`, db/016) ne se voit plus.
+ */
+export const EMAIL_VISIBLE = `(${VISIBLE} and (e.project_id is null and not e.orphaned_private
+  or exists (select 1 from projects p where p.id = e.project_id)
+  or exists (select 1 from mailboxes m where m.id = e.mailbox_id and m.user_id = app_user())))`
 
 export default app
 

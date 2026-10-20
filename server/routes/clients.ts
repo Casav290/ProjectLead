@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { crmleadConfig, getLead, searchLeads, upsertClientFromLead } from '../lib/crmlead.js'
 import { invoiceleadConfig, searchContacts, upsertClientFromContact } from '../lib/invoicelead.js'
 import { body, email, HttpError, notFound, router, setClause, tx } from '../lib/http.js'
+import { EMAIL_VISIBLE } from './mail.js'
 
 /** Les clients et leurs adresses ; CRMlead en est la source quand il est branché. */
 const app = router()
@@ -51,8 +52,8 @@ app.get('/:id', async (c) => tx(c, async (db) => {
     `select id, name, code, status, health, due_date, color from projects
       where client_id = $1 and not is_template order by created_at desc`, [client.id])).rows
   const emails = (await db.query(
-    `select id, subject, from_email, direction, received_at, project_id from email_messages
-      where client_id = $1 order by received_at desc limit 20`, [client.id])).rows
+    `select e.id, e.subject, e.from_email, e.direction, e.received_at, e.project_id from email_messages e
+      where e.client_id = $1 and ${EMAIL_VISIBLE} order by e.received_at desc limit 20`, [client.id])).rows
   return c.json({ ...client, contacts, projects, emails })
 }))
 

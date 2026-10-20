@@ -392,6 +392,8 @@ app.post('/:id/stages/order', async (c) => {
 // ------------------------------------------------------------------ fil, points, suivi client
 
 app.get('/:id/activity', async (c) => tx(c, async (db) => {
+  // Le fil porte l'objet et l'expéditeur des emails du projet : seulement pour qui voit le projet.
+  if (!(await db.query('select 1 from projects where id = $1', [c.req.param('id')])).rowCount) throw notFound()
   const rows = (await db.query(
     `select * from (
        select 'activity' as type, a.id::text, a.kind, a.data, null as body, a.task_id, a.created_at, u.name as actor_name, u.color as actor_color,
@@ -519,9 +521,14 @@ app.delete('/files/:fid', async (c) => {
 
 // ------------------------------------------------------------------ emails du projet
 
-app.get('/:id/emails', async (c) => tx(c, async (db) => c.json((await db.query(
-  `select id, direction, from_email, from_name, to_emails, subject, left(coalesce(body,''), 4000) as body, received_at
-     from email_messages where project_id = $1 order by received_at desc limit 200`, [c.req.param('id')])).rows)))
+// La RLS de `email_messages` ne filtre que par entreprise : le projet doit d'abord être visible de la personne (un
+// projet réservé aux intervenants ne livre pas ses emails à qui en connaît l'identifiant).
+app.get('/:id/emails', async (c) => tx(c, async (db) => {
+  if (!(await db.query('select 1 from projects where id = $1', [c.req.param('id')])).rowCount) throw notFound()
+  return c.json((await db.query(
+    `select id, direction, from_email, from_name, to_emails, subject, left(coalesce(body,''), 4000) as body, received_at
+       from email_messages where project_id = $1 order by received_at desc limit 200`, [c.req.param('id')])).rows)
+}))
 
 app.post('/:id/emails', async (c) => {
   const b = await body(c, z.object({ to: z.array(email).min(1).max(20), subject: z.string().trim().min(1).max(300), body: z.string().min(1).max(50000) }))

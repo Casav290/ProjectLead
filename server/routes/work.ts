@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { anonTx } from '../db.js'
 import { createDefaultColumns } from '../lib/defaults.js'
 import { body, email, HttpError, requireRole, router, setClause, tx, uuid } from '../lib/http.js'
+import { EMAIL_VISIBLE } from './mail.js'
 
 /** Accueil, notifications, recherche, automatisations, formulaires de demande, clés d'API. */
 const app = router()
@@ -36,7 +37,7 @@ app.get('/dashboard', async (c) => tx(c, async (db) => {
     `select (select count(*)::int from projects where not is_template and archived_at is null and status = 'active') as active,
             (select count(*)::int from projects where not is_template and archived_at is null and status in ('active','planned') and health <> 'on_track') as at_risk,
             (select count(*)::int from projects where not is_template and archived_at is null and status in ('active','planned') and due_date < current_date) as late,
-            (select count(*)::int from email_messages where status = 'new' and direction = 'in') as inbox,
+            (select count(*)::int from email_messages e where e.status = 'new' and e.direction = 'in' and ${EMAIL_VISIBLE}) as inbox,
             (select count(*)::int from projects where not is_template and archived_at is null and status = 'lead') as leads`)).rows[0]
   const activity = (await db.query(
     `select a.kind, a.data, a.created_at, a.project_id, p.name as project_name, u.name as actor_name
