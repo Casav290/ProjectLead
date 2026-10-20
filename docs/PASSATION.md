@@ -97,10 +97,18 @@ tapée ou un lien profond (`/login` et toute page sans session partent vers `/au
   Compatibilité : l'ERPlead en ligne avant le passage n'émet pas de `sid` ; ses jetons ferment donc toutes les
   sessions de la personne (repli sûr, jamais de 500, jamais de session laissée ouverte), de même qu'un `sid` illisible.
   « Se déconnecter » dans ProjectLead ne ferme que la session de ce navigateur, puis ERPlead `/oauth/logout`
-  (`id_token_hint`). Pendant que la page attend ERPlead (parfois plusieurs secondes), rien ne la renvoie vers la
-  connexion (`startLeaving`, `src/lib/arrival.ts`, 15.10.2026) : la relecture de /me (toutes les minutes) y voyait un
-  401, l'écran de connexion repartait vers ERPlead et coupait sa déconnexion ; la personne rentrait sans formulaire.
-  Contrôle navigateur : `~/projets/lead-e2e/slow-logout-local.mjs --apps pl --delays 3000 --attente 58000`.
+  (`id_token_hint`). Pendant que la page attend ERPlead (parfois plusieurs secondes), la page elle-même ne la
+  renvoie plus vers la connexion (`src/lib/arrival.ts`) : ni la relecture de /me (toutes les minutes) ni un autre 401
+  (`startLeaving`, 15.10.2026 : l'écran de connexion repartait vers ERPlead et coupait sa déconnexion), ni un 2e clic sur
+  « Se déconnecter » (`leave`, 20.10.2026 : le 2e POST partait sans cookie, recevait `/login`, et cette navigation
+  coupait celle vers ERPlead ; dans les deux cas, la personne rentrait sans formulaire). Un seul POST
+  `/api/auth/logout` ; un clic pendant la sortie ne fait rien tant que la réponse n'est pas là, puis relance la même
+  adresse de sortie, jamais `/login` (reprend aussi une sortie arrêtée par Échap ou Stop) ; le bouton dit
+  « Déconnexion… », désactivé jusqu'à la réponse. Reste hors de ce garde-fou : un rechargement de la page pendant
+  l'attente, qui est une nouvelle arrivée (elle repart vers ERPlead, encore ouvert). Contrôles : `npm test` (parcours du
+  bouton) ; navigateur, `scripts/e2e-deconnexion.mjs` (manches simple, double, double-tot, echap, relecture, retour ;
+  double et echap rouges sur c34a3ca, relecture aussi sur 1804451) et
+  `~/projets/lead-e2e/slow-logout-local.mjs --apps pl --delays 3000 --attente 58000`.
 - **Départ d'une personne** (`lead_status: disabled`) : TOUTES ses sessions tombent, dans toutes les entreprises, et
   sa place se libère dans l'entreprise annoncée.
 - **Clés d'ERPlead** (`server/lib/leadId.ts`, comme ScanLead) : le back-channel et la boîte de réception de l'échange
