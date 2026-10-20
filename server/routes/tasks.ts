@@ -3,6 +3,7 @@ import type { Ctx, Db } from '../db.js'
 import { logActivity, mentionedUsers, notify } from '../lib/activity.js'
 import { runAutomations } from '../lib/automations.js'
 import { body, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
+import { assertInProject } from '../lib/visibility.js'
 
 /** Les tâches : tableau, liste, Gantt, calendrier et « Mes tâches » lisent tous ici. */
 const app = router()
@@ -158,6 +159,7 @@ app.post('/', async (c) => {
   const id = await tx(c, async (db, ctx) => {
     const p = (await db.query('select id from projects where id = $1', [b.project_id])).rows[0]
     if (!p) throw notFound()
+    await assertInProject(db, b.project_id, b)
     const col = b.column_id ?? (await db.query('select id from board_columns where project_id = $1 order by position limit 1', [b.project_id])).rows[0]?.id ?? null
     const s = setClause({ ...b, column_id: col }, TASK_FIELDS.filter((f) => f !== 'position'), 6)
     const r = (await db.query(
@@ -183,6 +185,7 @@ app.patch('/:id', async (c) => {
     const t = (await db.query(`select t.* ${VISIBLE} where t.id = $1`, [c.req.param('id')])).rows[0]
     if (!t) throw notFound()
     if (b.parent_id && b.parent_id === t.id) throw new HttpError(400, 'invalid_parent')
+    await assertInProject(db, t.project_id, b)
     const s = setClause(b, TASK_FIELDS, 2)
     if (s.keys.length) await db.query(`update tasks set ${s.sql}, updated_at = now() where id = $1`, [t.id, ...s.values])
     if (b.assignee_ids) await setAssignees(db, ctx, t.id, b.assignee_ids, b.title ?? t.title, t.project_id, c.get('name'))
@@ -211,6 +214,7 @@ app.post('/bulk', async (c) => {
       const t = (await db.query(`select t.id, t.title, t.project_id ${VISIBLE} where t.id = $1`, [id])).rows[0]
       if (!t) continue
       if (b.patch.delete) { await db.query('delete from tasks where id = $1', [id]); continue }
+      await assertInProject(db, t.project_id, { stage_id: b.patch.stage_id })
       const s = setClause(b.patch, ['priority', 'due_date', 'stage_id'], 2)
       if (s.keys.length) await db.query(`update tasks set ${s.sql}, updated_at = now() where id = $1`, [id, ...s.values])
       if (b.patch.add_assignee) {
@@ -244,9 +248,16 @@ app.post('/:id/checklist', async (c) => {
   return c.json({ id }, 201)
 })
 
+/** Un point de liste de contrôle n'est lisible et modifiable que si sa tâche l'est (projet réservé → 404). */
+async function assertItemVisible(db: Db, itemId: string) {
+  if (!(await db.query(`select 1 from checklist_items ci join tasks t on t.id = ci.task_id join projects p on p.id = t.project_id
+                         where ci.id = $1`, [itemId])).rowCount) throw notFound()
+}
+
 app.patch('/checklist/:iid', async (c) => {
   const b = await body(c, z.object({ label: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional() }))
   await tx(c, async (db) => {
+    await assertItemVisible(db, c.req.param('iid'))
     const s = setClause(b, ['label', 'done'], 2)
     if (s.keys.length) await db.query(`update checklist_items set ${s.sql} where id = $1`, [c.req.param('iid'), ...s.values])
   })
@@ -254,7 +265,10 @@ app.patch('/checklist/:iid', async (c) => {
 })
 
 app.delete('/checklist/:iid', async (c) => {
-  await tx(c, (db) => db.query('delete from checklist_items where id = $1', [c.req.param('iid')]))
+  await tx(c, async (db) => {
+    await assertItemVisible(db, c.req.param('iid'))
+    await db.query('delete from checklist_items where id = $1', [c.req.param('iid')])
+  })
   return c.json({ ok: true })
 })
 
@@ -280,7 +294,10 @@ app.post('/:id/dependencies', async (c) => {
 })
 
 app.delete('/:id/dependencies/:dep', async (c) => {
-  await tx(c, (db) => db.query('delete from task_dependencies where task_id = $1 and depends_on_id = $2', [c.req.param('id'), c.req.param('dep')]))
+  await tx(c, async (db) => {
+    await assertVisible(db, c.req.param('id'))
+    await db.query('delete from task_dependencies where task_id = $1 and depends_on_id = $2', [c.req.param('id'), c.req.param('dep')])
+  })
   return c.json({ ok: true })
 })
 
@@ -306,14 +323,20 @@ app.post('/:id/comments', async (c) => {
 app.patch('/comments/:cid', async (c) => {
   const b = await body(c, z.object({ body: z.string().trim().min(1).max(20000) }))
   await tx(c, async (db) => {
-    const r = await db.query('update comments set body = $2, edited_at = now() where id = $1 and author_id = app_user()', [c.req.param('cid'), b.body])
+    const r = await db.query(`update comments cm set body = $2, edited_at = now() where cm.id = $1 and cm.author_id = app_user()
+                                and exists (select 1 from projects p where p.id = cm.project_id)`, [c.req.param('cid'), b.body])
     if (!r.rowCount) throw notFound()
   })
   return c.json({ ok: true })
 })
 
 app.delete('/comments/:cid', async (c) => {
-  await tx(c, (db) => db.query(`delete from comments where id = $1 and (author_id = app_user() or app_role() = 'admin')`, [c.req.param('cid')]))
+  await tx(c, async (db) => {
+    // L'auteur sorti d'un projet réservé ne le retouche plus (404), comme il ne le lit plus.
+    const r = await db.query(`delete from comments cm where cm.id = $1 and (cm.author_id = app_user() or app_role() = 'admin')
+                               and exists (select 1 from projects p where p.id = cm.project_id)`, [c.req.param('cid')])
+    if (!r.rowCount) throw notFound()
+  })
   return c.json({ ok: true })
 })
 

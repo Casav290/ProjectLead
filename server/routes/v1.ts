@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { anon, type Ctx, withTenant } from '../db.js'
 import { body, date, HttpError, uuid } from '../lib/http.js'
 import { createProject } from './projects.js'
+import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
 
 /**
  * API REST publique (`Authorization: Bearer pl_…`), pour relier ProjectLead à un autre outil
@@ -73,9 +74,14 @@ app.post('/tasks', async (c) => {
 app.post('/time', async (c) => {
   const b = await body(c, z.object({ project_id: uuid, task_id: uuid.nullish(), entry_date: date, minutes: z.number().int().min(1).max(1440),
     note: z.string().max(2000).default(''), billable: z.boolean().default(true) }))
-  const id = await withTenant(c.get('ctx'), async (db) => (await db.query(
-    `insert into time_entries (account_id, user_id, project_id, task_id, entry_date, minutes, note, billable) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-    [c.get('ctx').accountId, c.get('ctx').userId, b.project_id, b.task_id ?? null, b.entry_date, b.minutes, b.note, b.billable])).rows[0].id)
+  const id = await withTenant(c.get('ctx'), async (db) => {
+    // Comme POST /tasks : un projet que la clé ne voit pas (réservé aux intervenants) → 404 ; la tâche, de ce projet.
+    await assertProjectVisible(db, b.project_id)
+    await assertInProject(db, b.project_id, { task_id: b.task_id })
+    return (await db.query(
+      `insert into time_entries (account_id, user_id, project_id, task_id, entry_date, minutes, note, billable) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+      [c.get('ctx').accountId, c.get('ctx').userId, b.project_id, b.task_id ?? null, b.entry_date, b.minutes, b.note, b.billable])).rows[0].id
+  })
   return c.json({ data: { id } }, 201)
 })
 

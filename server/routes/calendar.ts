@@ -6,6 +6,7 @@ import { htmlParagraphs, layout, sendMail } from '../lib/email.js'
 import { normalizeCalendarUrl, syncFeed } from '../lib/extcal.js'
 import { body, email, HttpError, notFound, router, setClause, tx, uuid } from '../lib/http.js'
 import { ics, type IcsEvent } from '../lib/ics.js'
+import { assertProjectVisible } from '../lib/visibility.js'
 import { mailboxSecretConfigured, seal } from '../lib/mailbox/secret.js'
 
 /**
@@ -13,6 +14,16 @@ import { mailboxSecretConfigured, seal } from '../lib/mailbox/secret.js'
  * (lus), et un flux iCalendar personnel pour voir ProjectLead dans Google, Outlook ou Apple.
  */
 const app = router()
+
+/**
+ * Un rendez-vous rattaché à un projet réservé ne se voit (ni ne se modifie) que de qui voit ce projet, ou de qui
+ * l'organise ou y participe. Alias `e` sur `events`.
+ */
+const EVENT_SEEN = `(e.project_id is null or exists (select 1 from projects pv where pv.id = e.project_id) or e.organizer_id = app_user()
+  or exists (select 1 from event_attendees ea where ea.event_id = e.id and ea.user_id = app_user()))`
+async function assertEventSeen(db: any, id: string) {
+  if (!(await db.query(`select 1 from events e where e.id = $1 and ${EVENT_SEEN}`, [id])).rowCount) throw notFound()
+}
 
 const fmt = (d: Date, tz: string) => new Intl.DateTimeFormat('fr-CH', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' }).format(d)
 
@@ -25,7 +36,7 @@ app.get('/events', async (c) => tx(c, async (db) => {
             coalesce((select json_agg(json_build_object('user_id', a.user_id, 'email', coalesce(a.email, au.email), 'name', coalesce(a.name, au.name)))
               from event_attendees a left join users au on au.id = a.user_id where a.event_id = e.id), '[]') as attendees
        from events e left join projects p on p.id = e.project_id left join clients cl on cl.id = e.client_id left join users u on u.id = e.organizer_id
-      where e.starts_at < $2::date + 1 and e.ends_at >= $1::date
+      where e.starts_at < $2::date + 1 and e.ends_at >= $1::date and ${EVENT_SEEN}
         and (not $3 or e.organizer_id = app_user() or exists (select 1 from event_attendees a where a.event_id = e.id and a.user_id = app_user()))
       order by e.starts_at`, [from, to, mine])).rows
   const tasks = (await db.query(
@@ -75,6 +86,7 @@ app.post('/events', async (c) => {
   const b = await body(c, eventSchema)
   if (Date.parse(b.ends_at) < Date.parse(b.starts_at)) throw new HttpError(400, 'end_before_start')
   const ev = await tx(c, async (db, ctx) => {
+    if (b.project_id) await assertProjectVisible(db, b.project_id)
     const e = (await db.query(
       `insert into events (account_id, project_id, client_id, organizer_id, title, description, location, kind, starts_at, ends_at, all_day)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
@@ -94,6 +106,8 @@ app.post('/events', async (c) => {
 app.patch('/events/:id', async (c) => {
   const b = await body(c, eventSchema.partial())
   const out = await tx(c, async (db, ctx) => {
+    await assertEventSeen(db, c.req.param('id'))
+    if (b.project_id) await assertProjectVisible(db, b.project_id)
     const s = setClause(b, ['title', 'description', 'location', 'kind', 'starts_at', 'ends_at', 'all_day', 'project_id', 'client_id'], 2)
     const r = s.keys.length ? await db.query(`update events set ${s.sql} where id = $1 returning *`, [c.req.param('id'), ...s.values])
                             : await db.query('select * from events where id = $1', [c.req.param('id')])
@@ -114,6 +128,7 @@ app.patch('/events/:id', async (c) => {
 
 app.delete('/events/:id', async (c) => {
   const out = await tx(c, async (db) => {
+    await assertEventSeen(db, c.req.param('id'))
     const ev = (await db.query('select * from events where id = $1', [c.req.param('id')])).rows[0]
     if (!ev) throw notFound()
     const emails = (await db.query('select email from event_attendees where event_id = $1 and email is not null', [ev.id])).rows.map((x) => x.email)

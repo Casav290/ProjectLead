@@ -7,6 +7,7 @@ import { createDefaultColumns } from '../lib/defaults.js'
 import { sendMail } from '../lib/email.js'
 import { newMessageId } from '../lib/mailbox/types.js'
 import { assertCanOpenProject, isOpenStatus } from '../lib/plans.js'
+import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
 import { body, cents, email, forbidden, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
 
 /**
@@ -292,7 +293,11 @@ app.post('/:id/columns', async (c) => {
 app.patch('/columns/:cid', async (c) => {
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(60).optional(), is_done: z.boolean().optional(),
                                       wip_limit: z.number().int().min(1).max(999).nullish() }))
-  await tx(c, async (db) => {
+  await tx(c, async (db, ctx) => {
+    // Une colonne se modifie comme le projet : projet réservé invisible → 404 (et droit d'édition, comme POST /:id/columns).
+    const col = (await db.query('select project_id from board_columns where id = $1', [c.req.param('cid')])).rows[0]
+    if (!col) throw notFound()
+    await assertCanEdit(db, ctx, col.project_id)
     const s = setClause(b, ['name', 'is_done', 'wip_limit'], 2)
     if (s.keys.length) await db.query(`update board_columns set ${s.sql} where id = $1`, [c.req.param('cid'), ...s.values])
   })
@@ -300,9 +305,10 @@ app.patch('/columns/:cid', async (c) => {
 })
 
 app.delete('/columns/:cid', async (c) => {
-  await tx(c, async (db) => {
+  await tx(c, async (db, ctx) => {
     const col = (await db.query('select project_id from board_columns where id = $1', [c.req.param('cid')])).rows[0]
     if (!col) throw notFound()
+    await assertCanEdit(db, ctx, col.project_id)
     const n = (await db.query('select count(*)::int as n from board_columns where project_id = $1', [col.project_id])).rows[0].n
     if (n <= 1) throw new HttpError(400, 'last_column')
     const other = (await db.query('select id from board_columns where project_id = $1 and id <> $2 order by position limit 1', [col.project_id, c.req.param('cid')])).rows[0]
@@ -393,7 +399,7 @@ app.post('/:id/stages/order', async (c) => {
 
 app.get('/:id/activity', async (c) => tx(c, async (db) => {
   // Le fil porte l'objet et l'expéditeur des emails du projet : seulement pour qui voit le projet.
-  if (!(await db.query('select 1 from projects where id = $1', [c.req.param('id')])).rowCount) throw notFound()
+  await assertProjectVisible(db, c.req.param('id'))
   const rows = (await db.query(
     `select * from (
        select 'activity' as type, a.id::text, a.kind, a.data, null as body, a.task_id, a.created_at, u.name as actor_name, u.color as actor_color,
@@ -420,9 +426,12 @@ app.post('/:id/comments', async (c) => {
   return c.json({ id }, 201)
 })
 
-app.get('/:id/updates', async (c) => tx(c, async (db) => c.json((await db.query(
-  `select pu.*, u.name as author_name from project_updates pu left join users u on u.id = pu.author_id
-    where pu.project_id = $1 order by pu.created_at desc`, [c.req.param('id')])).rows)))
+app.get('/:id/updates', async (c) => tx(c, async (db) => {
+  await assertProjectVisible(db, c.req.param('id'))
+  return c.json((await db.query(
+    `select pu.*, u.name as author_name from project_updates pu left join users u on u.id = pu.author_id
+      where pu.project_id = $1 order by pu.created_at desc`, [c.req.param('id')])).rows)
+}))
 
 app.post('/:id/updates', async (c) => {
   const b = await body(c, z.object({ health: z.enum(HEALTH), body: z.string().trim().max(20000).default(''), share_with_client: z.boolean().default(false) }))
@@ -442,6 +451,7 @@ app.post('/:id/updates', async (c) => {
 })
 
 app.get('/:id/client-report', async (c) => tx(c, async (db) => {
+  await assertProjectVisible(db, c.req.param('id'))
   const r = await buildReport(db, c.req.param('id'), c.req.query('message') ?? null)
   const sent = (await db.query(
     `select cr.id, cr.recipients, cr.subject, cr.automatic, cr.sent_at, u.name as sent_by_name
@@ -475,10 +485,13 @@ app.post('/:id/portal/regenerate', async (c) => {
 
 // ------------------------------------------------------------------ fichiers
 
-app.get('/:id/files', async (c) => tx(c, async (db) => c.json((await db.query(
-  `select a.id, a.filename, a.mime, a.size, a.task_id, a.visible_to_client, a.created_at, u.name as uploaded_by_name, k.title as task_title
-     from attachments a left join users u on u.id = a.uploaded_by left join tasks k on k.id = a.task_id
-    where a.project_id = $1 order by a.created_at desc`, [c.req.param('id')])).rows)))
+app.get('/:id/files', async (c) => tx(c, async (db) => {
+  await assertProjectVisible(db, c.req.param('id'))
+  return c.json((await db.query(
+    `select a.id, a.filename, a.mime, a.size, a.task_id, a.visible_to_client, a.created_at, u.name as uploaded_by_name, k.title as task_title
+       from attachments a left join users u on u.id = a.uploaded_by left join tasks k on k.id = a.task_id
+      where a.project_id = $1 order by a.created_at desc`, [c.req.param('id')])).rows)
+}))
 
 app.post('/:id/files', async (c) => {
   const form = await c.req.formData()
@@ -488,6 +501,8 @@ app.post('/:id/files', async (c) => {
   const buf = Buffer.from(await file.arrayBuffer())
   const taskId = form.get('task_id')
   const id = await tx(c, async (db, ctx) => {
+    await assertProjectVisible(db, c.req.param('id'))
+    await assertInProject(db, c.req.param('id'), { task_id: typeof taskId === 'string' && taskId ? taskId : null })
     const r = (await db.query(
       `insert into attachments (account_id, project_id, task_id, filename, mime, size, content, uploaded_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
@@ -510,12 +525,20 @@ app.get('/files/:fid', async (c) => {
 
 app.patch('/files/:fid', async (c) => {
   const b = await body(c, z.object({ visible_to_client: z.boolean() }))
-  await tx(c, (db) => db.query('update attachments set visible_to_client = $2 where id = $1', [c.req.param('fid'), b.visible_to_client]))
+  await tx(c, async (db) => {
+    const r = await db.query(`update attachments a set visible_to_client = $2 where a.id = $1
+                               and exists (select 1 from projects p where p.id = a.project_id)`, [c.req.param('fid'), b.visible_to_client])
+    if (!r.rowCount) throw notFound()
+  })
   return c.json({ ok: true })
 })
 
 app.delete('/files/:fid', async (c) => {
-  await tx(c, (db) => db.query('delete from attachments where id = $1', [c.req.param('fid')]))
+  await tx(c, async (db) => {
+    const r = await db.query(`delete from attachments a where a.id = $1 and exists (select 1 from projects p where p.id = a.project_id)`,
+      [c.req.param('fid')])
+    if (!r.rowCount) throw notFound()
+  })
   return c.json({ ok: true })
 })
 
@@ -524,7 +547,7 @@ app.delete('/files/:fid', async (c) => {
 // La RLS de `email_messages` ne filtre que par entreprise : le projet doit d'abord être visible de la personne (un
 // projet réservé aux intervenants ne livre pas ses emails à qui en connaît l'identifiant).
 app.get('/:id/emails', async (c) => tx(c, async (db) => {
-  if (!(await db.query('select 1 from projects where id = $1', [c.req.param('id')])).rowCount) throw notFound()
+  await assertProjectVisible(db, c.req.param('id'))
   return c.json((await db.query(
     `select id, direction, from_email, from_name, to_emails, subject, left(coalesce(body,''), 4000) as body, received_at
        from email_messages where project_id = $1 order by received_at desc limit 200`, [c.req.param('id')])).rows)
@@ -533,6 +556,8 @@ app.get('/:id/emails', async (c) => tx(c, async (db) => {
 app.post('/:id/emails', async (c) => {
   const b = await body(c, z.object({ to: z.array(email).min(1).max(20), subject: z.string().trim().min(1).max(300), body: z.string().min(1).max(50000) }))
   const ctx = c.get('ctx')
+  // Le projet d'abord : rien ne part au nom d'un projet que la personne ne voit pas.
+  await tx(c, (db) => assertProjectVisible(db, c.req.param('id')))
   const r = await sendMail({ accountId: ctx.accountId, to: b.to, subject: b.subject, text: b.body, fromUserId: ctx.userId, fromName: c.get('name') })
   await tx(c, async (db) => {
     const p = (await db.query('select client_id from projects where id = $1', [c.req.param('id')])).rows[0]

@@ -638,6 +638,165 @@ section('Emails : seulement de qui voit le projet ou la boîte (projet réservé
   check('adresse de capture : l’email d’un client, rattaché au projet réservé, reste réservé', !subj(r.body).includes('R-capture2'), subj(r.body))
   r = await zoe.get('/api/mail/inbox?status=all')
   check('… contre-épreuve : l’intervenante le voit', subj(r.body).includes('R-capture2'), subj(r.body))
+
+  section('Projet réservé : toute route par identifiant (projet, tâche, fichier, colonne, point, temps, rendez-vous) → 404 hors du projet')
+  const R = resId
+  const q1 = async (sql: string, args: unknown[] = []) => (await pool.query(sql, args)).rows[0]
+  // Les objets du projet réservé, posés par Ève (administratrice) ; Marc en est sorti, Zoé y intervient.
+  const upd = await eve.post(`/api/projects/${R}/updates`, { health: 'at_risk', body: `point secret ${stamp}` })
+  const fd = () => { const f = new FormData(); f.append('file', new File([`contenu ${stamp}`], `plan-secret-${stamp}.txt`, { type: 'text/plain' })); return f }
+  const fileId = (await eve.req('POST', `/api/projects/${R}/files`, fd())).body.id
+  const colId = (await eve.get(`/api/projects/${R}`)).body.columns[0].id
+  const stageR = (await eve.post(`/api/projects/${R}/stages`, { name: `Étape secrète ${stamp}` })).body.id
+  const taskR2 = (await eve.post('/api/tasks', { project_id: R, title: `Tâche secrète 2 ${stamp}` })).body.id
+  await eve.post(`/api/tasks/${taskR2}/dependencies`, { depends_on_id: hiddenTask })
+  const itemId = (await eve.post(`/api/tasks/${hiddenTask}/checklist`, { label: `point ${stamp}` })).body.id
+  // Marc, encore intervenant un moment : un commentaire et du temps sur le projet réservé, puis il en sort.
+  await eve.post(`/api/projects/${R}/members`, { user_id: marcId })
+  const marcComment = (await marc.post(`/api/tasks/${hiddenTask}/comments`, { body: `ancien commentaire ${stamp}` })).body.id
+  const marcEntryR = (await marc.post('/api/time/entries', { project_id: R, entry_date: today, minutes: 30 })).body.id
+  await eve.del(`/api/projects/${R}/members/${marcId}`)
+  check('préparation : objets du projet réservé posés, Marc ressorti',
+    upd.status === 201 && fileId && colId && stageR && taskR2 && itemId && marcComment && marcEntryR && (await marc.get(`/api/projects/${R}`)).status === 404)
+  const evR = (await eve.post('/api/calendar/events', { title: `Rendez-vous secret ${stamp}`, starts_at: `${today}T10:00:00+02:00`,
+    ends_at: `${today}T11:00:00+02:00`, project_id: R })).body.id
+
+  // Lectures.
+  r = await marc.get(`/api/projects/${R}/files`)
+  check('GET /projects/:id/files → 404 hors du projet', r.status === 404, r.body)
+  r = await zoe.get(`/api/projects/${R}/files`)
+  check('… contre-épreuve : l’intervenante voit les fichiers', r.status === 200 && r.body.some((f: any) => f.id === fileId), r.body)
+  r = await marc.get(`/api/projects/${R}/updates`)
+  check('GET /projects/:id/updates → 404 hors du projet', r.status === 404, r.body)
+  r = await zoe.get(`/api/projects/${R}/updates`)
+  check('… contre-épreuve : l’intervenante voit les points', r.status === 200 && r.body.some((u: any) => u.body === `point secret ${stamp}`), r.body)
+  r = await marc.get(`/api/projects/${R}/client-report`)
+  check('GET /projects/:id/client-report → 404 hors du projet', r.status === 404, r.status)
+  check('… contre-épreuve : l’intervenante le lit', (await zoe.get(`/api/projects/${R}/client-report`)).status === 200)
+  const range = `from=${addDays(today, -1)}&to=${addDays(today, 1)}&scope=all`
+  r = await marc.get(`/api/calendar/events?${range}`)
+  check('GET /calendar/events : un rendez-vous du projet réservé n’apparaît pas hors du projet', !r.body.events.some((e: any) => e.id === evR), r.body.events)
+  r = await zoe.get(`/api/calendar/events?${range}`)
+  check('… contre-épreuve : l’intervenante le voit', r.body.events.some((e: any) => e.id === evR))
+
+  // Écritures sur le projet ou ses objets.
+  r = await marc.req('POST', `/api/projects/${R}/files`, fd())
+  check('POST /projects/:id/files → 404 hors du projet, rien d’enregistré', r.status === 404 &&
+    (await q1('select count(*)::int as n from attachments where project_id = $1', [R])).n === 1, r.body)
+  r = await zoe.req('POST', `/api/projects/${R}/files`, fd())
+  check('… contre-épreuve : l’intervenante dépose un fichier', r.status === 201, r.body)
+  const zoeFile = r.body.id
+  const fdTask = (taskId: string) => { const f = fd(); f.append('task_id', taskId); return f }
+  r = await marc.req('POST', `/api/projects/${projId}/files`, fdTask(hiddenTask))
+  check('POST /projects/:id/files : tâche d’un autre projet (réservé) refusée', r.status === 400, r.body)
+  r = await marc.patch(`/api/projects/files/${fileId}`, { visible_to_client: true })
+  check('PATCH /projects/files/:fid → 404 hors du projet, rien de changé', r.status === 404 &&
+    (await q1('select visible_to_client from attachments where id = $1', [fileId])).visible_to_client === false, r.body)
+  check('… contre-épreuve : l’intervenante le modifie', (await zoe.patch(`/api/projects/files/${fileId}`, { visible_to_client: false })).status === 200)
+  r = await marc.del(`/api/projects/files/${fileId}`)
+  check('DELETE /projects/files/:fid → 404 hors du projet, fichier gardé', r.status === 404 &&
+    (await q1('select count(*)::int as n from attachments where id = $1', [fileId])).n === 1, r.body)
+  check('… contre-épreuve : l’intervenante efface le sien', (await zoe.del(`/api/projects/files/${zoeFile}`)).status === 200 &&
+    (await q1('select count(*)::int as n from attachments where id = $1', [zoeFile])).n === 0)
+  const colName = (await q1('select name from board_columns where id = $1', [colId])).name
+  r = await marc.patch(`/api/projects/columns/${colId}`, { name: 'piratée' })
+  check('PATCH /projects/columns/:cid → 404 hors du projet, nom gardé', r.status === 404 &&
+    (await q1('select name from board_columns where id = $1', [colId])).name === colName, r.body)
+  check('… contre-épreuve : l’intervenante la renomme', (await zoe.patch(`/api/projects/columns/${colId}`, { name: colName })).status === 200)
+  r = await marc.del(`/api/projects/columns/${colId}`)
+  check('DELETE /projects/columns/:cid → 404 hors du projet, colonne gardée', r.status === 404 &&
+    (await q1('select count(*)::int as n from board_columns where id = $1', [colId])).n === 1, r.body)
+  const zoeCol = (await zoe.post(`/api/projects/${R}/columns`, { name: `Col ${stamp}` })).body.id
+  check('… contre-épreuve : l’intervenante efface une colonne', (await zoe.del(`/api/projects/columns/${zoeCol}`)).status === 200)
+  const sentBefore = (await q1('select count(*)::int as n from sent_emails where account_id = $1', [accountId])).n
+  r = await marc.post(`/api/projects/${R}/emails`, { to: ['client@exemple.test'], subject: `Fuite ${stamp}`, body: 'x' })
+  check('POST /projects/:id/emails → 404 hors du projet, AUCUN email envoyé', r.status === 404 &&
+    (await q1('select count(*)::int as n from sent_emails where account_id = $1', [accountId])).n === sentBefore, r.body)
+  r = await zoe.post(`/api/projects/${R}/emails`, { to: ['client@exemple.test'], subject: `Réponse ${stamp}`, body: 'x' })
+  check('… contre-épreuve : l’intervenante écrit au client', r.status === 200, r.body)
+
+  // Tâches : liste de contrôle, dépendances, commentaires, rattachements.
+  r = await marc.patch(`/api/tasks/checklist/${itemId}`, { done: true })
+  check('PATCH /tasks/checklist/:iid → 404 hors du projet, rien de coché', r.status === 404 &&
+    (await q1('select done from checklist_items where id = $1', [itemId])).done === false, r.body)
+  check('… contre-épreuve : l’intervenante coche', (await zoe.patch(`/api/tasks/checklist/${itemId}`, { done: true })).status === 200 &&
+    (await q1('select done from checklist_items where id = $1', [itemId])).done === true)
+  r = await marc.del(`/api/tasks/checklist/${itemId}`)
+  check('DELETE /tasks/checklist/:iid → 404 hors du projet, point gardé', r.status === 404 &&
+    (await q1('select count(*)::int as n from checklist_items where id = $1', [itemId])).n === 1, r.body)
+  r = await marc.del(`/api/tasks/${taskR2}/dependencies/${hiddenTask}`)
+  check('DELETE /tasks/:id/dependencies/:dep → 404 hors du projet, dépendance gardée', r.status === 404 &&
+    (await q1('select count(*)::int as n from task_dependencies where task_id = $1', [taskR2])).n === 1, r.body)
+  check('… contre-épreuve : l’intervenante la retire', (await zoe.del(`/api/tasks/${taskR2}/dependencies/${hiddenTask}`)).status === 200 &&
+    (await q1('select count(*)::int as n from task_dependencies where task_id = $1', [taskR2])).n === 0)
+  r = await marc.patch(`/api/tasks/comments/${marcComment}`, { body: 'réécrit' })
+  check('PATCH /tasks/comments/:cid : l’auteur sorti du projet réservé → 404, texte gardé', r.status === 404 &&
+    (await q1('select body from comments where id = $1', [marcComment])).body === `ancien commentaire ${stamp}`, r.body)
+  r = await marc.del(`/api/tasks/comments/${marcComment}`)
+  check('DELETE /tasks/comments/:cid : idem, commentaire gardé', r.status === 404 &&
+    (await q1('select count(*)::int as n from comments where id = $1', [marcComment])).n === 1, r.body)
+  const zoeComment = (await zoe.post(`/api/tasks/${hiddenTask}/comments`, { body: `mot de Zoé ${stamp}` })).body.id
+  check('… contre-épreuve : l’intervenante corrige et efface le sien',
+    (await zoe.patch(`/api/tasks/comments/${zoeComment}`, { body: 'corrigé' })).status === 200 && (await zoe.del(`/api/tasks/comments/${zoeComment}`)).status === 200)
+  r = await marc.post('/api/tasks', { project_id: projId, title: 'sous-tâche', parent_id: hiddenTask })
+  check('POST /tasks : tâche parente d’un projet réservé refusée', r.status === 400, r.body)
+  r = await marc.post('/api/tasks', { project_id: projId, title: 'colonne', column_id: colId })
+  check('POST /tasks : colonne d’un projet réservé refusée', r.status === 400, r.body)
+  r = await marc.patch(`/api/tasks/${piecesId}`, { stage_id: stageR })
+  check('PATCH /tasks/:id : étape d’un projet réservé refusée, rien de changé', r.status === 400 &&
+    (await q1('select stage_id from tasks where id = $1', [piecesId])).stage_id !== stageR, r.body)
+  r = await marc.post('/api/tasks/bulk', { ids: [piecesId], patch: { stage_id: stageR } })
+  check('POST /tasks/bulk : étape d’un projet réservé refusée', r.status === 400 &&
+    (await q1('select stage_id from tasks where id = $1', [piecesId])).stage_id !== stageR, r.body)
+  r = await zoe.post('/api/tasks', { project_id: R, title: `Sous-tâche ${stamp}`, parent_id: hiddenTask, column_id: colId, stage_id: stageR })
+  check('… contre-épreuve : dans son projet, l’intervenante rattache parente, colonne et étape', r.status === 201, r.body)
+
+  // Temps.
+  r = await marc.post('/api/time/entries', { project_id: projId, task_id: hiddenTask, entry_date: today, minutes: 15 })
+  check('POST /time/entries : tâche d’un projet réservé refusée', r.status === 400, r.body)
+  r = await marc.post('/api/time/entries', { project_id: projId, task_id: piecesId, entry_date: today, minutes: 15 })
+  check('… contre-épreuve : sur son projet et sa tâche, accepté', r.status === 201, r.body)
+  const marcEntryOk = r.body.id
+  r = await marc.patch(`/api/time/entries/${marcEntryR}`, { minutes: 999 })
+  check('PATCH /time/entries/:id : son temps sur un projet réservé quitté → 404, rien de changé', r.status === 404 &&
+    (await q1('select minutes from time_entries where id = $1', [marcEntryR])).minutes === 30, r.body)
+  r = await marc.del(`/api/time/entries/${marcEntryR}`)
+  check('DELETE /time/entries/:id : idem, gardé', r.status === 404 &&
+    (await q1('select count(*)::int as n from time_entries where id = $1', [marcEntryR])).n === 1, r.body)
+  r = await marc.patch(`/api/time/entries/${marcEntryOk}`, { project_id: R, task_id: null })
+  check('PATCH /time/entries/:id : déplacer son temps vers un projet réservé → 404', r.status === 404 &&
+    (await q1('select project_id from time_entries where id = $1', [marcEntryOk])).project_id === projId, r.body)
+  check('… contre-épreuve : il modifie son temps sur son projet', (await marc.patch(`/api/time/entries/${marcEntryOk}`, { minutes: 20 })).status === 200)
+  r = await marc.post('/api/time/timer/start', { project_id: projId, task_id: hiddenTask })
+  check('POST /time/timer/start : tâche d’un projet réservé refusée', r.status === 400, r.body)
+  r = await marc.put('/api/time/week/cell', { project_id: R, entry_date: addDays(today, -2), minutes: 60 })
+  check('PUT /time/week/cell : projet réservé → 404, rien d’écrit', r.status === 404 &&
+    (await q1('select count(*)::int as n from time_entries where project_id = $1 and entry_date = $2', [R, addDays(today, -2)])).n === 0, r.body)
+  check('… contre-épreuve : l’intervenante remplit sa cellule',
+    (await zoe.put('/api/time/week/cell', { project_id: R, entry_date: addDays(today, -2), minutes: 60 })).status === 200)
+
+  // API v1 : une clé de Marc (membre).
+  const marcKey = `pl_marc_${randomUUID()}`
+  await pool.query('insert into api_keys (account_id, user_id, name, prefix, key_hash) values ($1,$2,$3,$4,encode(sha256($5::bytea), \'hex\'))',
+    [accountId, marcId, 'Marc', marcKey.slice(0, 8), marcKey])
+  r = await new Client().req('POST', '/api/v1/time', { project_id: R, entry_date: today, minutes: 10 }, { authorization: `Bearer ${marcKey}` })
+  check('API v1 POST /time : projet réservé → 404, rien d’écrit', r.status === 404 &&
+    (await q1('select count(*)::int as n from time_entries where project_id = $1 and user_id = $2 and minutes = 10', [R, marcId])).n === 0, r.body)
+  r = await new Client().req('POST', '/api/v1/time', { project_id: projId, task_id: hiddenTask, entry_date: today, minutes: 10 }, { authorization: `Bearer ${marcKey}` })
+  check('API v1 POST /time : tâche d’un projet réservé refusée', r.status === 400, r.body)
+  r = await new Client().req('POST', '/api/v1/time', { project_id: projId, entry_date: today, minutes: 10 }, { authorization: `Bearer ${marcKey}` })
+  check('… contre-épreuve : sur son projet, accepté', r.status === 201, r.body)
+
+  // Rendez-vous.
+  r = await marc.post('/api/calendar/events', { title: 'intrus', starts_at: `${today}T12:00:00+02:00`, ends_at: `${today}T13:00:00+02:00`, project_id: R })
+  check('POST /calendar/events sur un projet réservé → 404', r.status === 404, r.body)
+  r = await marc.patch(`/api/calendar/events/${evR}`, { title: 'piraté' })
+  check('PATCH /calendar/events/:id d’un projet réservé → 404, titre gardé', r.status === 404 &&
+    (await q1('select title from events where id = $1', [evR])).title === `Rendez-vous secret ${stamp}`, r.body)
+  r = await marc.del(`/api/calendar/events/${evR}`)
+  check('DELETE /calendar/events/:id d’un projet réservé → 404, gardé', r.status === 404 &&
+    (await q1('select count(*)::int as n from events where id = $1', [evR])).n === 1, r.body)
+  check('… contre-épreuve : l’intervenante le modifie', (await zoe.patch(`/api/calendar/events/${evR}`, { location: 'Salle 2' })).status === 200)
 }
 
 section('API publique')

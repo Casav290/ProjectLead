@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { logActivity } from '../lib/activity.js'
 import { body, date, forbidden, HttpError, notFound, router, setClause, tx, uuid } from '../lib/http.js'
+import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
 
 /** Le temps : saisie, chronomètre, feuille de temps de la semaine, rapports, charge de travail. */
 const app = router()
@@ -32,6 +33,7 @@ app.post('/entries', async (c) => {
     if (b.user_id && b.user_id !== ctx.userId && ctx.role === 'member') throw forbidden()
     const p = (await db.query('select id, billing_mode from projects where id = $1', [b.project_id])).rows[0]
     if (!p) throw notFound()
+    await assertInProject(db, b.project_id, { task_id: b.task_id })
     const r = (await db.query(
       `insert into time_entries (account_id, user_id, project_id, task_id, entry_date, minutes, billable, note)
        values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
@@ -43,17 +45,24 @@ app.post('/entries', async (c) => {
 })
 
 async function ownEditable(db: any, ctx: any, id: string) {
-  const e = (await db.query('select user_id, invoiced_at from time_entries where id = $1', [id])).rows[0]
+  // Le temps d'un projet que la personne ne voit plus (projet réservé) : 404, même le sien.
+  const e = (await db.query('select te.user_id, te.invoiced_at, te.project_id, te.task_id from time_entries te join projects p on p.id = te.project_id where te.id = $1',
+    [id])).rows[0]
   if (!e) throw notFound()
   if (e.user_id !== ctx.userId && ctx.role === 'member') throw forbidden()
   // Du temps déjà facturé ne se modifie plus : la facture le porte.
   if (e.invoiced_at) throw new HttpError(409, 'already_invoiced')
+  return e as { project_id: string; task_id: string | null }
 }
 
 app.patch('/entries/:id', async (c) => {
   const b = await body(c, entrySchema.partial())
   await tx(c, async (db, ctx) => {
-    await ownEditable(db, ctx, c.req.param('id'))
+    const e = await ownEditable(db, ctx, c.req.param('id'))
+    // Déplacer le temps : vers un projet visible, et une tâche de ce projet.
+    const projectId = b.project_id ?? e.project_id
+    if (b.project_id) await assertProjectVisible(db, b.project_id)
+    if (b.project_id || b.task_id) await assertInProject(db, projectId, { task_id: b.task_id === undefined ? e.task_id : b.task_id })
     const s = setClause(b, Object.keys(entrySchema.shape), 2)
     if (s.keys.length) await db.query(`update time_entries set ${s.sql} where id = $1`, [c.req.param('id'), ...s.values])
   })
@@ -76,6 +85,7 @@ app.post('/timer/start', async (c) => {
     await stopRunning(db)
     const p = (await db.query('select billing_mode from projects where id = $1', [b.project_id])).rows[0]
     if (!p) throw notFound()
+    await assertInProject(db, b.project_id, { task_id: b.task_id })
     return (await db.query(
       `insert into time_entries (account_id, user_id, project_id, task_id, started_at, note, billable)
        values ($1,$2,$3,$4,now(),$5,$6) returning id`,
@@ -123,6 +133,8 @@ app.get('/week', async (c) => tx(c, async (db) => {
 app.put('/week/cell', async (c) => {
   const b = await body(c, z.object({ project_id: uuid, task_id: uuid.nullish(), entry_date: date, minutes: z.number().int().min(0).max(1440) }))
   await tx(c, async (db, ctx) => {
+    await assertProjectVisible(db, b.project_id)
+    await assertInProject(db, b.project_id, { task_id: b.task_id })
     const invoiced = (await db.query(
       `select 1 from time_entries where user_id = app_user() and project_id = $1 and task_id is not distinct from $2 and entry_date = $3 and invoiced_at is not null`,
       [b.project_id, b.task_id ?? null, b.entry_date])).rowCount
