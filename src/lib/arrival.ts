@@ -48,13 +48,36 @@ export const alreadyInTarget = (next: string | null) => {
  * Compte Lead (ERPlead /oauth/logout), parfois plusieurs secondes. Pendant ce temps, rien ne doit la renvoyer vers la
  * connexion : la relecture de /me (toutes les minutes) y voyait un 401, l'écran de connexion partait seul vers le
  * Compte Lead et remplaçait la déconnexion encore en route ; la session ERPlead restait ouverte et la personne rentrait
- * aussitôt dans l'espace, sans formulaire (même défaut que ScanLead sous un Compte Lead lent). `stopLeaving` : la
- * déconnexion a échoué, ou la page revient du cache arrière du navigateur.
+ * aussitôt dans l'espace, sans formulaire (même défaut que ScanLead sous un Compte Lead lent). `to` : l'adresse de
+ * sortie reçue au 1er clic (null tant que la réponse n'est pas là). `stopLeaving` : la déconnexion a échoué, ou la page
+ * revient du cache arrière du navigateur.
  */
-let leavingNow = false
-export const startLeaving = () => { leavingNow = true }
-export const stopLeaving = () => { leavingNow = false }
-export const isLeaving = () => leavingNow
+export type Leaving = { to: string | null }
+let leavingNow: Leaving | null = null
+const watchers = new Set<() => void>()
+const setLeaving = (v: Leaving | null) => { leavingNow = v; watchers.forEach((f) => f()) }
+export const startLeaving = () => setLeaving({ to: null })
+export const stopLeaving = () => setLeaving(null)
+export const isLeaving = () => leavingNow !== null
+/** La sortie en cours, pour le bouton (useSyncExternalStore) : le même objet tant qu'elle ne change pas. */
+export const leavingState = () => leavingNow
+export const watchLeaving = (f: () => void) => { watchers.add(f); return () => { watchers.delete(f) } }
+
+/**
+ * Un clic sur « Se déconnecter » (relecture du 20.10.2026). POST /auth/logout au 1er clic seulement : sa réponse ferme la
+ * session et efface le cookie ; un 2e POST partait sans cookie, recevait « /login », et cette navigation coupait la
+ * déconnexion d'ERPlead encore en route (la page /login neuve repartait vers le Compte Lead, toujours ouvert : la
+ * personne rentrait sans formulaire). Un clic pendant la sortie : rien tant que la réponse n'est pas là ; ensuite, la
+ * même adresse de sortie relancée (navigation arrêtée par Échap ou Stop), jamais /login à sa place.
+ */
+export async function leave(post: () => Promise<{ redirect: string | null }>, go: (to: string) => void) {
+  if (leavingNow) { if (leavingNow.to) go(leavingNow.to); return }
+  startLeaving()
+  let to: string
+  try { to = (await post()).redirect ?? '/login' } catch (e) { stopLeaving(); throw e }
+  setLeaving({ to })
+  go(to)
+}
 
 /**
  * L'écran de connexion part-il seul vers le Compte Lead ? Oui une fois, quand le Compte Lead est branché et qu'on

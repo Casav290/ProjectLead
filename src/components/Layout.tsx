@@ -1,8 +1,8 @@
 import clsx from 'clsx'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { startLeaving, stopLeaving } from '../lib/arrival'
+import { leave, leavingState, watchLeaving } from '../lib/arrival'
 import { fmtRelative } from '../lib/format'
 import { useApp } from '../lib/store'
 import type { Notification } from '../lib/types'
@@ -112,18 +112,12 @@ function UserMenu() {
   const { me } = useApp()
   const [open, setOpen] = useState(false)
   const ref = useClickOutside(open, () => setOpen(false))
+  const leaving = useSyncExternalStore(watchLeaving, leavingState)
   if (!me) return null
-  // La page part vers la déconnexion du Compte Lead : rien ne la renvoie vers la connexion entre-temps (startLeaving).
-  const logout = async () => {
-    startLeaving()
-    try {
-      const r = await api.post<{ redirect: string | null }>('/auth/logout')
-      window.location.href = r.redirect ?? '/login'
-    } catch (e) {
-      stopLeaving()
-      throw e
-    }
-  }
+  // La page part vers la déconnexion du Compte Lead : rien ne la renvoie vers la connexion entre-temps, et un 2e clic
+  // relance la même sortie, jamais /login (leave, src/lib/arrival.ts). Bouton : « Déconnexion… », désactivé tant que la
+  // fermeture de session n'a pas répondu.
+  const logout = () => leave(() => api.post<{ redirect: string | null }>('/auth/logout'), (to) => { window.location.href = to })
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-2 px-1 py-1 hover:bg-muted" aria-label="Mon compte">
@@ -135,7 +129,9 @@ function UserMenu() {
             <p className="text-xs text-muted-foreground">{me.account.name}</p></div>
           <Link to="/reglages/profil" onClick={() => setOpen(false)} className="block px-3 py-2 hover:bg-muted">Mon profil</Link>
           <Link to="/reglages" onClick={() => setOpen(false)} className="block px-3 py-2 hover:bg-muted">Réglages</Link>
-          <button onClick={logout} className="block w-full px-3 py-2 text-left hover:bg-muted">Se déconnecter</button>
+          <button onClick={logout} disabled={Boolean(leaving && !leaving.to)} aria-busy={leaving ? true : undefined}
+                  className="block w-full px-3 py-2 text-left hover:bg-muted disabled:cursor-wait disabled:text-muted-foreground">
+            {leaving ? 'Déconnexion…' : 'Se déconnecter'}</button>
         </div>
       )}
     </div>

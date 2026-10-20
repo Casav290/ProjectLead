@@ -975,7 +975,7 @@ void proSession
 
 section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul départ (src/lib/arrival.ts)')
 {
-  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED, startLeaving, stopLeaving, isLeaving } = await import('../src/lib/arrival.js')
+  const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED, startLeaving, stopLeaving, isLeaving, leave, leavingState, watchLeaving } = await import('../src/lib/arrival.js')
   // Une personne sortie par ERPlead AVANT le passage (db/009_passage.sql : rien ne distingue cette sortie d'une
   // désactivation par un administrateur) voit aussi cet écran : il ne doit pas accuser un administrateur, et donne le remède.
   check('écran « accès désactivé » : juste quelle que soit la cause (administrateur, ou départ annoncé par ERPlead avant le passage), avec le remède',
@@ -1013,6 +1013,43 @@ section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul 
     isLeaving() && !departsAlone({ leadId: true, code: '', withEmail: false }))
   stopLeaving()
   check('… et repart seul une fois la déconnexion abandonnée (échec, retour par le cache arrière)', !isLeaving() && departsAlone({ leadId: true, code: '', withEmail: false }))
+  // « Se déconnecter » cliqué deux fois sous un Compte Lead lent (leave, relecture du 20.10.2026) : le 2e POST partait
+  // sans cookie, recevait « /login », et cette navigation coupait la déconnexion d'ERPlead encore en route (la page /login
+  // neuve repartait vers le Compte Lead, toujours ouvert : la personne rentrait sans formulaire). Le parcours du bouton,
+  // contre le vrai POST /api/auth/logout ; dans un navigateur : scripts/e2e-deconnexion.mjs.
+  {
+    const ll2 = await leadLogin((n) => lead(n, true, `deux-clics-${stamp}`), '?next=/')
+    const browser = new Client(); browser.cookie = ll2.session
+    let posts = 0, release!: () => void
+    const held = new Promise<void>((r) => { release = r })
+    // La réponse arrive quand on la libère : un Compte Lead lent, une personne qui clique entre-temps.
+    const post = async () => { posts++; const r = await browser.post('/api/auth/logout'); await held; return r.body as { redirect: string | null } }
+    const went: string[] = []
+    const go = (to: string) => { went.push(to) }
+    let seen = 0
+    const unwatch = watchLeaving(() => { seen++ })
+    const first = leave(post, go)
+    await leave(post, go)
+    check('« Se déconnecter », 2e clic avant la réponse : rien (ni 2e fermeture de session, ni navigation), bouton « Déconnexion… » désactivé',
+      posts === 1 && went.length === 0 && isLeaving() && leavingState()?.to === null, { posts, went })
+    release(); await first
+    const out = went[0] ?? ''
+    check('… 1er clic : la session se ferme une fois (cookie effacé), puis la déconnexion du Compte Lead (id_token_hint)',
+      posts === 1 && went.length === 1 && out.includes('/oauth/logout?') && out.includes('id_token_hint=') && !browser.cookie && leavingState()?.to === out,
+      { posts, went, cookie: browser.cookie })
+    await leave(post, go)
+    check('… 2e clic après la réponse (rien ne bouge, Échap, Stop) : la même sortie vers le Compte Lead relancée, jamais /login, pas de 2e POST',
+      posts === 1 && went.length === 2 && went[1] === out, { posts, went })
+    const naked = await browser.post('/api/auth/logout')
+    check('… ce qu’un 2e POST aurait reçu, sans cookie : aucune sortie vers le Compte Lead (d’où « /login » avant)', naked.status === 200 && naked.body?.redirect === null, naked.body)
+    check('… le bouton suit la sortie (useSyncExternalStore) : prévenu au départ, puis à la réponse', seen === 2, seen)
+    stopLeaving()
+    const failing = async (): Promise<{ redirect: string | null }> => { posts++; throw new Error('hors connexion') }
+    const err = await leave(failing, go).then(() => null, (e: Error) => e)
+    check('… fermeture de session en échec : erreur rendue, sortie abandonnée (l’écran de connexion repart), un nouveau clic refait le POST',
+      err?.message === 'hors connexion' && !isLeaving() && leavingState() === null && posts === 2 && went.length === 2, { err: err?.message, posts, went })
+    unwatch()
+  }
   // Le parcours complet sans session ERPlead (simulé) : racine → départ → ERPlead (formulaire, pas de renvoi) ; avec une
   // erreur au retour → /login?erreur=… qui ne repart pas : au plus UN passage chez ERPlead.
   let trips = 0, url = `http://localhost${root}`, jar = ''
