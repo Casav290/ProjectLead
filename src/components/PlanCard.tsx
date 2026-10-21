@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { api, errorText } from '../lib/api'
 import { leadEntry } from '../lib/leadFamily'
+import { isNativeApp } from '../lib/native'
 import { useApp } from '../lib/store'
 import { euros, PLAN_FEATURES as FEATURES, PLAN_NAME as NAME, PLAN_RANK as RANK } from '../lib/plans'
 import type { Billing, Plan } from '../lib/types'
@@ -55,6 +56,25 @@ export function PlanCard() {
   const plan = b.plan
   const sub = b.subscription
   const seats = plan.seats === null ? 'sans limite' : plural(plan.seats, 'personne', 'personnes')
+  const usage = (
+    <ul className="space-y-1">
+      <li>Projets en cours : <span className="font-semibold tabular-nums">{plan.openProjects}</span>
+        {plan.projectLimit !== null ? <> sur {plan.projectLimit}</> : <span className="text-muted-foreground"> (sans limite)</span>}</li>
+      <li>Personnes : <span className="font-semibold tabular-nums">{plan.members + plan.invited}</span> sur {seats}
+        {plan.invited > 0 && <span className="text-muted-foreground"> (dont {plural(plan.invited, 'invitation en attente', 'invitations en attente')})</span>}</li>
+    </ul>
+  )
+  // Dans l'app mobile : la formule et ce qu'on en utilise, rien à acheter (src/lib/native.ts).
+  if (isNativeApp) {
+    return (
+      <Card title="Formule ProjectLead">
+        <div className="space-y-4 p-4 text-sm" data-plan-app="">
+          <PlanStatus b={b} />
+          {usage}
+        </div>
+      </Card>
+    )
+  }
 
   async function go(path: string, body?: unknown) {
     setError(null); setBusy(path)
@@ -99,12 +119,7 @@ export function PlanCard() {
             Le dernier paiement a échoué. Mettez à jour votre moyen de paiement dans « Gérer l'abonnement » pour garder votre formule.</p>
         )}
 
-        <ul className="space-y-1">
-          <li>Projets en cours : <span className="font-semibold tabular-nums">{plan.openProjects}</span>
-            {plan.projectLimit !== null ? <> sur {plan.projectLimit}</> : <span className="text-muted-foreground"> (sans limite)</span>}</li>
-          <li>Personnes : <span className="font-semibold tabular-nums">{plan.members + plan.invited}</span> sur {seats}
-            {plan.invited > 0 && <span className="text-muted-foreground"> (dont {plural(plan.invited, 'invitation en attente', 'invitations en attente')})</span>}</li>
-        </ul>
+        {usage}
 
         {!b.configured && (
           <p role="status" className="border border-l-[3px] border-border bg-card px-3 py-2 text-xs">
@@ -157,7 +172,7 @@ export function PlanStatus({ b }: { b: Billing }) {
       {plan.inherited && (
         <p className="text-muted-foreground">
           {NAME[plan.inherited.tier]}{plan.inherited.until ? ` jusqu'au ${day(plan.inherited.until)}` : ''} grâce à votre abonnement {appName(plan.inherited.app)},
-          puis Gratuit, sauf si vous prenez une formule ici.</p>
+          puis Gratuit{isNativeApp ? '' : ', sauf si vous prenez une formule ici'}.</p>
       )}
     </div>
   )
@@ -213,6 +228,8 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
 /** Le lien « Passer à Pro » : vers la page Formule pour un administrateur, une indication pour les autres. */
 export function UpgradeLink({ plan, children }: { plan: Plan; children: ReactNode }) {
   const { me } = useApp()
+  // Dans l'app mobile, aucune invitation à changer de formule (règle 3.1.1 d'Apple).
+  if (isNativeApp) return null
   if (me?.user.role !== 'admin') return <span className="text-muted-foreground">Un administrateur peut changer la formule (Réglages → Entreprise).</span>
   return <Link to={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">{children}</Link>
 }

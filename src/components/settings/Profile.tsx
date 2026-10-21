@@ -72,6 +72,8 @@ export default function Profile() {
 
         <PasswordCard />
 
+        <DeleteAccountCard linked={me.user.lead_linked} />
+
         <Card title="Mon agenda ailleurs">
           <div className="space-y-2 p-4 text-sm">
             <p className="text-muted-foreground">Abonnez Google Agenda, Outlook ou Apple Calendrier à ce lien pour y voir vos réunions et vos
@@ -108,6 +110,32 @@ function PasswordCard() {
         {error != null && <div className="sm:col-span-2"><ErrorNote error={error} /></div>}
         <div className="sm:col-span-2"><Button type="submit" disabled={busy || next.length < 10}>Changer le mot de passe</Button></div>
       </form>
+    </Card>
+  )
+}
+
+/**
+ * « Supprimer mon compte » (exigé par Apple, règle 5.1.1 v, et par Google Play) : le compte est le Compte Lead, commun
+ * aux apps Lead ; sa suppression se fait chez ERPlead (https://erplead.io/account/delete, reconnexion récente exigée),
+ * que l'app mobile ouvre dans sa vue web. Un accès d'avant le Compte Lead (e-mail et mot de passe) écrit au support.
+ */
+function DeleteAccountCard({ linked }: { linked: boolean }) {
+  return (
+    <Card title="Supprimer mon compte">
+      <div className="space-y-3 p-4 text-sm" data-account-delete="">
+        {linked ? (
+          <>
+            <p className="text-muted-foreground">Votre compte est votre Compte Lead, le même pour toutes les applications Lead. Le supprimer
+              efface votre accès à ProjectLead et aux autres applications Lead. Les projets de votre entreprise restent à elle.</p>
+            <a href="https://erplead.io/account/delete" className="inline-flex h-9 items-center border border-late px-3 text-[13px] font-bold text-late hover:bg-late/5">
+              Supprimer mon compte</a>
+          </>
+        ) : (
+          <p className="text-muted-foreground">Pour supprimer votre compte et vos données, écrivez à{' '}
+            <a href="mailto:support@scanlead.io?subject=Suppression%20de%20mon%20compte%20ProjectLead" className="font-semibold text-accent-dark hover:underline">
+              support@scanlead.io</a> depuis l'adresse de votre compte. La suppression est faite sous 30 jours.</p>
+        )}
+      </div>
     </Card>
   )
 }

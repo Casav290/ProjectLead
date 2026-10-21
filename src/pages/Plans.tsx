@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
+import { isNativeApp } from '../lib/native'
 import { euros, PLAN_FEATURES, PLAN_NAME, PLAN_PRICES, type Tier } from '../lib/plans'
 
 /**
@@ -7,6 +8,8 @@ import { euros, PLAN_FEATURES, PLAN_NAME, PLAN_PRICES, type Tier } from '../lib/
  * prend dans ProjectLead, par un administrateur (Réglages → Entreprise), et ne vaut que pour ProjectLead.
  */
 export default function Plans() {
+  // Dans l'app mobile, pas de page de prix (règle 3.1.1 d'Apple) : retour à l'espace.
+  if (isNativeApp) return <Navigate to="/" replace />
   const card = (p: Tier) => (
     <article key={p} className="flex flex-col border border-input bg-card p-5">
       <h2 className="text-lg font-extrabold">{PLAN_NAME[p]}</h2>

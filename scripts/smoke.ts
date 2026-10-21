@@ -896,6 +896,16 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   check(`page demandée « ${decodeURIComponent(bad)} » hors de ProjectLead : retour à l'accueil`, ll.location === '/', ll)
 }
 {
+  // App mobile (agent « ProjectLeadApp ») : le départ demande platform=app, ERPlead y masque « Continuer avec Google »
+  // (refusé par Google dans une vue web). Un navigateur ordinaire ne l'envoie jamais.
+  const appUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 ProjectLeadApp/1.0.0'
+  const inApp = await app.request('http://localhost/auth/lead/start?next=/projets', { headers: { 'user-agent': appUa } })
+  const web = await app.request('http://localhost/auth/lead/start?next=/projets', { headers: { 'user-agent': 'Mozilla/5.0 Safari/605.1.15' } })
+  const platformOf = (r: Response) => { try { return new URL(r.headers.get('location') ?? '').searchParams.get('platform') } catch { return 'illisible' } }
+  check('app mobile : départ vers le Compte Lead avec platform=app', inApp.status === 302 && platformOf(inApp) === 'app', inApp.headers.get('location'))
+  check('navigateur : départ sans platform', web.status === 302 && platformOf(web) === null, web.headers.get('location'))
+}
+{
   // Le retour d'ERPlead arrive sur l'adresse sans www : un départ depuis www y est renvoyé avant de poser son cookie.
   const w = await app.request('http://www.localhost/auth/lead/start?next=/projets&signup=1')
   check('départ depuis www : renvoyé vers l’adresse du retour, sans cookie posé sur www',

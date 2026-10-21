@@ -179,6 +179,9 @@ const startLeadLogin = async (c: any) => {
   // « Changer de compte » (écran de refus, suites de l'abonnement du 15.10.2026) : le Compte Lead redemande l'adresse et
   // le mot de passe (prompt=login), jamais la session en cours reprise sans formulaire, qui ramènerait au même refus.
   else if (c.req.query('switch') === '1') authorize.searchParams.set('prompt', 'login')
+  // Depuis l'app mobile (agent « ProjectLeadApp », src/lib/native.ts) : ERPlead masque « Continuer avec Google », que
+  // Google refuse dans une vue web (et qui obligerait Apple à exiger aussi « Se connecter avec Apple », règle 4.8).
+  if (/ProjectLeadApp/.test(c.req.header('user-agent') ?? '')) authorize.searchParams.set('platform', 'app')
   // Une heure : le temps de remplir le formulaire d'ERPlead, de retrouver son mot de passe ou de confirmer son adresse.
   await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next } satisfies Saved),
     cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
