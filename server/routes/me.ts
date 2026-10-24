@@ -6,6 +6,7 @@ import { body, HttpError, requireRole, router, tx } from '../lib/http.js'
 import { mailboxSecretConfigured } from '../lib/mailbox/secret.js'
 import { planOf } from '../lib/plans.js'
 import { EMAIL_VISIBLE } from './mail.js'
+import { assistantConfigured } from './assistant.js'
 
 const app = router()
 
@@ -29,7 +30,8 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
   const plan = await planOf(db, ctx.accountId)
   return c.json({
     user: me, account, integrations: settings, unread, running, inbox, plan,
-    features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead },
+    features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead,
+                assistant: assistantConfigured() },
     // L'adresse de capture n'existe que si un domaine de réception est vraiment branché (MX vers un relais).
     inboundAddress: process.env.INBOUND_DOMAIN ? `${account.inbound_token}@${process.env.INBOUND_DOMAIN}` : null,
     inboundUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/inbound/${account.inbound_token}`,

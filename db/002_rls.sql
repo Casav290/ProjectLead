@@ -88,4 +88,19 @@ begin
     alter table stripe_events enable row level security;
     revoke all on stripe_events from projectlead_app;
   end if;
+  -- Assistant IA (030) : journal et quota (lecture, réservation, complétion), jetons de confirmation déjà servis.
+  if to_regclass('public.assistant_usage') is not null then
+    alter table assistant_usage enable row level security;
+    drop policy if exists tenant on assistant_usage;
+    create policy tenant on assistant_usage using (account_id = app_account()) with check (account_id = app_account());
+    revoke all on assistant_usage from projectlead_app;
+    grant select, insert, update on assistant_usage to projectlead_app;
+  end if;
+  if to_regclass('public.assistant_confirmations') is not null then
+    alter table assistant_confirmations enable row level security;
+    drop policy if exists tenant on assistant_confirmations;
+    create policy tenant on assistant_confirmations using (account_id = app_account()) with check (account_id = app_account());
+    revoke all on assistant_confirmations from projectlead_app;
+    grant select, insert on assistant_confirmations to projectlead_app;
+  end if;
 end $$;

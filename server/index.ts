@@ -28,6 +28,8 @@ import exchangeRoutes from './routes/exchange.js'
 import workRoutes, { publicForms } from './routes/work.js'
 import v1Routes from './routes/v1.js'
 import billingRoutes, { webhook as stripeWebhook } from './routes/billing.js'
+import assistantRoutes from './routes/assistant.js'
+import { bindAssistantApp } from './lib/assistant/internal.js'
 
 const app = new Hono<Env>()
 
@@ -152,6 +154,9 @@ app.route('/api/portal', portalRoutes)
 app.route('/api/integrations', integrationRoutes)
 app.route('/api', billingRoutes)
 app.route('/api', workRoutes)
+// Assistant IA : ses outils rappellent les routes ci-dessus avec la session de la personne (lib/assistant/internal.ts).
+app.route('/api/assistant', assistantRoutes)
+bindAssistantApp(app)
 
 app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404))
 

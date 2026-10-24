@@ -7,6 +7,7 @@ import { fmtRelative } from '../lib/format'
 import { useApp } from '../lib/store'
 import type { Notification } from '../lib/types'
 import AppSwitcher from './AppSwitcher'
+import Assistant from './Assistant'
 import { Avatar } from './ui'
 
 /** La mise en page de l'application connectée : navigation à gauche, barre du haut, contenu. */
@@ -145,6 +146,13 @@ export default function Layout({ children }: { children: ReactNode }) {
   const nav = useNavigate()
   const loc = useLocation()
   useEffect(() => setMenu(false), [loc.pathname])
+  // Une écriture confirmée dans l'Assistant IA : la page ouverte se recharge pour la montrer.
+  const [saved, setSaved] = useState(0)
+  useEffect(() => {
+    const h = () => setSaved((n) => n + 1)
+    window.addEventListener('pl:assistant-saved', h)
+    return () => window.removeEventListener('pl:assistant-saved', h)
+  }, [])
   const side = (
     <nav className="flex flex-col gap-0.5 p-2" aria-label="Navigation principale">
       {NAV.map((n) => (
@@ -190,8 +198,10 @@ export default function Layout({ children }: { children: ReactNode }) {
             <UserMenu />
           </div>
         </header>
-        <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 sm:px-6">{children}</main>
+        {/* En bas, la place de la bulle de l'Assistant IA : rien du contenu ne reste caché dessous. */}
+        <main key={saved} className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-5 sm:px-6">{children}</main>
       </div>
+      <Assistant />
     </div>
   )
 }

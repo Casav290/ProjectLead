@@ -8,7 +8,7 @@ export type Me = {
              lead_org: string | null }
   unread: number; inbox: number
   running: { id: string; started_at: string; project_id: string; project_name: string; task_id: string | null; task_title: string | null } | null
-  features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean }
+  features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean; assistant?: boolean }
   inboundAddress: string | null; inboundUrl: string; icalUrl: string
   plan: Plan
 }
