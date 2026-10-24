@@ -112,6 +112,8 @@ try {
   check('création confirmée : une tâche en base, dans le bon projet, par la personne, priorité haute, échéance demain',
     created.length === 1 && created[0].project_id === project.id && created[0].created_by === USER && created[0].priority === 'high'
     && created[0].due_date === tomorrow, { created, tomorrow })
+  await page.waitForLoadState('networkidle')
+  await page.waitForSelector('text=Chargement…', { state: 'detached', timeout: 15_000 }).catch(() => {})
   await page.screenshot({ path: `${SHOTS}/bureau-4-confirme.png` })
 
   // Création annulée.
