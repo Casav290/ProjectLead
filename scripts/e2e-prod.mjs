@@ -36,15 +36,15 @@ r = await json('/api/auth/signup', { method: 'POST', headers: { 'content-type': 
   body: JSON.stringify({ name: 'Contrôle', email: 'controle@exemple.test', password: 'controle-automatique', company: 'Contrôle' }) })
 check('inscription locale fermée : on s’inscrit par le Compte Lead', r.status === 403 && r.body?.error === 'signup_via_lead')
 
-// 2. Connexion : tout droit vers le Compte Lead (crmlead.io), sans écran intermédiaire
-await page.goto(URL + '/projets'); await page.waitForURL(/crmlead\.io/, { timeout: 20000 }).catch(() => {})
+// 2. Connexion : tout droit vers le Compte Lead (erplead.io), sans écran intermédiaire
+await page.goto(URL + '/projets'); await page.waitForURL(/erplead\.io/, { timeout: 20000 }).catch(() => {})
 await page.waitForTimeout(2500); await shot('1-compte-lead')
 const at = new globalThis.URL(page.url())
-check('connexion : écran du Compte Lead sur crmlead.io', at.hostname === 'crmlead.io' && await page.getByText('Compte Lead').first().isVisible().catch(() => false))
+check('connexion : écran du Compte Lead sur erplead.io', at.hostname === 'erplead.io' && await page.getByRole('heading', { name: /^(Connexion|Sign in|Log in)$/ }).first().isVisible().catch(() => false))
 check('connexion : le Compte Lead sait qu’on va vers ProjectLead', /ProjectLead/.test(await page.evaluate(() => document.body.innerText)))
-await page.goto(URL + '/signup'); await page.waitForURL(/crmlead\.io/, { timeout: 20000 }).catch(() => {})
+await page.goto(URL + '/signup'); await page.waitForURL(/erplead\.io/, { timeout: 20000 }).catch(() => {})
 await page.waitForTimeout(2500); await shot('2-inscription')
-check('inscription : le Compte Lead ouvre « Créer un compte »', new globalThis.URL(page.url()).hostname === 'crmlead.io'
+check('inscription : le Compte Lead ouvre « Créer un compte »', new globalThis.URL(page.url()).hostname === 'erplead.io'
   && await page.getByRole('heading', { name: /Créer un compte|Create an account/ }).first().isVisible().catch(() => false))
 
 // 3. Retour en erreur : l'écran ProjectLead, au gabarit commun, couleur ocre
