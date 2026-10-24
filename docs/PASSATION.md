@@ -289,6 +289,36 @@ portes : `GATES-billing-followups.md` (L4 en local).
 - **Mise en ligne** : la migration 011 est additive et rejouable ; l'ancien code ignore `last_seen_at` (retour arrière :
   revenir au commit précédent de `vercel`).
 
+## Assistant IA (bulle, 24.10.2026, branche `assistant-ia`, aperçu seulement)
+
+Cahier commun des six applications : `~/projets/.unlazy/assistant-ia/CAHIER.md` ; critères :
+`~/projets/.unlazy/assistant-ia/GATES-projectlead.md`.
+
+- Bulle en bas à droite de toutes les pages connectées (`src/components/Assistant.tsx`, montée par `Layout`), jamais sur
+  les pages publiques ; masquée si `ANTHROPIC_API_KEY` manque (`features.assistant` de `/api/me`, route en 503).
+- `POST /api/assistant` (`server/routes/assistant.ts`) : Tool Runner du SDK `@anthropic-ai/sdk`, modèle
+  `claude-opus-5-5`, effort `low`, `max_tokens` 4000, 10 tours au plus, repli des refus `fallbacks: "default"`, consigne
+  stable en cache (`server/lib/assistant/prompt.ts`).
+- Outils (`server/lib/assistant/tools.ts`) : ils n'ont aucun accès propre à la base, ils rappellent les routes `/api`
+  avec la session de la personne (`server/lib/assistant/internal.ts`) : mêmes droits que l'écran. Lecture : recherche,
+  accueil, projets, fiche projet, tâches, fiche tâche, équipe (lecture), clients, temps, rapport, charge, agenda,
+  `open_page`. Écriture en deux temps (`propose_*`) : tâche (créer, modifier, commenter, point de contrôle), projet
+  (créer, modifier, point d'avancement interne), temps (saisie, chronomètre), client (créer). L'outil ne fait rien :
+  il signe l'opération (`server/lib/assistant/token.ts`, HMAC d'`APP_SECRET`, personne + entreprise, 10 min, usage
+  unique dans `assistant_confirmations`) et la carte « À confirmer » l'envoie à `POST /api/assistant/confirm`, qui
+  n'exécute qu'une liste fermée d'écritures (jamais une suppression, l'équipe, les membres, l'abonnement, les clés, un
+  envoi).
+- Quota : 40 messages/h par personne, 400/24 h par entreprise (`assistant_usage`, migration 030 ; réglables par
+  `ASSISTANT_USER_PER_HOUR` / `ASSISTANT_ACCOUNT_PER_DAY`). Rien de la conversation en base : le fil vit dans
+  `sessionStorage` de l'onglet ; on journalise jetons, outils, erreurs.
+- Contrôles : `TEST_DATABASE_URL=… npx tsx scripts/assistant-check.ts` → `ASSISTANT_CHECK_OK` (faux service de modèle
+  local). Essai réel sur un aperçu Vercel : `node scripts/e2e-assistant.mjs` → `E2E_ASSISTANT_OK` (en-tête du fichier).
+- Aperçu : base = branche Neon `assistant-ia-apercu` (copie de la production du 24.10), variables passées au
+  déploiement (`--env DATABASE_URL APP_SECRET JOBS_DISABLED=1`), déployé depuis une copie sans `.git` (un déploiement
+  CLI depuis le dépôt est bloqué par Vercel : auteur du commit). La migration 030 s'applique en production au build.
+- Fusion IA (lots GLM/Z.ai de `claude/suite-0210`, validés le 21.10, pas encore en production) : aucun fichier commun ;
+  tables et migration distinctes (`ai_usage` reste à la fusion).
+
 ## Fait le 01.10
 
 - Domaine projectlead.io : répond (`/api/health`), contrôle en ligne et README dessus.

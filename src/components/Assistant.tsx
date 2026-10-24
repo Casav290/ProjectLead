@@ -119,10 +119,16 @@ export default function Assistant() {
   useEffect(() => { if (userId) setState(load(userId)) }, [userId])
   const update = useCallback((fn: (s: Saved) => Saved) => setState((s) => { const n = fn(s); if (userId) save(userId, n); return n }), [userId])
 
-  useEffect(() => { if (open) setTimeout(() => field.current?.focus(), 30) }, [open])
+  // Focus : dans le champ à l'ouverture, rendu à la bulle à la fermeture (après le rendu, sans délai).
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open) field.current?.focus()
+    else if (wasOpen.current) bubble.current?.focus()
+    wasOpen.current = open
+  }, [open])
   useEffect(() => { thread.current?.scrollTo({ top: thread.current.scrollHeight }) }, [state.items.length, busy, open])
 
-  const close = () => { setOpen(false); setTimeout(() => bubble.current?.focus(), 30) }
+  const close = () => setOpen(false)
 
   const send = async (raw: string) => {
     const text = raw.trim()

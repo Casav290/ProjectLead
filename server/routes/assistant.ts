@@ -94,7 +94,7 @@ app.post('/', async (c) => {
       messages: history,
       max_iterations: MAX_ITERATIONS,
       thread: false,
-    })
+    }, { signal: AbortSignal.timeout(240_000) })   // la fonction Vercel a 300 s ; 10 tours au plus
     const turn: Anthropic.Beta.BetaMessageParam[] = []
     let final: Anthropic.Beta.BetaMessage | null = null
     const texts: string[] = []

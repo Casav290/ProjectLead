@@ -47,6 +47,7 @@ npm run dev                  # API sur 3002, interface sur http://localhost:5174
 npm run typecheck
 npm test                     # scripts/smoke.ts sur TEST_DATABASE_URL : tout doit être vert
 npx tsx scripts/suites-check.ts   # suites de l'abonnement, sans base : PROJECTLEAD_SUITES_UNIT_OK
+npx tsx scripts/assistant-check.ts # Assistant IA, faux service de modèle (TEST_DATABASE_URL) : ASSISTANT_CHECK_OK
 npm run build
 ```
 
@@ -77,6 +78,8 @@ eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Co
 `/api/tasks/run`, appelé par le Cron de Vercel : boîtes mail, agendas, suivis automatiques, rappels
 d'échéance, facturation du mois), `INBOUND_DOMAIN` (domaine de l'adresse de capture : à poser seulement quand son MX mène à un relais qui poste sur
 `/api/inbound/<jeton>` ; sans lui, aucune adresse n'est affichée, seul le point d'entrée du relais l'est).
+Assistant IA (bulle) : `ANTHROPIC_API_KEY` (sans elle, bulle masquée et `/api/assistant` en 503 ; `docs/PASSATION.md`,
+« Assistant IA »).
 Abonnement ProjectLead (Stripe, Production seulement) : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
 `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY`, `STRIPE_PRICE_PROPLUS_MONTHLY`, `STRIPE_PRICE_PROPLUS_YEARLY`,
 `STRIPE_PORTAL_CONFIGURATION` ; sans elles, les boutons de paiement sont masqués et le webhook répond 503

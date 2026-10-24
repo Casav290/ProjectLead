@@ -64,4 +64,6 @@ CRMlead.
   comme CRMlead).
 - Traduction de l'interface (français seulement ; InvoiceLead vise aussi l'allemand).
 - Application mobile native.
-- Assistant IA (brouillons, résumés) : CRMlead en a un, à brancher plus tard.
+- Brouillons et analyses IA repris de CRMlead : lots de la fusion IA (branche `claude/suite-0210`), pas encore en ligne.
+  La bulle « Assistant IA » (questions, ouverture d'écrans, créations confirmées) est, elle, sur la branche
+  `assistant-ia` (24.10.2026, `docs/PASSATION.md`).
