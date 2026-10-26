@@ -9,6 +9,8 @@ import { finishLogin, logoutUrl, startLogin, verifyLeadJwt, type LeadClaims } fr
 import { lockAdmins } from '../lib/admins.js'
 import { assertSeatFree, savePlan, type Tier } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
+import { openProof, sealProof } from '../lib/personProof.js'
+import { saveAppsUsed } from '../lib/links.js'
 
 /**
  * Connexion. Deux portes, comme le veut la famille Lead :
@@ -28,13 +30,17 @@ export const leadIdConfigured = leadIdOn
  */
 export const leadSid = (v: unknown): string | null => (typeof v === 'string' && v.length >= 1 && v.length <= 255 ? v : null)
 
+/**
+ * Ouvre la session. Le jeton d'identité du Compte Lead y est gardé SCELLÉ (lib/personProof.ts, LEAD_PROOF_KEY) : il sert à
+ * fermer aussi la session du Compte Lead à la déconnexion, et de preuve de la personne pour lire CRMlead et InvoiceLead.
+ */
 export async function openSession(c: any, userId: string, accountId: string, idToken?: string | null, sid?: string | null) {
   const token = newToken()
   await anon(async (db) => {
     await db.query(
       `insert into sessions (token_hash, user_id, account_id, expires_at, user_agent, lead_id_token, lead_sid)
        values ($1,$2,$3, now() + make_interval(days => $4), $5, $6, $7)`,
-      [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), idToken ?? null, leadSid(sid)])
+      [hashToken(token), userId, accountId, SESSION_DAYS, (c.req.header('user-agent') ?? '').slice(0, 300), sealProof(idToken), leadSid(sid)])
     // La dernière venue dans cette entreprise (Réglages → Équipe, db/011_seat_last_seen.sql) : chaque arrivée l'écrit.
     await db.query('update account_users set last_seen_at = now() where account_id = $1 and user_id = $2', [accountId, userId])
   })
@@ -95,7 +101,7 @@ app.post('/api/auth/logout', async (c) => {
   // Le jeton d'identité du Compte Lead est gardé avec la session (un seul cookie par réponse).
   const gone = t ? await anon(async (db) => (await db.query('delete from sessions where token_hash = $1 returning lead_id_token', [hashToken(t)])).rows[0]) : null
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
-  const idt = gone?.lead_id_token ?? null
+  const idt = openProof(gone?.lead_id_token)
   const back = `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/login`
   return c.json({ ok: true, redirect: idt && leadIdConfigured() ? logoutUrl(idt, back) : null })
 })
@@ -151,7 +157,7 @@ app.post('/api/auth/invitation/:token/accept', async (c) => {
 
 // ------------------------------------------------------------------ Compte Lead
 
-type Saved = { state: string; nonce: string; verifier: string; next?: string }
+type Saved = { state: string; nonce: string; verifier: string; next?: string; silent?: boolean }
 /**
  * La page où revenir après la connexion : un chemin de ProjectLead seulement. Ni « //autre.site », ni « /\autre.site »
  * (un navigateur lit la barre oblique inverse comme « / » : la redirection relative mènerait sur un autre site).
@@ -179,11 +185,14 @@ const startLeadLogin = async (c: any) => {
   // « Changer de compte » (écran de refus, suites de l'abonnement du 15.10.2026) : le Compte Lead redemande l'adresse et
   // le mot de passe (prompt=login), jamais la session en cours reprise sans formulaire, qui ramènerait au même refus.
   else if (c.req.query('switch') === '1') authorize.searchParams.set('prompt', 'login')
+  // Reconnexion silencieuse (preuve de la personne de plus de 11 h, lib/personProof.ts) : ERPlead revient sans écran si
+  // la personne y est encore connectée, sinon avec error=login_required (le retour repart alors avec le formulaire).
+  else if (c.req.query('prompt') === 'none') authorize.searchParams.set('prompt', 'none')
   // Depuis l'app mobile (agent « ProjectLeadApp », src/lib/native.ts) : ERPlead masque « Continuer avec Google », que
   // Google refuse dans une vue web (et qui obligerait Apple à exiger aussi « Se connecter avec Apple », règle 4.8).
   if (/ProjectLeadApp/.test(c.req.header('user-agent') ?? '')) authorize.searchParams.set('platform', 'app')
   // Une heure : le temps de remplir le formulaire d'ERPlead, de retrouver son mot de passe ou de confirmer son adresse.
-  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next } satisfies Saved),
+  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next, ...(c.req.query('prompt') === 'none' ? { silent: true } : {}) } satisfies Saved),
     cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
   return c.redirect(authorize.toString())
 }
@@ -412,10 +421,17 @@ app.get('/auth/lead/callback', async (c) => {
   try {
     saved = JSON.parse(raw) as Saved
     saved.next = safeNext(saved.next)
+    // Reconnexion silencieuse refusée (plus de session au Compte Lead) : on repart avec le formulaire, une seule fois
+    // (le départ suivant n'est plus silencieux : pas de boucle).
+    const err = c.req.query('error')
+    if (saved.silent && (err === 'login_required' || err === 'interaction_required' || err === 'consent_required'))
+      return c.redirect(`/auth/lead/start${saved.next ? `?next=${encodeURIComponent(saved.next)}` : ''}`)
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
     // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026), dans l'espace de son entreprise.
     const invite = invitationToken(saved.next)
     const who = await attachLeadPerson(claims, { invitation: invite })
+    // Les applications Lead que l'entreprise utilise déjà (« Reliée » / « Pas encore utilisée », lib/links.ts).
+    await saveAppsUsed(who.accountId, claims.lead).catch(() => {})
     await openSession(c, who.userId, who.accountId, tokens.id_token, leadSid(claims.sid))
     // Invitation acceptée : l'espace qui a invité. Adressée à une autre adresse : la page de l'invitation le dit.
     if (invite) return c.redirect(who.invitation === 'accepted' ? '/' : who.invitation === 'autre_adresse' ? `${saved.next}?erreur=adresse` : saved.next!)

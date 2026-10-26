@@ -29,11 +29,30 @@ async function send<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 401 && body.error === 'unauthenticated' && !path.startsWith('/auth/')) {
       window.dispatchEvent(new Event('pl:unauthenticated'))
     }
+    // La preuve de la personne a plus de 11 h (lecture de CRMlead ou d'InvoiceLead) : reconnexion silencieuse par le
+    // Compte Lead, retour sur la même page avec l'état du dialogue (porté par l'adresse). Rien à l'écran.
+    if (res.status === 401 && body.error === 'lead_reauth' && leadReauth()) return new Promise<T>(() => {})
     throw new ApiError(res.status, body.error ?? `http_${res.status}`, body)
   }
   if (res.status === 204) return undefined as T
   const type = res.headers.get('content-type') ?? ''
   return (type.includes('json') ? res.json() : res.text()) as Promise<T>
+}
+
+/**
+ * Repart par /auth/lead/start?prompt=none&next=<la page courante, avec sa recherche : l'état du dialogue y est>. Une fois
+ * par minute au plus (garde contre une boucle si la reconnexion ne rapporte pas de preuve) : sinon, l'erreur s'affiche.
+ */
+export function leadReauth(): boolean {
+  const KEY = 'pl:lead_reauth_at'
+  try {
+    const last = Number(sessionStorage.getItem(KEY) ?? 0)
+    if (Date.now() - last < 60_000) return false
+    sessionStorage.setItem(KEY, String(Date.now()))
+  } catch { /* stockage refusé : on tente quand même, une fois par chargement */ if ((window as any).__plReauth) return false; (window as any).__plReauth = true }
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  window.location.assign(`/auth/lead/start?prompt=none&next=${encodeURIComponent(next)}`)
+  return true
 }
 
 export const api = {
@@ -64,14 +83,17 @@ const MESSAGES: Record<string, string> = {
   already_invoiced: 'Ce temps est déjà facturé : il ne se modifie plus.',
   no_recipient: "Aucun destinataire : ajoutez l'email du client ou d'un contact.",
   slot_taken: 'Ce créneau vient d\'être pris. Choisissez-en un autre.',
-  crmlead_not_configured: 'CRMlead n\'est pas branché (Réglages → Intégrations).',
-  crmlead_key_invalid: 'La clé CRMlead est refusée.',
-  crmlead_unreachable: 'CRMlead ne répond pas.',
-  invoicelead_not_configured: 'InvoiceLead n\'est pas branché (Réglages → Intégrations).',
-  invoicelead_key_invalid: 'La clé InvoiceLead est refusée.',
-  invoicelead_forbidden: 'InvoiceLead refuse : la formule Pro+ d\'InvoiceLead est nécessaire pour l\'API.',
-  invoicelead_unreachable: 'InvoiceLead ne répond pas.',
-  app_secret_missing: 'Le serveur n\'a pas de secret de chiffrement (APP_SECRET).',
+  crmlead_not_used: "Votre entreprise n'utilise pas encore CRMlead.",
+  invoicelead_not_used: "Votre entreprise n'utilise pas encore InvoiceLead.",
+  crmlead_unreachable: 'CRMlead ne répond pas. Réessayez dans un instant.',
+  invoicelead_unreachable: 'InvoiceLead ne répond pas. Réessayez dans un instant.',
+  crmlead_error: 'CRMlead a refusé la demande. Réessayez dans un instant.',
+  invoicelead_error: 'InvoiceLead a refusé la demande. Réessayez dans un instant.',
+  lead_required: 'Connectez-vous une fois avec votre Compte Lead pour relier vos applications.',
+  lead_reauth: 'Votre connexion au Compte Lead est à renouveler : rechargez la page.',
+  keys_retired: 'Les applications Lead se relient toutes seules : plus rien à coller (Réglages → Applications Lead).',
+  not_from_crmlead: "Ce client n'a pas été repris de CRMlead.",
+  client_missing: 'Le projet n\'a pas de client : choisissez-en un pour le facturer.',
   calendar_url_invalid: "L'adresse de l'agenda doit commencer par https:// (ou webcal://).",
   servers_unknown: 'Messagerie non reconnue : indiquez les serveurs IMAP et SMTP.',
   imap_auth_failed: 'Identifiant ou mot de passe IMAP refusé.',
@@ -82,7 +104,6 @@ const MESSAGES: Record<string, string> = {
   last_column: 'Un tableau garde au moins une colonne.',
   invitation_invalid: 'Invitation expirée ou déjà utilisée.',
   url_not_allowed: 'Adresse refusée : https et serveur public uniquement.',
-  key_required: 'La clé est obligatoire.',
   already_subscribed: "Vous avez déjà un abonnement ProjectLead : changez de formule dans « Gérer l'abonnement ».",
   plan_not_above: 'Votre entreprise a déjà cette formule ou une formule supérieure : rien à payer.',
   cannot_remove_self: 'Vous ne pouvez pas vous retirer vous-même : un autre administrateur peut le faire.',
@@ -91,8 +112,34 @@ const MESSAGES: Record<string, string> = {
   no_customer: "Aucun abonnement ProjectLead à gérer pour l'instant.",
   stripe_error: "Le paiement n'a pas pu s'ouvrir. Réessayez dans un instant.",
 }
+const APP_NAMES: Record<string, string> = { crmlead: 'CRMlead', invoicelead: 'InvoiceLead' }
+
+/** Les refus d'une application sœur, avec ce qu'ils disent (application, administrateur, formule, nombres). */
+export function linkErrorText(code: string, b: any = {}): string | null {
+  const app = APP_NAMES[b?.app] ?? 'cette application'
+  switch (code) {
+    case 'person_not_member':
+      return b?.reason === 'no_seat'
+        ? `Vous n'avez pas de place dans ${app} (formule de ${app}). Demandez à ${b?.admin ?? 'un administrateur'}, ou reprenez ce client à la main.`
+        : b?.reason === 'disabled'
+          ? `Votre accès à ${app} est désactivé. Demandez à ${b?.admin ?? 'un administrateur'}.`
+          : `Ouvrez ${app} une fois avec votre Compte Lead pour y accéder depuis ProjectLead.`
+    case 'person_proof':
+      return `Votre Compte Lead${b?.email ? ` (${b.email})` : ''} appartient à ${b?.person_org_name ?? 'une autre entreprise'}${b?.company ? `, pas à ${b.company}` : ''}.`
+    case 'person_not_allowed':
+      return `Vous n'avez pas le droit de facturer dans InvoiceLead : demandez à ${b?.admin ?? 'un administrateur'}.`
+    case 'contact_limit':
+      return `InvoiceLead${b?.plan ? ` (formule ${b.plan})` : ''} a déjà ${b?.count ?? b?.limit ?? 'trop de'} clients : le brouillon${b?.project ? ` de ${b.project}` : ''} n'a pas été créé. Archivez un client dans InvoiceLead ou changez de formule dans InvoiceLead, puis relancez.`
+    case 'already_issued':
+      return `Une facture${b?.month ? ` de ${b.month}` : ' de ce mois'} est déjà émise dans InvoiceLead pour ce projet.`
+  }
+  return null
+}
+
 export const errorText = (e: unknown) => {
   const code = e instanceof ApiError ? e.code : String((e as Error)?.message ?? e)
+  const linked = linkErrorText(code, e instanceof ApiError ? e.body : {})
+  if (linked) return linked
   // En Pro+, plus de formule au-dessus : on dit quoi faire plutôt que de renvoyer vers une mise à niveau.
   if (code === 'plan_limit_seats' && e instanceof ApiError && e.body?.plan === 'pro_plus') return MESSAGES.plan_limit_seats_full
   return MESSAGES[code] ?? `Erreur : ${code}`

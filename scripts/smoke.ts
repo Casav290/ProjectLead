@@ -10,7 +10,7 @@ process.env.PUBLIC_URL ||= 'http://localhost:5174'
 
 import 'dotenv/config'
 import { createServer, type Server } from 'node:http'
-import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, sign, verify as verifySig } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 
 // Une base à part pour les contrôles : ils créent des entreprises à chaque passage.
@@ -56,46 +56,6 @@ class Client {
 const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)))
 const readBody = (req: any) => new Promise<any>((r) => { let d = ''; req.on('data', (x: any) => (d += x)); req.on('end', () => { try { r(JSON.parse(d || '{}')) } catch { r({}) } }) })
 
-// ------------------------------------------------------------------ faux CRMlead (API v1)
-const crmLead = {
-  id: 'lead-42', title: 'Refonte du site', company: 'Boulangerie Rochat SA', company_address: 'Rue de Bourg 12, 1003 Lausanne',
-  company_country: 'CH', status: 'won', amount: 1200000, currency: 'CHF', description: 'Site vitrine',
-  contacts: [{ id: 'c1', first_name: 'Léa', last_name: 'Rochat', email: 'lea@rochat.ch', phone: '+41 21 000 00 00', job_title: 'Directrice', is_primary: true }],
-}
-const crm = createServer(async (req, res) => {
-  res.setHeader('content-type', 'application/json')
-  if (req.headers.authorization !== 'Bearer crm_test') { res.statusCode = 401; return res.end('{"error":"invalid_key"}') }
-  if (req.url?.startsWith('/api/v1/leads/lead-42')) return res.end(JSON.stringify(crmLead))
-  if (req.url?.startsWith('/api/v1/leads')) return res.end(JSON.stringify({ data: [crmLead], has_more: false }))
-  res.statusCode = 404; res.end('{"error":"not_found"}')
-})
-const crmPort = await listen(crm)
-
-// ------------------------------------------------------------------ faux InvoiceLead (API v1)
-const ilContacts: any[] = []
-const ilInvoices: any[] = []
-const il = createServer(async (req, res) => {
-  res.setHeader('content-type', 'application/json')
-  if (req.headers.authorization !== 'Bearer il_live_test') { res.statusCode = 401; return res.end('{"error":"unauthorized"}') }
-  const url = new URL(req.url!, 'http://x')
-  if (url.pathname === '/api/v1/contacts' && req.method === 'GET') {
-    const q = (url.searchParams.get('q') ?? '').toLowerCase()
-    return res.end(JSON.stringify({ data: ilContacts.filter((c) => !q || c.name.toLowerCase().includes(q) || c.email?.toLowerCase() === q) }))
-  }
-  if (url.pathname === '/api/v1/contacts' && req.method === 'POST') {
-    const b = await readBody(req); const c = { id: randomUUID(), ...b }; ilContacts.push(c)
-    res.statusCode = 201; return res.end(JSON.stringify({ data: c }))
-  }
-  if (url.pathname === '/api/v1/invoices' && req.method === 'POST') {
-    const b = await readBody(req)
-    const total = b.lines.reduce((s: number, l: any) => s + Math.round(Number(l.quantity) * Number(l.unitPrice) * 100), 0)
-    const inv = { id: randomUUID(), status: 'draft', totalCents: total, ...b }; ilInvoices.push(inv)
-    res.statusCode = 201; return res.end(JSON.stringify({ data: inv }))
-  }
-  res.statusCode = 404; res.end('{"error":"not_found"}')
-})
-const ilPort = await listen(il)
-
 // ------------------------------------------------------------------ faux Compte Lead (JWKS) pour l'échange
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }
@@ -139,9 +99,15 @@ const issuerSrv = createServer(async (req, res) => {
     return res.end(JSON.stringify({ org, ...(entitlementsByOrg[org] as object) }))
   }
   if (req.url === '/oauth/token' && req.method === 'POST') {
+    const form = new URLSearchParams(await new Promise<string>((r) => { let d = ''; req.on('data', (x: any) => (d += x)); req.on('end', () => r(d)) }))
+    if (form.get('grant_type') === 'client_credentials' && ['exchange', 'exchange_read'].includes(form.get('scope') ?? '')) {
+      if (issuerDown) { res.statusCode = 503; return res.end('{"error":"unavailable"}') }
+      const out = issueExchange(form)
+      res.statusCode = out.status; return res.end(JSON.stringify(out.body))
+    }
     const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
     // Comme ERPlead : `sid`, la session ERPlead du navigateur (une connexion d'avant ne l'a pas : `sid: undefined`).
-    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', exp: Math.floor(Date.now() / 1000) + 300, sid: randomUUID(), ...nextIdClaims })
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300, sid: randomUUID(), ...nextIdClaims })
     const idToken = `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
     return res.end(JSON.stringify({ id_token: idToken, access_token: 'a', token_type: 'Bearer', expires_in: 300 }))
   }
@@ -153,7 +119,156 @@ process.env.LEAD_ID_APP = 'projectlead'
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 function exchangeJwt(app = 'crmlead', aud = 'projectlead') {
   const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
-  const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud, app, scope: 'exchange', exp: Math.floor(Date.now() / 1000) + 300 })
+  // Ancien jeton d'ERPlead, sans org (accepté pendant la transition : EXCHANGE_ORG_SENDERS vide par défaut).
+  const p = b64({ iss: process.env.LEAD_ID_ISSUER, sub: `client:${app}`, aud, app, scope: 'exchange', exp: Math.floor(Date.now() / 1000) + 300 })
+  return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+}
+
+// ------------------------------------------------------------------ faux ERPlead : jetons d'échange liés à l'org
+// Comme ERPlead (contrat « liens sans clé » §1) : client_credentials, scope exchange | exchange_read, audience, org (uuid),
+// subject_token = jeton d'identité de la personne émis pour projectlead (12 h au plus). Refus 400 / 403 person_proof.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const exchangeIssued: { scope: string; audience: string; org: string; person: string | null }[] = []
+// L'organisation ERPlead de chaque personne (sub) : une preuve d'une personne d'une autre organisation → 403 person_proof.
+const personOrg: Record<string, { org: string; name: string; role: string }> = {}
+function issueExchange(form: URLSearchParams): { status: number; body: any } {
+  const scope = form.get('scope') ?? '', audience = form.get('audience') ?? '', org = form.get('org') ?? ''
+  if (!['exchange', 'exchange_read'].includes(scope)) return { status: 400, body: { error: 'invalid_scope' } }
+  if (!['crmlead', 'invoicelead'].includes(audience)) return { status: 400, body: { error: 'invalid_target' } }
+  if (!UUID_RE.test(org)) return { status: 400, body: { error: 'invalid_request' } }
+  const proof = form.get('subject_token')
+  if (scope === 'exchange_read' && !proof) return { status: 400, body: { error: 'person_required' } }
+  let person: string | null = null, role: string | null = null
+  if (proof) {
+    let c: any = null
+    try {
+      const [h, p, s] = proof.split('.')
+      if (verifySig('sha256', Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, 'base64url'))) c = JSON.parse(Buffer.from(p, 'base64url').toString())
+    } catch { c = null }
+    const old = !c || typeof c.iat !== 'number' || Date.now() / 1000 - c.iat > 12 * 3600 + 600
+    if (!c || c.aud !== 'projectlead' || old) return { status: 403, body: { error: 'person_proof' } }
+    const po = personOrg[c.sub]
+    if (!po || po.org !== org) return { status: 403, body: { error: 'person_proof', person_org_name: po?.name ?? 'Autre SA' } }
+    person = c.sub; role = po.role
+  }
+  exchangeIssued.push({ scope, audience, org, person })
+  const now = Math.floor(Date.now() / 1000)
+  const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+  const p = b64({ iss: process.env.LEAD_ID_ISSUER, sub: 'client:projectlead', aud: [audience, 'lead-id'], client_id: 'projectlead',
+    app: 'projectlead', scope, token_use: 'exchange', org, ...(person ? { person, person_role: role } : {}), iat: now, exp: now + 900, jti: randomUUID() })
+  return { status: 200, body: { access_token: `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`, token_type: 'Bearer', expires_in: 900 } }
+}
+/** Ce qu'une app sœur vérifie d'un jeton d'échange reçu : signature du faux ERPlead, audience, portée, org. */
+function exchangeClaims(authorization: string | undefined, aud: string, scope: string): any | null {
+  const t = authorization?.match(/^Bearer\s+(.+)$/)?.[1]
+  if (!t) return null
+  try {
+    const [h, p, s] = t.split('.')
+    if (!verifySig('sha256', Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, 'base64url'))) return null
+    const c = JSON.parse(Buffer.from(p, 'base64url').toString())
+    if (!c.aud.includes(aud) || c.scope !== scope || c.token_use !== 'exchange' || c.exp * 1000 < Date.now() || !c.org) return null
+    return c
+  } catch { return null }
+}
+const readQuery = (req: any) => new URL(req.url!, 'http://x')
+
+// ------------------------------------------------------------------ faux CRMlead : lecture par l'échange (sans clé)
+const crmLead = {
+  id: 'lead-42', title: 'Refonte du site', company: 'Boulangerie Rochat SA', company_address: 'Rue de Bourg 12, 1003 Lausanne',
+  company_country: 'CH', status: 'won', amount: 1200000, currency: 'CHF', description: 'Site vitrine',
+  contacts: [{ id: 'c1', first_name: 'Léa', last_name: 'Rochat', email: 'lea@rochat.ch', phone: '+41 21 000 00 00', job_title: 'Directrice', is_primary: true }],
+}
+// Les organisations qui ont un compte CRMlead, et les personnes (sub) qui y sont membres.
+const crmOrgs = new Set<string>()
+const crmMembers = new Set<string>()
+const crmReads: { org: string; person: string; q: string | null; ids: string | null; link: boolean }[] = []
+const crm = createServer(async (req, res) => {
+  res.setHeader('content-type', 'application/json')
+  const url = readQuery(req)
+  if (url.pathname === '/.well-known/lead-app.json') return res.end(JSON.stringify({ app: 'crmlead',
+    exchange: { version: 1, inbox: `http://127.0.0.1:${crmPort}/api/lead-exchange/v1/inbox`, read: `http://127.0.0.1:${crmPort}/api/lead-exchange/v1/read`, reads: ['lead'] } }))
+  if (url.pathname === '/api/lead-exchange/v1/read') {
+    const c = exchangeClaims(req.headers.authorization, 'crmlead', 'exchange_read')
+    if (!c || !c.person) { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
+    if (!crmOrgs.has(c.org)) { res.statusCode = 404; return res.end('{"error":"unknown_org"}') }
+    if (!crmMembers.has(c.person)) { res.statusCode = 403; return res.end(JSON.stringify({ error: 'person_not_member', reason: 'not_opened' })) }
+    crmReads.push({ org: c.org, person: c.person, q: url.searchParams.get('q'), ids: url.searchParams.get('ids'), link: url.searchParams.get('link') === '1' })
+    const ids = url.searchParams.get('ids')?.split(',')
+    return res.end(JSON.stringify({ data: ids ? [crmLead].filter((l) => ids.includes(l.id)) : [crmLead] }))
+  }
+  res.statusCode = 404; res.end('{"error":"not_found"}')
+})
+const crmPort = await listen(crm)
+
+// ------------------------------------------------------------------ faux InvoiceLead : boîte d'échange et lecture (sans clé)
+const ilContacts: any[] = []
+const ilInvoices: any[] = []
+const ilOrgs = new Set<string>()
+const ilMembers = new Set<string>()
+const ilEnvelopes: { person: string | null; env: any }[] = []
+let ilContactLimit = 1000
+const il = createServer(async (req, res) => {
+  res.setHeader('content-type', 'application/json')
+  const url = readQuery(req)
+  if (url.pathname === '/.well-known/lead-app.json') return res.end(JSON.stringify({ app: 'invoicelead',
+    exchange: { version: 1, inbox: `http://127.0.0.1:${ilPort}/api/lead-exchange/v1/inbox`, read: `http://127.0.0.1:${ilPort}/api/lead-exchange/v1/read`, reads: ['contact'] } }))
+  if (url.pathname === '/api/lead-exchange/v1/read' && req.method === 'GET') {
+    const c = exchangeClaims(req.headers.authorization, 'invoicelead', 'exchange_read')
+    if (!c || !c.person) { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
+    if (!ilOrgs.has(c.org)) { res.statusCode = 404; return res.end('{"error":"unknown_org"}') }
+    if (!ilMembers.has(c.person)) { res.statusCode = 403; return res.end(JSON.stringify({ error: 'person_not_member', reason: 'not_opened' })) }
+    const q = (url.searchParams.get('q') ?? '').toLowerCase()
+    return res.end(JSON.stringify({ data: ilContacts.filter((x) => x.isCustomer !== false && (!q || x.name.toLowerCase().includes(q) || x.email?.toLowerCase() === q)).slice(0, 20) }))
+  }
+  if (url.pathname === '/api/lead-exchange/v1/inbox' && req.method === 'POST') {
+    const c = exchangeClaims(req.headers.authorization, 'invoicelead', 'exchange')
+    if (!c) { res.statusCode = 401; return res.end('{"error":"invalid_token"}') }
+    const e = await readBody(req)
+    if (e.org !== c.org) { res.statusCode = 403; return res.end('{"error":"org_mismatch"}') }
+    if (e.type !== 'invoice' || e.source?.app !== 'projectlead') { res.statusCode = 403; return res.end('{"error":"sender_not_allowed"}') }
+    if (!ilOrgs.has(c.org)) { res.statusCode = 404; return res.end('{"error":"unknown_org"}') }
+    ilEnvelopes.push({ person: c.person ?? null, env: e })
+    const d = e.data, cl = d.client
+    // Contact : l'indice, puis external_ref projectlead:<source_id>, l'email, le nom ; sinon créé dans la limite.
+    let ct = ilContacts.find((x) => x.id === cl.invoicelead_contact_id) ?? ilContacts.find((x) => x.external_ref === `projectlead:${cl.source_id}`)
+      ?? ilContacts.find((x) => cl.email && x.email?.toLowerCase() === cl.email.toLowerCase()) ?? ilContacts.find((x) => x.name.toLowerCase() === cl.name.toLowerCase())
+    if (!ct) {
+      const count = ilContacts.filter((x) => x.isCustomer !== false).length
+      if (count >= ilContactLimit) { res.statusCode = 409; return res.end(JSON.stringify({ error: 'contact_limit', limit: ilContactLimit, count, plan: 'free' })) }
+      ct = { id: randomUUID(), kind: cl.kind, name: cl.name, email: cl.email, external_ref: `projectlead:${cl.source_id}`, isCustomer: true }
+      ilContacts.push(ct)
+    }
+    const total = d.lines.reduce((s: number, l: any) => s + Math.round(l.quantity * l.unit_price_cents), 0)
+    const ref = `projectlead:${e.source.id}`
+    const prev = ilInvoices.find((x) => x.external_ref === ref)
+    if (prev && prev.status !== 'draft') { res.statusCode = 409; return res.end(JSON.stringify({ error: 'already_issued', id: prev.id })) }
+    if (prev) { Object.assign(prev, { title: d.title, lines: d.lines, totalCents: total, contactId: ct.id }); return res.end(JSON.stringify({ id: prev.id, status: 'updated', total_cents: total, contact_id: ct.id })) }
+    const inv = { id: randomUUID(), status: 'draft', external_ref: ref, title: d.title, lines: d.lines, totalCents: total, contactId: ct.id, by: c.person ?? 'admin-fallback' }
+    ilInvoices.push(inv)
+    res.statusCode = 201; return res.end(JSON.stringify({ id: inv.id, status: 'created', total_cents: total, contact_id: ct.id }))
+  }
+  res.statusCode = 404; res.end('{"error":"not_found"}')
+})
+const ilPort = await listen(il)
+process.env.CRMLEAD_URL = `http://127.0.0.1:${crmPort}`
+process.env.INVOICELEAD_URL = `http://127.0.0.1:${ilPort}`
+const { sealProof } = await import('../server/lib/personProof.js')
+/** Un jeton d'identité du faux Compte Lead, émis pour projectlead (`ageS` : son âge en secondes). */
+function idTokenFor(sub: string, ageS = 0) {
+  const now = Math.floor(Date.now() / 1000) - ageS
+  const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+  const p = b64({ iss: process.env.LEAD_ID_ISSUER, aud: 'projectlead', sub, iat: now, exp: now + 3600 })
+  return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+}
+/** Pose la preuve (scellée) dans la session d'un client du test, comme l'aurait fait une connexion par le Compte Lead. */
+const setProof = (cl: Client, token: string | null) =>
+  pool.query('update sessions set lead_id_token = $2 where token_hash = $1', [hashTokenSmoke(cl.cookie.split('=')[1]), token ? sealProof(token) : null])
+/** Un jeton d'échange lié à une org, signé par le faux ERPlead, comme CRMlead en recevrait un pour ProjectLead. */
+function orgExchangeJwt(org: string, app = 'crmlead', person?: string) {
+  const now = Math.floor(Date.now() / 1000)
+  const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+  const p = b64({ iss: process.env.LEAD_ID_ISSUER, sub: `client:${app}`, aud: ['projectlead', 'lead-id'], client_id: app, app, scope: 'exchange',
+    token_use: 'exchange', org, ...(person ? { person, person_role: 'user' } : {}), iat: now, exp: now + 900, jti: randomUUID() })
   return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
 }
 
@@ -420,26 +535,101 @@ check('demande reçue', r.status === 201, r.body)
 r = await eve.get(`/api/projects/${r.body.id}`)
 check('la demande ouvre un projet avec les étapes du modèle', r.body.status === 'lead' && r.body.stages.length === 4, r.body)
 
-section('CRMlead : adresses')
-r = await eve.put('/api/integrations/crmlead', { url: `http://127.0.0.1:${crmPort}`, key: 'crm_faux' })
-check('clé CRMlead fausse refusée', r.status === 502 && r.body.error === 'crmlead_key_invalid', r.body)
-r = await eve.put('/api/integrations/crmlead', { url: `http://127.0.0.1:${crmPort}`, key: 'crm_test' })
-check('CRMlead branché', r.status === 200, r.body)
+section('Applications Lead : reliées sans clé (26.10.2026)')
+// Le Compte Lead branché le temps de ces contrôles (l'inscription locale du début n'est possible que sans lui).
+process.env.LEAD_ID_CLIENT_ID = 'projectlead'
+process.env.LEAD_ID_CLIENT_SECRET = 'lid_essai'
+const ORG = randomUUID()
+const EVE_SUB = `eve-sub-${stamp}`, MARC_SUB = `marc-sub-${stamp}`, AUTRE_SUB = `autre-sub-${stamp}`
+await pool.query('update accounts set lead_org = $2 where id = $1', [accountId, ORG])
+await pool.query('update users set lead_sub = $2 where id = $1', [eveId, EVE_SUB])
+await pool.query('update users set lead_sub = $2 where id = $1', [marcId, MARC_SUB])
+personOrg[EVE_SUB] = { org: ORG, name: `Atelier ${stamp}`, role: 'admin' }
+personOrg[MARC_SUB] = { org: ORG, name: `Atelier ${stamp}`, role: 'user' }
+personOrg[AUTRE_SUB] = { org: randomUUID(), name: 'Autre Entreprise SA', role: 'admin' }
+const entOf = (apps: Record<string, unknown>) => ({ app: 'projectlead', plan: { code: 'free', name: 'Gratuit', rank: 0, seats: 1 }, apps, subscriptions: [] })
+const appState = (crmlead: boolean, invoicelead: boolean) => ({
+  crmlead: { access: true, name: 'CRMlead', url: null, status: 'live', upgrade_url: null, used: crmlead, used_at: crmlead ? new Date().toISOString() : null },
+  invoicelead: { access: true, name: 'InvoiceLead', url: null, status: 'live', upgrade_url: null, used: invoicelead, used_at: invoicelead ? new Date().toISOString() : null },
+})
+entitlementsByOrg[ORG] = entOf(appState(false, false))
+r = await eve.get('/api/integrations?fresh=1')
+check('Applications Lead : entreprise et adresse, CRMlead et InvoiceLead « pas encore utilisées »',
+  r.status === 200 && r.body.links?.lead === true && r.body.links.company === `Atelier ${stamp}` && r.body.links.email === `eve-${stamp}@exemple.test`
+  && r.body.links.crmlead === 'not_used' && r.body.links.invoicelead === 'not_used', r.body)
+check('Applications Lead : aucun champ de clé, d’adresse, ni secret_configured / lead_exchange',
+  r.status === 200 && !/key|_url|secret_configured|lead_exchange/.test(Object.keys(r.body).join(',')), Object.keys(r.body ?? {}))
+for (const [m, path] of [['PUT', '/api/integrations/crmlead'], ['PUT', '/api/integrations/invoicelead'], ['DELETE', '/api/integrations/crmlead']] as const) {
+  r = await eve.req(m, path, m === 'PUT' ? { url: `http://127.0.0.1:${crmPort}`, key: 'crm_test' } : undefined)
+  check(`${m} ${path} (clé d'avant) → 410 keys_retired`, r.status === 410 && r.body.error === 'keys_retired', r)
+}
+r = await eve.post('/api/integrations/crmlead/refresh-clients')
+check('mise à jour groupée depuis CRMlead retirée → 404', r.status === 404, r)
+
+section('CRMlead : reprendre un client avec la preuve de la personne')
+const readsBefore = crmReads.length
 r = await eve.get('/api/clients/crmlead/search?q=rochat')
-check('recherche dans CRMlead', r.body[0]?.company === 'Boulangerie Rochat SA' && r.body[0].imported === false, r.body)
+check('sans preuve de la personne (connexion par mot de passe) → 401 lead_reauth, rien demandé à CRMlead',
+  r.status === 401 && r.body.error === 'lead_reauth' && crmReads.length === readsBefore, r)
+await setProof(eve, idTokenFor(EVE_SUB))
+const sealedRow = (await pool.query('select lead_id_token from sessions where token_hash = $1', [hashTokenSmoke(eve.cookie.split('=')[1])])).rows[0]
+check('preuve scellée au repos (p1., pas le jeton en clair)', sealedRow.lead_id_token.startsWith('p1.') && !sealedRow.lead_id_token.includes('eyJ'), sealedRow.lead_id_token.slice(0, 12))
+r = await eve.get('/api/clients/crmlead/search?q=rochat')
+check('entreprise sans compte CRMlead → 404 crmlead_not_used', r.status === 404 && r.body.error === 'crmlead_not_used', r)
+crmOrgs.add(ORG)
+r = await eve.get('/api/clients/crmlead/search?q=rochat')
+check('personne pas encore entrée dans CRMlead → 403 person_not_member (not_opened), jamais de repli administrateur',
+  r.status === 403 && r.body.error === 'person_not_member' && r.body.reason === 'not_opened' && r.body.app === 'crmlead', r)
+crmMembers.add(EVE_SUB)
+entitlementsByOrg[ORG] = entOf(appState(true, false))
+r = await eve.get('/api/integrations?fresh=1')
+check('CRMlead utilisée par l’entreprise → « Reliée » ; InvoiceLead toujours « pas encore utilisée »',
+  r.body.links?.crmlead === 'linked' && r.body.links.invoicelead === 'not_used', r.body.links)
+r = await eve.get('/api/me')
+check('/me : features.crmlead = reliée, features.invoicelead = non', r.body.features.crmlead === true && r.body.features.invoicelead === false, r.body.features)
+r = await eve.get('/api/clients/crmlead/search?q=rochat')
+const lastToken = exchangeIssued[exchangeIssued.length - 1]
+check('recherche dans CRMlead (relié sans clé)', r.status === 200 && r.body[0]?.company === 'Boulangerie Rochat SA' && r.body[0].imported === false, r.body)
+check('lecture avec un jeton exchange_read lié à l’org ET à la personne',
+  lastToken?.scope === 'exchange_read' && lastToken.audience === 'crmlead' && lastToken.org === ORG && lastToken.person === EVE_SUB
+  && crmReads[crmReads.length - 1]?.q === 'rochat' && crmReads[crmReads.length - 1]?.person === EVE_SUB, { lastToken, read: crmReads[crmReads.length - 1] })
 r = await eve.post('/api/clients/crmlead/import', { leadId: 'lead-42' })
 check('client repris de CRMlead', r.status === 201, r.body)
 const rochatId = r.body.id
+check('import : lecture par id avec link=1 (CRMlead suivra ce client)',
+  crmReads[crmReads.length - 1]?.ids === 'lead-42' && crmReads[crmReads.length - 1]?.link === true, crmReads[crmReads.length - 1])
 r = await eve.get(`/api/clients/${rochatId}`)
 check('adresse découpée (rue, numéro, NPA, localité)', r.body.street === 'Rue de Bourg' && r.body.building_number === '12' && r.body.postal_code === '1003' && r.body.town === 'Lausanne', r.body)
 check('contacts repris', r.body.contacts.length === 1 && r.body.contacts[0].email === 'lea@rochat.ch', r.body.contacts)
 r = await eve.post('/api/clients/crmlead/import', { leadId: 'lead-42' })
 check('reprise répétée → même client', r.body.id === rochatId)
+r = await eve.post(`/api/clients/${rochatId}/crmlead/refresh`)
+check('« Mettre à jour depuis CRMlead » : lecture par id avec la personne, sans link',
+  r.status === 200 && crmReads[crmReads.length - 1]?.ids === 'lead-42' && !crmReads[crmReads.length - 1]?.link && crmReads[crmReads.length - 1]?.person === EVE_SUB, r)
+r = await eve.post('/api/clients/crmlead/import', { leadId: 'lead-inconnu' })
+check('lead invisible pour la personne → 404', r.status === 404, r)
+{
+  const n = crmReads.length, t = exchangeIssued.length
+  await setProof(eve, idTokenFor(EVE_SUB, 11 * 3600 + 60))
+  r = await eve.get('/api/clients/crmlead/search?q=rochat')
+  check('preuve de plus de 11 h → 401 lead_reauth (reconnexion silencieuse), sans jeton ni lecture',
+    r.status === 401 && r.body.error === 'lead_reauth' && crmReads.length === n && exchangeIssued.length === t, r)
+  await setProof(eve, idTokenFor(AUTRE_SUB))
+  r = await eve.get('/api/clients/crmlead/search?q=rochat')
+  check('Compte Lead d’une autre entreprise → 403 person_proof (son entreprise, l’adresse et l’entreprise d’ici)',
+    r.status === 403 && r.body.error === 'person_proof' && r.body.person_org_name === 'Autre Entreprise SA'
+    && r.body.company === `Atelier ${stamp}` && r.body.email === `eve-${stamp}@exemple.test`, r)
+  await setProof(eve, idTokenFor(EVE_SUB, 7))
+  issuerDown = true
+  r = await eve.get('/api/clients/crmlead/search?q=rochat')
+  issuerDown = false
+  check('ERPlead injoignable pour le jeton → 502 crmlead_unreachable (à relancer), jamais 500', r.status === 502 && r.body.error === 'crmlead_unreachable', r)
+  await setProof(eve, idTokenFor(EVE_SUB))
+}
 
-section('InvoiceLead : facturation mensuelle')
-r = await eve.put('/api/integrations/invoicelead', { url: `http://127.0.0.1:${ilPort}`, key: 'il_live_test', invoice_language: 'fr' })
-check('InvoiceLead branché', r.status === 200, r.body)
+section('InvoiceLead : facturation mensuelle, sans clé ni formule')
 const period = today.slice(0, 7)
+const shiftMonth = (p: string, n: number) => { const d = new Date(Date.UTC(Number(p.slice(0, 4)), Number(p.slice(5, 7)) - 1 + n, 1)); return d.toISOString().slice(0, 7) }
 r = await eve.post('/api/projects', { name: 'Maintenance site', client_id: rochatId, billing_mode: 'retainer', retainer_cents: 50000 })
 const retainerId = r.body.id
 r = await eve.post('/api/projects', { name: 'Livraison par étapes', client_id: rochatId, billing_mode: 'milestone' })
@@ -454,19 +644,88 @@ check('aperçu : étape livrée', pv[msId]?.total_cents === 300000, pv[msId])
 r = await marc.post('/api/integrations/billing/run', { period })
 check('un membre ne lance pas la facturation → 403', r.status === 403)
 r = await eve.post('/api/integrations/billing/run', { period })
-const res = Object.fromEntries(r.body.results.map((x: any) => [x.projectId, x]))
-check('brouillons créés dans InvoiceLead', res[projId]?.status === 'created' && res[retainerId]?.status === 'created' && res[msId]?.status === 'created', r.body)
+check('entreprise sans InvoiceLead → 404 invoicelead_not_used, rien n’est marqué', r.status === 404 && r.body.error === 'invoicelead_not_used'
+  && (await pool.query(`select count(*)::int as n from invoice_runs where account_id = $1 and status = 'created'`, [accountId])).rows[0].n === 0, r)
+ilOrgs.add(ORG); ilMembers.add(EVE_SUB)
+entitlementsByOrg[ORG] = entOf(appState(true, true))
+r = await eve.get('/api/integrations?fresh=1')
+check('InvoiceLead utilisée → « Reliée », en formule Gratuite (aucune formule exigée)', r.body.links?.invoicelead === 'linked', r.body.links)
+const envBefore = ilEnvelopes.length
+r = await eve.post('/api/integrations/billing/run', { period })
+const res = Object.fromEntries((r.body.results ?? []).map((x: any) => [x.projectId, x]))
+check('brouillons créés dans InvoiceLead (enveloppe synchrone)', res[projId]?.status === 'created' && res[retainerId]?.status === 'created' && res[msId]?.status === 'created', r.body)
 check('le projet sans client est en erreur, pas facturé', r.body.results.filter((x: any) => x.status === 'error').every((x: any) => x.error === 'client_missing'), r.body.results)
+const sentEnv = ilEnvelopes.slice(envBefore)
+check('enveloppes « invoice » : source run:<projet>:<mois>, client inline, prix en centimes, au nom de la personne',
+  sentEnv.length === 3 && sentEnv.every((x) => x.person === EVE_SUB && x.env.type === 'invoice' && x.env.org === ORG && x.env.source.app === 'projectlead'
+    && /^run:[0-9a-f-]{36}:\d{4}-\d{2}$/.test(x.env.source.id) && ['Boulangerie Rochat SA', 'Garage Favre SA'].includes(x.env.data.client?.name)
+    && x.env.data.lines.every((l: any) => Number.isInteger(l.unit_price_cents)))
+  && sentEnv.some((x) => x.env.source.id === `run:${projId}:${period}`), sentEnv.map((x) => [x.person, x.env.source.id, x.env.data.client?.name]))
 check('contact créé une seule fois chez InvoiceLead', ilContacts.filter((c) => c.name === 'Boulangerie Rochat SA').length === 1 && ilContacts.length === 2, ilContacts.map((c) => c.name))
 const favreInv = ilInvoices.find((i) => i.title.includes('Atelier mécanique'))
-check('facture : lignes en heures, prix en unités', favreInv?.lines.some((l: any) => l.unit === 'hour' && l.quantity === '1.50' && l.unitPrice === '150.00'), favreInv)
+check('facture : lignes en heures, prix en centimes entiers', favreInv?.lines.some((l: any) => l.unit === 'hour' && l.quantity === 1.5 && l.unit_price_cents === 15000), favreInv)
+check('lien de facture construit ici (INVOICELEAD_URL/fr/app/invoices/<id>)', res[projId]?.invoiceUrl === `http://127.0.0.1:${ilPort}/fr/app/invoices/${res[projId]?.invoiceId}`, res[projId])
+r = await eve.get(`/api/clients/${rochatId}`)
+check('contact_id rendu par InvoiceLead gardé sur le client', r.body.invoicelead_contact_id === ilContacts.find((c) => c.name === 'Boulangerie Rochat SA')?.id, r.body.invoicelead_contact_id)
 r = await eve.get(`/api/time/entries?project=${projId}&user=all`)
 check('temps facturé marqué', r.body.filter((e: any) => e.billable).every((e: any) => e.invoiced_at), r.body.map((e: any) => e.invoiced_at))
 const n = ilInvoices.length
 r = await eve.post('/api/integrations/billing/run', { period })
-check('relancer le même mois ne refacture rien', ilInvoices.length === n && r.body.results.filter((x: any) => x.status === 'created').length === 0, r.body.results)
+check('second passage du même mois : aucun nouveau brouillon', ilInvoices.length === n && r.body.results.filter((x: any) => x.status === 'created').length === 0, r.body.results)
 r = await marc.patch(`/api/time/entries/${(await marc.get(`/api/time/entries?project=${projId}`)).body[0].id}`, { minutes: 10 })
 check('temps facturé non modifiable → 409', r.status === 409, r.body)
+{
+  // Deux envois identiques (le résultat local perdu, renvoyé) : un seul brouillon chez InvoiceLead, remplacé.
+  const id0 = res[retainerId].invoiceId
+  await pool.query('delete from invoice_runs where project_id = $1 and period = $2', [retainerId, period])
+  r = await eve.post('/api/integrations/billing/run', { period, project_ids: [retainerId] })
+  check('renvoi du même mois : brouillon remplacé, pas un second', ilInvoices.length === n && r.body.results[0]?.status === 'created' && r.body.results[0]?.invoiceId === id0, r.body)
+  // Déjà émise dans InvoiceLead : 409 already_issued → « créé » ici avec l'identifiant rendu.
+  ilInvoices.find((x) => x.id === id0).status = 'issued'
+  await pool.query('delete from invoice_runs where project_id = $1 and period = $2', [retainerId, period])
+  r = await eve.post('/api/integrations/billing/run', { period, project_ids: [retainerId] })
+  const run = (await pool.query('select status, invoice_id from invoice_runs where project_id = $1 and period = $2', [retainerId, period])).rows[0]
+  check('déjà émise (409 already_issued) → run « created » avec l’id rendu', r.body.results[0]?.status === 'created' && run?.status === 'created' && run.invoice_id === id0 && ilInvoices.length === n, { r: r.body, run })
+}
+{
+  // Compte Lead de la personne dans une autre entreprise : le brouillon part quand même, sans personne.
+  const before = ilEnvelopes.length
+  await setProof(eve, idTokenFor(AUTRE_SUB))
+  const p2 = shiftMonth(period, -2)
+  r = await eve.post('/api/integrations/billing/run', { period: p2, project_ids: [retainerId] })
+  check('403 person_proof → nouvel essai avec un jeton sans personne, brouillon créé (jamais 500)',
+    r.status === 200 && r.body.results[0]?.status === 'created' && ilEnvelopes.length === before + 1 && ilEnvelopes[before].person === null, { r: r.body, env: ilEnvelopes.slice(before).map((x) => x.person) })
+  await setProof(eve, idTokenFor(EVE_SUB))
+}
+{
+  // Formule d'InvoiceLead pleine : 409 contact_limit, jamais 402 ; la tâche horaire ne relance pas.
+  const prev = shiftMonth(period, -1)
+  r = await eve.post('/api/clients', { name: 'Nouveau Client SA', email: 'info@nouveau.ch' })
+  const newClient = r.body.id
+  // La formule Gratuite (3 projets en cours) est déjà pleine : le projet de plus est posé directement en base.
+  const newProj = (await pool.query(`insert into projects (account_id, name, client_id, billing_mode, retainer_cents, status, created_by)
+    values ($1, 'Abonnement nouveau', $2, 'retainer', 10000, 'active', $3) returning id`, [accountId, newClient, eveId])).rows[0].id as string
+  ilContactLimit = ilContacts.filter((x) => x.isCustomer !== false).length
+  r = await eve.post('/api/integrations/billing/run', { period: prev, project_ids: [newProj] })
+  const row = (await pool.query('select status, error_code from invoice_runs where project_id = $1 and period = $2', [newProj, prev])).rows[0]
+  check('409 contact_limit → run en erreur « contact_limit » (formule, nombre, limite rendus à l’écran)',
+    r.status === 200 && r.body.results[0]?.status === 'error' && r.body.results[0]?.error === 'contact_limit' && r.body.results[0]?.detail?.plan === 'free'
+    && typeof r.body.results[0]?.detail?.limit === 'number' && row?.status === 'error' && row.error_code === 'contact_limit', { r: r.body, row })
+  await pool.query(`insert into account_settings (account_id) values ($1) on conflict do nothing`, [accountId])
+  await pool.query(`update account_settings set monthly_billing_auto = true, monthly_billing_day = 1 where account_id = $1`, [accountId])
+  const before = ilEnvelopes.length
+  const { monthlyBilling } = await import('../server/lib/jobs.js')
+  await monthlyBilling()
+  const jobSent = ilEnvelopes.slice(before)
+  check('tâche mensuelle : comptes par lead_org et brouillons automatiques (aucune clé), jeton sans personne, sub = premier administrateur',
+    jobSent.length > 0 && jobSent.every((x) => x.person === null && x.env.sub === EVE_SUB && x.env.source.id.endsWith(`:${prev}`)), jobSent.map((x) => [x.person, x.env.sub, x.env.source.id]))
+  check('tâche mensuelle : contact_limit pas relancé', !jobSent.some((x) => x.env.source.id === `run:${newProj}:${prev}`)
+    && (await pool.query('select error_code from invoice_runs where project_id = $1 and period = $2', [newProj, prev])).rows[0]?.error_code === 'contact_limit', jobSent.map((x) => x.env.source.id))
+  await pool.query(`update account_settings set monthly_billing_auto = false where account_id = $1`, [accountId])
+  ilContactLimit = 1000
+  r = await eve.post('/api/integrations/billing/run', { period: prev, project_ids: [newProj] })
+  check('relance à la main après le geste dans InvoiceLead → brouillon créé', r.body.results?.[0]?.status === 'created', r.body)
+}
 
 section('InvoiceLead : contacts repris comme clients')
 ilContacts.push({ id: randomUUID(), kind: 'company', name: 'Garage Muller SA', email: 'info@muller.ch', street: 'Rue du Lac',
@@ -474,8 +733,9 @@ ilContacts.push({ id: randomUUID(), kind: 'company', name: 'Garage Muller SA', e
   { id: randomUUID(), kind: 'company', name: 'Fournisseur Papier', isCustomer: false, isSupplier: true })
 r = await eve.get('/api/clients/invoicelead/search?q=')
 const muller = r.body.find?.((x: any) => x.name === 'Garage Muller SA')
-check('recherche : clients seulement, déjà repris signalés', muller && !muller.imported && muller.address === 'Rue du Lac 12, 1800 Vevey'
-  && !r.body.some((x: any) => x.name === 'Fournisseur Papier') && r.body.some((x: any) => x.name === 'Boulangerie Rochat SA' && x.imported), r.body)
+check('recherche (lecture avec la personne) : clients seulement, déjà repris signalés', muller && !muller.imported && muller.address === 'Rue du Lac 12, 1800 Vevey'
+  && !r.body.some((x: any) => x.name === 'Fournisseur Papier') && r.body.some((x: any) => x.name === 'Boulangerie Rochat SA' && x.imported)
+  && exchangeIssued[exchangeIssued.length - 1]?.audience === 'invoicelead' && exchangeIssued[exchangeIssued.length - 1]?.scope === 'exchange_read', r.body)
 r = await eve.post('/api/clients/invoicelead/import', { contactId: muller.id })
 const mullerClient = (await eve.get(`/api/clients/${r.body.id}`)).body
 check('contact repris : adresse et lien InvoiceLead', r.status === 201 && mullerClient.town === 'Vevey' && mullerClient.building_number === '12'
@@ -483,27 +743,104 @@ check('contact repris : adresse et lien InvoiceLead', r.status === 201 && muller
 const clientsBefore = (await eve.get('/api/clients')).body.length
 r = await eve.post('/api/clients/invoicelead/import', { all: true })
 check('tout reprendre ne crée pas de doublon', r.status === 201 && (await eve.get('/api/clients')).body.length === clientsBefore, { clientsBefore, r: r.body })
+await setProof(marc, idTokenFor(MARC_SUB))
+r = await marc.post('/api/clients/invoicelead/import', { contactId: muller.id })
+check('personne pas membre d’InvoiceLead → 403 person_not_member', r.status === 403 && r.body.error === 'person_not_member' && r.body.app === 'invoicelead', r.body)
+ilMembers.add(MARC_SUB)
 r = await marc.post('/api/clients/invoicelead/import', { contactId: 'inconnu' })
 check('contact inconnu → 404', r.status === 404, r.body)
 
 section('Échange Compte Lead : affaire gagnée dans CRMlead')
-await pool.query(`update accounts set lead_org = $2 where id = $1`, [accountId, `org-${stamp}`])
-const envelope = { id: randomUUID(), type: 'deal', org: `org-${stamp}`, occurred_at: new Date().toISOString(),
+const envelope = { id: randomUUID(), type: 'deal', org: ORG, occurred_at: new Date().toISOString(),
   source: { app: 'crmlead', id: `lead-${stamp}`, url: 'https://crmlead.io/leads/x' },
   data: { title: 'Nouvelle boutique', company: 'Fleurs Blanc', amount: 800000, currency: 'CHF', contacts: [{ first_name: 'Anne', last_name: 'Blanc', email: 'anne@blanc.ch' }] } }
-r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', envelope, { authorization: 'Bearer faux' })
+const inbox = (env: unknown, token: string) => new Client().req('POST', '/api/lead-exchange/v1/inbox', env, { authorization: `Bearer ${token}` })
+r = await inbox(envelope, 'faux')
 check('jeton invalide → 401', r.status === 401)
-r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', envelope, { authorization: `Bearer ${exchangeJwt()}` })
+r = await inbox(envelope, exchangeJwt())
 check('affaire reçue → projet créé', r.status === 201 && r.body.status === 'created', r.body)
 const dealProject = r.body.id
-r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope, data: { ...envelope.data, title: 'Nouvelle boutique (v2)' } }, { authorization: `Bearer ${exchangeJwt()}` })
+r = await inbox({ ...envelope, data: { ...envelope.data, title: 'Nouvelle boutique (v2)' } }, exchangeJwt())
 check('renvoi → même projet, mis à jour', r.status === 200 && r.body.id === dealProject, r.body)
 r = await eve.get(`/api/projects/${dealProject}`)
 check('projet : nom à jour, budget, client et contact', r.body.name === 'Nouvelle boutique (v2)' && r.body.budget_cents === 800000 && r.body.client?.name === 'Fleurs Blanc' && r.body.contacts.length === 1, r.body)
-r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope, source: { ...envelope.source, app: 'scanlead' } }, { authorization: `Bearer ${exchangeJwt()}` })
-check('expéditeur usurpé → 403', r.status === 403)
+r = await inbox({ ...envelope, source: { ...envelope.source, app: 'scanlead' } }, exchangeJwt())
+check('expéditeur usurpé → 403 source_mismatch', r.status === 403 && r.body.error === 'source_mismatch', r.body)
 r = await new Client().get('/.well-known/lead-app.json')
-check('carte de visite de l’application', r.body.app === 'projectlead' && r.body.exchange.accepts.includes('deal'))
+check('carte de visite : accepte deal et client seulement', r.body.app === 'projectlead' && JSON.stringify(r.body.exchange.accepts) === '["deal","client"]', r.body)
+r = await inbox(envelope, orgExchangeJwt(ORG))
+check('jeton lié à l’org de l’enveloppe → accepté', r.status === 200 && r.body.id === dealProject, r.body)
+r = await inbox(envelope, orgExchangeJwt(randomUUID()))
+check('jeton d’une autre org → 403 org_mismatch', r.status === 403 && r.body.error === 'org_mismatch', r.body)
+r = await inbox({ ...envelope, source: { ...envelope.source, app: 'scanlead' } }, orgExchangeJwt(ORG, 'scanlead'))
+check('affaire envoyée par scanlead → 403 sender_not_allowed', r.status === 403 && r.body.error === 'sender_not_allowed', r.body)
+r = await inbox({ ...envelope, type: 'contact' }, orgExchangeJwt(ORG))
+check('type « contact » plus reçu → 422 unsupported_type', r.status === 422 && r.body.error === 'unsupported_type', r.body)
+{
+  // Un jeton de lecture (exchange_read) n'ouvre pas la boîte d'envoi.
+  const now = Math.floor(Date.now() / 1000)
+  const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+  const p = b64({ iss: process.env.LEAD_ID_ISSUER, sub: 'client:crmlead', aud: ['projectlead'], app: 'crmlead', scope: 'exchange_read', token_use: 'exchange', org: ORG, iat: now, exp: now + 900 })
+  r = await inbox(envelope, `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`)
+  check('jeton de portée exchange_read → 401', r.status === 401, r.body)
+}
+r = await inbox(envelope, exchangeJwt('crmlead', 'invoicelead'))
+check('jeton pour une autre application (aud) → 401', r.status === 401, r.body)
+process.env.EXCHANGE_ORG_SENDERS = 'crmlead'
+r = await inbox(envelope, exchangeJwt())
+check('EXCHANGE_ORG_SENDERS=crmlead : ancien jeton sans org → 401 org_required', r.status === 401 && r.body.error === 'org_required', r.body)
+delete process.env.EXCHANGE_ORG_SENDERS
+r = await inbox({ ...envelope, data: { ...envelope.data, contacts: Array.from({ length: 51 }, (_, i) => ({ email: `c${i}@x.ch` })) } }, orgExchangeJwt(ORG))
+check('enveloppe trop grosse (51 contacts) → 400 invalid_envelope', r.status === 400 && r.body.error === 'invalid_envelope', r.body)
+r = await inbox({ ...envelope, data: { ...envelope.data, description: 'x'.repeat(2001) } }, orgExchangeJwt(ORG))
+check('enveloppe trop grosse (texte de 2001 signes) → 400 invalid_envelope', r.status === 400 && r.body.error === 'invalid_envelope', r.body)
+r = await inbox({ ...envelope, org: randomUUID() }, exchangeJwt())
+check('organisation inconnue ici → 404 unknown_org', r.status === 404 && r.body.error === 'unknown_org', r.body)
+{
+  const act = async (pid: string) => (await pool.query(`select data from activities where project_id = $1 and kind = 'from_crmlead'`, [pid])).rows[0]?.data
+  check('URL d’une autre origine que CRMlead : pas gardée dans l’activité', (await act(dealProject))?.url === null, await act(dealProject))
+  r = await inbox({ ...envelope, source: { app: 'crmlead', id: `lead-url-${stamp}`, url: `http://127.0.0.1:${crmPort}/leads/y` } }, orgExchangeJwt(ORG))
+  check('URL chez CRMlead (même origine) : gardée', (await act(r.body.id))?.url === `http://127.0.0.1:${crmPort}/leads/y`, await act(r.body.id))
+}
+
+section('Échange : enveloppe « client » (adresse et contacts suivis depuis CRMlead)')
+{
+  const clientEnv = { id: randomUUID(), type: 'client', org: ORG, occurred_at: new Date().toISOString(), source: { app: 'crmlead', id: 'lead-42' },
+    data: { company: 'Boulangerie Rochat SA', company_address: 'Avenue de la Gare 3, 1800 Vevey', company_country: 'CH',
+            contacts: [{ first_name: 'Léa', last_name: 'Rochat', email: 'lea@rochat.ch', is_primary: true },
+                       { first_name: 'Marc', last_name: 'Neuf', email: 'marc@rochat.ch', phone: '+41 21 111 11 11', job_title: 'Comptable' }] } }
+  const clientsN = (await pool.query('select count(*)::int as n from clients where account_id = $1', [accountId])).rows[0].n
+  r = await inbox(clientEnv, orgExchangeJwt(ORG))
+  const cl = (await eve.get(`/api/clients/${rochatId}`)).body
+  check('« client » : adresse découpée et contact manquant ajouté, sans créer de client',
+    r.status === 200 && r.body.id === rochatId && cl.street === 'Avenue de la Gare' && cl.building_number === '3' && cl.postal_code === '1800'
+    && cl.town === 'Vevey' && cl.contacts.length === 2 && cl.contacts.some((x: any) => x.email === 'marc@rochat.ch')
+    && (await pool.query('select count(*)::int as n from clients where account_id = $1', [accountId])).rows[0].n === clientsN, { r: r.body, cl })
+  r = await inbox(clientEnv, orgExchangeJwt(ORG))
+  check('« client » renvoyé : pas de contact en double', r.status === 200 && (await eve.get(`/api/clients/${rochatId}`)).body.contacts.length === 2, r.body)
+  r = await inbox({ ...clientEnv, source: { app: 'crmlead', id: `lead-jamais-repris-${stamp}` } }, orgExchangeJwt(ORG))
+  check('« client » d’un lead jamais repris → 404 not_linked, rien créé', r.status === 404 && r.body.error === 'not_linked'
+    && (await pool.query('select count(*)::int as n from clients where account_id = $1', [accountId])).rows[0].n === clientsN, r.body)
+  r = await inbox({ ...clientEnv, source: { app: 'invoicelead', id: 'lead-42' } }, orgExchangeJwt(ORG, 'invoicelead'))
+  check('« client » envoyé par invoicelead → 403 sender_not_allowed', r.status === 403 && r.body.error === 'sender_not_allowed', r.body)
+  r = await eve.get('/api/integrations')
+  check('Applications Lead : dernière adresse mise à jour par CRMlead datée', Boolean(r.body.last_client_update_at) && Boolean(r.body.last_deal_at), r.body)
+}
+// Le Compte Lead redébranché jusqu'à sa section (« Connexion par le Compte Lead, de bout en bout »).
+delete process.env.LEAD_ID_CLIENT_SECRET
+{
+  // Les écrans : plus aucun champ ni texte de clé pour relier deux applications Lead (contrat §4).
+  const { readFileSync } = await import('node:fs')
+  const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+  const screen = read('src/components/settings/Integrations.tsx')
+  check('écran « Applications Lead » : textes exigés (Reliée, Pas encore utilisée, Pas besoin de clé pour relier)',
+    ['Applications Lead', 'Reliée', 'Pas encore utilisée', 'Pas besoin de clé pour relier les applications Lead', 'rien à copier ni à coller']
+      .every((t) => screen.includes(t)) && read('src/components/LeadLinks.tsx').includes('pas encore utilisée par votre entreprise'))
+  const files = ['src/components/settings/Integrations.tsx', 'src/pages/Clients.tsx', 'src/pages/Billing.tsx', 'src/pages/ClientDetail.tsx',
+    'src/components/PlanCard.tsx', 'src/pages/Legal.tsx', 'src/lib/api.ts', 'src/pages/Settings.tsx']
+  const bad = files.filter((f) => /il_live_|crm_…|Clé d'API InvoiceLead|clé d'API \(formule|clé d\\'API InvoiceLead|relie par une clé|Brancher (CRMlead|InvoiceLead)|formule Pro\+ d'InvoiceLead|type="password"/i.test(read(f)))
+  check('aucun écran ne demande ni ne cite une clé ou Pro+ pour relier CRMlead / InvoiceLead', bad.length === 0, bad)
+}
 
 section('Isolation des entreprises (RLS)')
 const other = new Client()
@@ -890,6 +1227,39 @@ const lead = (nonce: string, access: boolean, org = `lead-org-${stamp}`) => ({
 let ll = await leadLogin((n) => lead(n, true), '?next=/projets')
 check('départ : vers /oauth/authorize du Compte Lead, client projectlead', ll.authorize.pathname === '/oauth/authorize' && ll.authorize.searchParams.get('client_id') === 'projectlead' && !ll.authorize.searchParams.has('prompt'), ll.authorize.href)
 check('formule Pro : session ouverte, retour à la page demandée', ll.location === '/projets' && ll.session.length > 30, ll)
+{
+  // Liaison sans clé : le jeton d'identité gardé avec la session est la preuve de la personne, SCELLÉ au repos.
+  const { openProof } = await import('../server/lib/personProof.js')
+  const row = (await pool.query('select lead_id_token from sessions where token_hash = $1', [hashTokenSmoke(ll.session.split('=')[1])])).rows[0]
+  const opened = openProof(row?.lead_id_token)
+  check('connexion : jeton d’identité gardé scellé (p1.), lisible seulement avec la clé',
+    String(row?.lead_id_token).startsWith('p1.') && !String(row?.lead_id_token).includes('eyJ') && Boolean(opened)
+    && JSON.parse(Buffer.from(opened!.split('.')[1], 'base64url').toString()).sub === `sub-lead-org-${stamp}`, String(row?.lead_id_token).slice(0, 10))
+  const appsOrg = `apps-org-${stamp}`
+  const used = await leadLogin((n) => ({ ...lead(n, false, appsOrg),
+    lead: rights('free', {}, { crmlead: { access: true, name: 'CRMlead', url: null, status: 'live', upgrade_url: null, used: true, used_at: new Date().toISOString() },
+                              invoicelead: { access: true, name: 'InvoiceLead', url: null, status: 'live', upgrade_url: null, used: false, used_at: null } }) }))
+  const acc = (await pool.query('select lead_apps_used, lead_apps_checked_at from accounts where lead_org = $1', [appsOrg])).rows[0]
+  check('connexion : les applications utilisées (apps[code].used) gardées pour « Reliée »',
+    used.session && acc?.lead_apps_used?.crmlead === true && acc.lead_apps_used.invoicelead === false && acc.lead_apps_checked_at, acc)
+  // Reconnexion silencieuse (lead_reauth) : /auth/lead/start accepte prompt=none et next (avec l'état du dialogue).
+  const next = '/clients?importer=crmlead&iq=rochat'
+  const start = await app.request(`http://localhost/auth/lead/start?prompt=none&next=${encodeURIComponent(next)}`)
+  const to = new URL(start.headers.get('location') ?? 'http://x/')
+  const jar = (start.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+  check('départ silencieux : prompt=none vers le Compte Lead', to.pathname === '/oauth/authorize' && to.searchParams.get('prompt') === 'none', to.href)
+  nextIdClaims = lead(to.searchParams.get('nonce') ?? '', true)
+  const ok = await app.request(`http://localhost/auth/lead/callback?code=c&state=${to.searchParams.get('state')}`, { headers: { cookie: jar } })
+  check('retour silencieux : nouvelle session, retour à la page et au dialogue d’avant', ok.headers.get('location') === next
+    && /projectlead_session=/.test(ok.headers.get('set-cookie') ?? ''), ok.headers.get('location'))
+  const start2 = await app.request(`http://localhost/auth/lead/start?prompt=none&next=${encodeURIComponent(next)}`)
+  const to2 = new URL(start2.headers.get('location') ?? 'http://x/')
+  const jar2 = (start2.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+  const refusedSilent = await app.request(`http://localhost/auth/lead/callback?error=login_required&state=${to2.searchParams.get('state')}`, { headers: { cookie: jar2 } })
+  const again = refusedSilent.headers.get('location') ?? ''
+  check('plus de session au Compte Lead (login_required) : départ avec formulaire, sans prompt=none (pas de boucle)',
+    again === `/auth/lead/start?next=${encodeURIComponent(next)}`, again)
+}
 for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   // « /\evil.test » dans un Location relatif mène un navigateur sur evil.test : jamais repris comme page demandée.
   ll = await leadLogin((n) => lead(n, true), `?next=${bad}`)

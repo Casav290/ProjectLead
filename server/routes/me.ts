@@ -7,6 +7,7 @@ import { mailboxSecretConfigured } from '../lib/mailbox/secret.js'
 import { planOf } from '../lib/plans.js'
 import { EMAIL_VISIBLE } from './mail.js'
 import { assistantConfigured } from './assistant.js'
+import { linkState } from '../lib/links.js'
 
 const app = router()
 
@@ -17,10 +18,9 @@ app.get('/me', async (c) => tx(c, async (db, ctx) => {
        from users u join account_users au on au.user_id = u.id and au.account_id = app_account()
       where u.id = app_user()`)).rows[0]
   const account = (await db.query('select id, name, plan, locale, timezone, currency, week_hours, inbound_token, lead_org from accounts where id = app_account()')).rows[0]
-  const settings = (await db.query(
-    `select (crmlead_url is not null and crmlead_key_enc is not null) as crmlead,
-            (invoicelead_url is not null and invoicelead_key_enc is not null) as invoicelead
-       from account_settings where account_id = app_account()`)).rows[0] ?? { crmlead: false, invoicelead: false }
+  // Les applications Lead reliées sans clé : même entreprise dans le Compte Lead et application déjà utilisée (lib/links.ts).
+  const links = await linkState(db, ctx.accountId)
+  const settings = { crmlead: links.crmlead === 'linked', invoicelead: links.invoicelead === 'linked' }
   const unread = (await db.query('select count(*)::int as n from notifications where user_id = app_user() and read_at is null')).rows[0].n
   const running = (await db.query(
     `select t.id, t.started_at, t.project_id, p.name as project_name, t.task_id, k.title as task_title

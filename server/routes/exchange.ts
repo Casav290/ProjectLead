@@ -1,31 +1,45 @@
 import { Hono } from 'hono'
 import { anonTx } from '../db.js'
 import { createDefaultColumns } from '../lib/defaults.js'
-import { incomingSender } from '../lib/leadId.js'
+import { appUrl, checkEnvelope, incomingExchange, orgSenders, parseEnvelope, sameOrigin, type IncomingExchange } from '../lib/leadId.js'
 import { planOf } from '../lib/plans.js'
+import { receiveClient } from './exchangeClient.js'
 
 /**
- * L'échange de la famille Lead (crmlead/docs/LEAD-ID.md, étape 9). ProjectLead reçoit :
+ * L'échange de la famille Lead (crmlead/docs/LEAD-ID.md, étape 9 ; liaison sans clé du 26.10.2026). ProjectLead reçoit,
+ * de CRMlead seulement :
  * - `deal` : un lead gagné dans CRMlead, qui devient un projet (et son client) ;
- * - `contact` : une adresse, qui devient un client.
+ * - `client` : l'adresse et les contacts à jour d'un client déjà repris de CRMlead (routes/exchangeClient.ts).
  * Un même objet source donne toujours le même projet : un renvoi met à jour, sans doublon.
+ * Jeton d'échange d'ERPlead seulement (lib/leadId.ts incomingExchange), lié à l'organisation de l'enveloppe ; un ancien
+ * jeton sans org reste accepté tant que l'expéditeur n'est pas dans EXCHANGE_ORG_SENDERS (défaut : aucun).
  */
+const ALLOWED: Record<string, string[]> = { deal: ['crmlead'], client: ['crmlead'] }
 const app = new Hono()
 const base = () => (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
 
 app.get('/.well-known/lead-app.json', (c) => c.json({
   app: 'projectlead', name: 'ProjectLead',
-  exchange: { version: 1, inbox: `${base()}/api/lead-exchange/v1/inbox`, accepts: ['deal', 'contact'], sends: ['project'] },
+  exchange: { version: 1, inbox: `${base()}/api/lead-exchange/v1/inbox`, accepts: Object.keys(ALLOWED), sends: ['invoice'] },
 }))
 
 app.post('/api/lead-exchange/v1/inbox', async (c) => {
-  let from: string | null = null
-  try { from = await incomingSender(c.req.header('authorization')) } catch { from = null }
-  if (!from) return c.json({ error: 'invalid_token' }, 401)
-  const e = await c.req.json().catch(() => null) as any
-  if (!e?.type || !e?.org || !e?.source?.id) return c.json({ error: 'invalid_envelope' }, 400)
-  if (e.source.app !== from) return c.json({ error: 'source_mismatch' }, 403)
-  if (!['deal', 'contact'].includes(e.type)) return c.json({ error: 'unsupported_type', accepts: ['deal', 'contact'] }, 422)
+  let tok: IncomingExchange | null = null
+  try { tok = await incomingExchange(c.req.header('authorization'), 'exchange') } catch { tok = null }
+  if (!tok) return c.json({ error: 'invalid_token' }, 401)
+  const raw = await c.req.text().catch(() => '')
+  let parsed: unknown = null
+  try { parsed = raw.length <= 512_000 ? JSON.parse(raw) : null } catch { parsed = null }
+  const e = parseEnvelope(parsed) as any
+  if (!e) return c.json({ error: 'invalid_envelope' }, 400)
+  const refused = checkEnvelope(tok, e, ALLOWED, orgSenders(''))
+  if (refused) return c.json({ error: refused.error, ...(refused.error === 'unsupported_type' ? { accepts: Object.keys(ALLOWED) } : {}) }, refused.status)
+  const from = tok.app
+  // La personne du jeton (vérifiée par ERPlead, de cette organisation) passe avant celle annoncée dans l'enveloppe.
+  if (tok.person) e.sub = tok.person
+  // Une URL venue de CRMlead n'est gardée que si elle est chez CRMlead (lien de l'activité « depuis CRMlead »).
+  if (e.source.url && !sameOrigin(e.source.url, appUrl(from))) delete e.source.url
+  if (e.type === 'client') return receiveClient(c, from, e)
   const d = e.data ?? {}
 
   const out = await anonTx(async (db) => {

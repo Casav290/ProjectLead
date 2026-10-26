@@ -1,4 +1,4 @@
-import { anon, withTenant } from '../db.js'
+import { anon } from '../db.js'
 import { previousPeriod, runMonthly } from './billing.js'
 import { sendReport } from './clientReport.js'
 import { calendarsOnce } from './extcal.js'
@@ -7,6 +7,7 @@ import { localDay } from './time.js'
 import { entitlementsOf } from './leadId.js'
 import { leadIdOn } from './env.js'
 import { savePlan } from './plans.js'
+import { saveAppsUsed } from './links.js'
 import { reconcileSubscriptions, syncErplead } from './subscription.js'
 
 /**
@@ -59,13 +60,21 @@ async function dueReminders() {
                          and n.link = '/projets/' || t.project_id || '?tache=' || t.id and n.created_at::date = current_date)`)).rowCount ?? 0)
 }
 
-/** La facturation du mois écoulé, le jour choisi par l'entreprise, si elle l'a demandée. */
-async function monthlyBilling() {
+/**
+ * La facturation du mois écoulé, le jour choisi par l'entreprise, si elle l'a demandée. Sans clé (26.10.2026) : toute
+ * entreprise reliée au Compte Lead (`lead_org`) qui a coché « brouillons automatiques », quelle que soit sa formule ici
+ * ou chez InvoiceLead. Jeton d'échange SANS personne (personne n'est là) ; `sub` = le premier administrateur actif, que
+ * InvoiceLead peut reconnaître ; à défaut, il attribue le brouillon à son propre premier administrateur qui facture.
+ * Un refus `contact_limit` attend un geste de la personne : il n'est pas relancé chaque heure (lib/billing.ts).
+ */
+export async function monthlyBilling() {
+  if (!leadIdOn()) return 0
   const accounts = await anon(async (db) => (await db.query(
-    `select s.account_id, s.monthly_billing_day, a.timezone,
-            (select user_id from account_users where account_id = s.account_id and role = 'admin' and active order by joined_at limit 1) as admin_id
+    `select s.account_id, s.monthly_billing_day, a.timezone, a.lead_org, adm.user_id as admin_id, adm.lead_sub as admin_sub
        from account_settings s join accounts a on a.id = s.account_id
-      where s.monthly_billing_auto and s.invoicelead_url is not null and s.invoicelead_key_enc is not null`)).rows)
+       left join lateral (select au.user_id, u.lead_sub from account_users au join users u on u.id = au.user_id
+                           where au.account_id = s.account_id and au.role = 'admin' and au.active order by au.joined_at limit 1) adm on true
+      where s.monthly_billing_auto and a.lead_org is not null`)).rows)
   let created = 0
   for (const a of accounts) {
     const today = localDay(new Date(), a.timezone).date
@@ -74,11 +83,13 @@ async function monthlyBilling() {
     const pending = await anon(async (db) => (await db.query(
       `select count(*)::int as n from projects p where p.account_id = $1 and p.billing_mode <> 'none' and not p.is_template and p.archived_at is null
           and p.status not in ('cancelled','lead')
-          and not exists (select 1 from invoice_runs r where r.project_id = p.id and r.period = $2 and r.status in ('created','empty'))`,
+          and not exists (select 1 from invoice_runs r where r.project_id = p.id and r.period = $2
+                           and (r.status in ('created','empty') or (r.status = 'error' and r.error_code = 'contact_limit')))`,
       [a.account_id, period])).rows[0].n)
     if (!pending) continue
     try {
-      const r = await withTenant({ accountId: a.account_id, userId: a.admin_id, role: 'admin' }, (db) => runMonthly(db, null, period))
+      const r = await runMonthly({ accountId: a.account_id, userId: a.admin_id, role: 'admin' }, null, period,
+        { org: a.lead_org, sub: a.admin_sub, personProof: null, auto: true })
       created += r.filter((x) => x.status === 'created').length
     } catch (e: any) {
       console.error('[facturation mensuelle]', a.account_id, e?.code ?? e?.message)
@@ -117,6 +128,8 @@ export async function refreshLeadPlans() {
     try { rights = await entitlementsOf({ org: a.lead_org }) } catch { continue }
     checked++
     await anon((db) => savePlan(db, a.id, rights))
+    // Et les applications Lead que l'entreprise utilise (« Reliée » / « Pas encore utilisée », lib/links.ts).
+    await saveAppsUsed(a.id, rights, a.lead_org).catch(() => {})
   }
   return { checked }
 }

@@ -1,10 +1,13 @@
 import { z } from 'zod'
-import { crmleadConfig, getLead, searchLeads, upsertClientFromLead } from '../lib/crmlead.js'
-import { invoiceleadConfig, searchContacts, upsertClientFromContact } from '../lib/invoicelead.js'
-import { body, email, HttpError, notFound, router, setClause, tx } from '../lib/http.js'
+import type { Context } from 'hono'
+import { getLead, searchLeads, upsertClientFromLead, type Reader } from '../lib/crmlead.js'
+import { searchContacts, upsertClientFromContact } from '../lib/invoicelead.js'
+import { body, email, HttpError, notFound, router, setClause, tx, type Env } from '../lib/http.js'
+import { leadOrgOf } from '../lib/links.js'
+import { personProof } from '../lib/personProof.js'
 import { EMAIL_VISIBLE } from './mail.js'
 
-/** Les clients et leurs adresses ; CRMlead en est la source quand il est branché. */
+/** Les clients et leurs adresses ; CRMlead en est la source quand l'entreprise l'utilise (relié sans clé). */
 const app = router()
 
 const clientSchema = z.object({
@@ -102,64 +105,78 @@ app.delete('/contacts/:cid', async (c) => {
 
 // ------------------------------------------------------------------ CRMlead
 
+/**
+ * Qui lit chez l'application sœur : l'organisation ERPlead de l'entreprise et la preuve de la personne connectée
+ * (lib/personProof.ts). Les lectures se font avec SES droits là-bas, HORS transaction (aucun appel HTTP dans une
+ * transaction de la base).
+ */
+async function reader(c: Context<Env>): Promise<Reader> {
+  const org = await tx(c, (db, ctx) => leadOrgOf(db, ctx.accountId))
+  return { org, personProof: await personProof(c) }
+}
+/** La lecture, avec ce qu'il faut à l'écran pour dire un refus `person_proof` (l'adresse et l'entreprise d'ici). */
+async function withReader<T>(c: Context<Env>, fn: (who: Reader) => Promise<T>): Promise<T> {
+  const who = await reader(c)
+  try { return await fn(who) } catch (e) {
+    if (e instanceof HttpError && e.code === 'person_proof') {
+      const company = await tx(c, async (db) => (await db.query('select name from accounts where id = app_account()')).rows[0]?.name)
+      e.extra = { ...e.extra, email: c.get('email'), company }
+    }
+    throw e
+  }
+}
+
 /** Cherche une entreprise dans CRMlead (ses leads), pour en reprendre l'adresse. */
-app.get('/crmlead/search', async (c) => tx(c, async (db) => {
-  const cfg = await crmleadConfig(db)
-  if (!cfg) throw new HttpError(400, 'crmlead_not_configured')
-  const leads = await searchLeads(cfg, (c.req.query('q') ?? '').slice(0, 100))
-  const known = new Set((await db.query(`select external_ref from clients where external_ref like 'crmlead:%'`)).rows.map((r) => r.external_ref))
+app.get('/crmlead/search', async (c) => {
+  const leads = await withReader(c, (who) => searchLeads(who, (c.req.query('q') ?? '').slice(0, 100)))
+  const known = await tx(c, async (db) =>
+    new Set((await db.query(`select external_ref from clients where external_ref like 'crmlead:%'`)).rows.map((r) => r.external_ref)))
   return c.json(leads.map((l) => ({
     id: l.id, title: l.title, company: l.company, address: l.company_address, status: l.status,
     imported: known.has(`crmlead:${l.id}`),
   })))
-}))
+})
 
+/** Reprend un lead : CRMlead le suit ensuite (`link=1`) et enverra ses changements d'adresse et de contacts. */
 app.post('/crmlead/import', async (c) => {
   const b = await body(c, z.object({ leadId: z.string().min(1).max(100) }))
-  const id = await tx(c, async (db, ctx) => {
-    const cfg = await crmleadConfig(db)
-    if (!cfg) throw new HttpError(400, 'crmlead_not_configured')
-    return upsertClientFromLead(db, ctx.accountId, await getLead(cfg, b.leadId))
-  })
+  const lead = await withReader(c, (who) => getLead(who, b.leadId, { link: true }))
+  const id = await tx(c, (db, ctx) => upsertClientFromLead(db, ctx.accountId, lead))
   return c.json({ id }, 201)
 })
 
-/** Relit dans CRMlead l'adresse et les contacts d'un client déjà repris. */
-app.post('/:id/crmlead/refresh', async (c) => tx(c, async (db, ctx) => {
-  const cl = (await db.query('select external_ref from clients where id = $1', [c.req.param('id')])).rows[0]
-  if (!cl?.external_ref?.startsWith('crmlead:')) throw new HttpError(400, 'not_from_crmlead')
-  const cfg = await crmleadConfig(db)
-  if (!cfg) throw new HttpError(400, 'crmlead_not_configured')
-  await upsertClientFromLead(db, ctx.accountId, await getLead(cfg, cl.external_ref.slice(8)))
+/** « Mettre à jour depuis CRMlead » : relit l'adresse et les contacts d'un client déjà repris, avec la personne. */
+app.post('/:id/crmlead/refresh', async (c) => {
+  const cl = await tx(c, async (db) => (await db.query('select external_ref from clients where id = $1', [c.req.param('id')])).rows[0])
+  if (!cl) throw notFound()
+  if (!cl.external_ref?.startsWith('crmlead:')) throw new HttpError(400, 'not_from_crmlead')
+  const lead = await withReader(c, (who) => getLead(who, cl.external_ref.slice(8)))
+  await tx(c, (db, ctx) => upsertClientFromLead(db, ctx.accountId, lead))
   return c.json({ ok: true })
-}))
+})
 
 // ------------------------------------------------------------------ InvoiceLead
 
 /** Cherche dans le carnet de contacts d'InvoiceLead (les clients), pour les reprendre ici. */
-app.get('/invoicelead/search', async (c) => tx(c, async (db) => {
-  const cfg = await invoiceleadConfig(db)
-  if (!cfg) throw new HttpError(400, 'invoicelead_not_configured')
-  const list = await searchContacts(cfg, c.req.query('q') ?? '')
-  const known = new Set((await db.query('select invoicelead_contact_id from clients where invoicelead_contact_id is not null'))
-    .rows.map((r) => r.invoicelead_contact_id))
+app.get('/invoicelead/search', async (c) => {
+  const list = await withReader(c, (who) => searchContacts(who, c.req.query('q') ?? ''))
+  const known = await tx(c, async (db) => new Set((await db.query('select invoicelead_contact_id from clients where invoicelead_contact_id is not null'))
+    .rows.map((r) => r.invoicelead_contact_id)))
   return c.json(list.map((x) => ({
     id: String(x.id), name: x.name, email: x.email ?? null,
     address: [[x.street, x.buildingNumber].filter(Boolean).join(' '), [x.postalCode, x.town].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null,
     imported: known.has(String(x.id)),
   })))
-}))
+})
 
-/** Reprend un contact (`contactId`) ou tout le carnet (`all`) d'InvoiceLead. */
+/** Reprend un contact (`contactId`) ou tout ce que la recherche montre (`all`, 20 au plus) d'InvoiceLead. */
 app.post('/invoicelead/import', async (c) => {
-  const b = await body(c, z.object({ contactId: z.string().min(1).max(100).optional(), all: z.boolean().optional() })
+  const b = await body(c, z.object({ contactId: z.string().min(1).max(100).optional(), all: z.boolean().optional(), q: z.string().max(100).optional() })
     .refine((x) => x.contactId || x.all))
+  const list = await withReader(c, (who) => searchContacts(who, b.q ?? ''))
+  const pick = b.all ? list : list.filter((x) => String(x.id) === b.contactId)
+  if (!pick.length) throw notFound()
   const ids = await tx(c, async (db, ctx) => {
-    const cfg = await invoiceleadConfig(db)
-    if (!cfg) throw new HttpError(400, 'invoicelead_not_configured')
-    const list = await searchContacts(cfg, '')
-    const pick = b.all ? list : list.filter((x) => String(x.id) === b.contactId)
-    if (!pick.length) throw notFound()
     const out: string[] = []
     for (const ct of pick) out.push(await upsertClientFromContact(db, ctx.accountId, ct))
     return out

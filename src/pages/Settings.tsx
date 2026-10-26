@@ -24,7 +24,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: 'Entreprise', items: [
     { to: 'entreprise', label: 'Entreprise', hint: 'Nom, fuseau, devise, signature', admin: true },
     { to: 'equipe', label: 'Équipe', hint: 'Membres, invitations, équipes' },
-    { to: 'integrations', label: 'Intégrations', hint: 'CRMlead, InvoiceLead, Compte Lead', admin: true },
+    { to: 'integrations', label: 'Applications Lead', hint: 'CRMlead, InvoiceLead', admin: true },
   ] },
   { title: 'Travail', items: [
     { to: 'rendez-vous', label: 'Rendez-vous', hint: 'Pages de prise de rendez-vous' },

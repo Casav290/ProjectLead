@@ -136,8 +136,8 @@ export function PlanCard() {
         {error && <p className="text-late">{error}</p>}
 
         <p className="text-xs text-muted-foreground">Les demandes à qualifier, les projets terminés, archivés et les modèles ne comptent pas.
-          Votre formule ProjectLead se prend ici et ne vaut que pour ProjectLead. Les brouillons de facture dans InvoiceLead demandent
-          une clé d'API InvoiceLead, comprise dans la formule Pro+ d'InvoiceLead (prise dans InvoiceLead).</p>
+          Votre formule ProjectLead se prend ici et ne vaut que pour ProjectLead. Les brouillons de factures dans InvoiceLead se
+          créent sans clé, dans toutes les formules.</p>
         <p className="text-xs text-muted-foreground">Prix hors taxes, en euros. Paiement sécurisé par Stripe. L'abonnement se renouvelle
           automatiquement ; résiliable à tout moment dans « Gérer l'abonnement », effectif à la fin de la période payée.</p>
       </div>

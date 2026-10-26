@@ -6,6 +6,7 @@ import { api, errorText } from '../lib/api'
 import { fmtDate, fmtRelative } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
 import type { Client, ClientContact } from '../lib/types'
+import { appOrigin, OpenApp } from '../components/LeadLinks'
 
 type ClientProject = { id: string; name: string; code: string | null; status: string; health: string; due_date: string | null; color: string }
 type ClientEmail = { id: string; subject: string; from_email: string; direction: 'in' | 'out'; received_at: string; project_id: string | null }
@@ -17,7 +18,6 @@ export default function ClientDetail() {
   const nav = useNavigate()
   const { me } = useApp()
   const { data: c, error, loading, reload } = useLoad<ClientFull>(`/clients/${id}`, [id])
-  const { data: links } = useLoad<{ invoicelead_url: string | null }>(c?.invoicelead_contact_id ? '/integrations' : null, [c?.invoicelead_contact_id])
   const [editing, setEditing] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [archiving, setArchiving] = useState(false)
@@ -43,8 +43,10 @@ export default function ClientDetail() {
           {fromCrm && <Badge tone="info">CRMlead</Badge>}{c.archived_at && <Badge>Archivé</Badge>}</span>}
         subtitle={[c.kind === 'company' ? 'Société' : 'Personne', addressLine(c)].filter(Boolean).join(' · ')}
         actions={<>
-          {fromCrm && <Button onClick={refreshFromCrm} disabled={refreshing || !me?.features.crmlead}
-            title={me?.features.crmlead ? undefined : "CRMlead n'est plus branché"}>{refreshing ? 'Mise à jour…' : 'Mettre à jour depuis CRMlead'}</Button>}
+          {fromCrm && (me?.features.crmlead
+            ? <Button onClick={refreshFromCrm} disabled={refreshing}>{refreshing ? 'Mise à jour…' : 'Mettre à jour depuis CRMlead'}</Button>
+            : <span className="inline-flex flex-wrap items-center gap-2 text-sm" data-link-state="not_used">CRMlead : pas encore utilisée par votre entreprise.
+                <OpenApp app="crmlead" /></span>)}
           {c.archived_at
             ? <Button onClick={() => setArchived(false)}>Réactiver</Button>
             : <Button variant="danger" onClick={() => setArchiving(true)}>Archiver</Button>}
@@ -71,10 +73,9 @@ export default function ClientDetail() {
             {(fromCrm || c.invoicelead_contact_id) && (
               <div className="space-y-1 border-t border-border px-4 py-3 text-xs text-muted-foreground">
                 {fromCrm && <p>Adresse reprise de CRMlead : « Mettre à jour depuis CRMlead » relit l'adresse et les contacts.</p>}
-                {c.invoicelead_contact_id && (links?.invoicelead_url
-                  ? <a className="font-bold text-accent hover:text-accent-dark" target="_blank" rel="noreferrer"
-                       href={`${links.invoicelead_url}/fr/app/contacts/${c.invoicelead_contact_id}`}>Contact InvoiceLead lié ↗</a>
-                  : <p>Contact InvoiceLead lié.</p>)}
+                {c.invoicelead_contact_id && (
+                  <a className="font-bold text-accent hover:text-accent-dark" target="_blank" rel="noreferrer"
+                     href={`${appOrigin('invoicelead')}/fr/app/contacts/${encodeURIComponent(c.invoicelead_contact_id)}`}>Contact InvoiceLead lié ↗</a>)}
               </div>
             )}
           </Card>

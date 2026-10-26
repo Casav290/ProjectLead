@@ -1,50 +1,59 @@
 import type { Db } from '../db.js'
 import { HttpError } from './http.js'
-import { open } from './mailbox/secret.js'
-import { outboundUrlProblem } from './netguard.js'
+import { appUrl, ExchangeError, readExchange } from './leadId.js'
 
 /**
- * CRMlead, le carnet d'adresses de la famille. ProjectLead ne garde pas sa propre saisie des
- * clients quand CRMlead est branché : il y cherche l'entreprise et ses contacts (API REST v1,
- * clé `crm_…` créée dans CRMlead → Intégrations) et les reprend, liés par `crmlead:<id>`.
+ * CRMlead, le carnet d'adresses de la famille. ProjectLead ne garde pas sa propre saisie des clients quand
+ * l'entreprise utilise CRMlead : il y cherche l'entreprise et ses contacts et les reprend, liés par `crmlead:<id>`.
+ *
+ * Sans clé (26.10.2026) : lecture `GET {crmlead}/api/lead-exchange/v1/read?type=lead` avec un jeton d'échange
+ * d'ERPlead lié à l'entreprise ET à la personne connectée (sa preuve, lib/personProof.ts). CRMlead répond avec SES
+ * droits (un vendeur ne voit que ce qu'il voit dans CRMlead). `link=1` à l'import : CRMlead suit ce lead et enverra
+ * ensuite ses changements d'adresse et de contacts (enveloppe `client`, routes/exchange.ts).
  */
 
 export type CrmLead = {
   id: string; title: string; company: string | null; company_address: string | null; company_country: string | null
   status: string; amount: number | null; currency: string | null; description: string | null
-  contacts?: { id: string; first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
+  contacts?: { id?: string; first_name: string | null; last_name: string | null; email: string | null; phone: string | null;
                job_title: string | null; is_primary: boolean }[]
 }
 
-export async function crmleadConfig(db: Db) {
-  const s = (await db.query('select crmlead_url, crmlead_key_enc from account_settings where account_id = app_account()')).rows[0]
-  if (!s?.crmlead_url || !s?.crmlead_key_enc) return null
-  return { url: String(s.crmlead_url).replace(/\/+$/, ''), key: open<string>(s.crmlead_key_enc) }
-}
+export type Reader = { org: string; personProof: string }
 
-export async function crmFetch(cfg: { url: string; key: string }, path: string) {
-  if (outboundUrlProblem(cfg.url)) throw new HttpError(400, 'crmlead_url_invalid')
-  let r: Response
-  try {
-    r = await fetch(`${cfg.url}/api/v1${path}`, {
-      headers: { Authorization: `Bearer ${cfg.key}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15_000),
-    })
-  } catch {
-    throw new HttpError(502, 'crmlead_unreachable')
+/** Les refus de CRMlead et d'ERPlead, dits à l'écran (src/lib/api.ts). */
+export function exchangeFailure(e: unknown, app: 'crmlead' | 'invoicelead'): never {
+  if (e instanceof ExchangeError) {
+    const b = e.body ?? {}
+    if (e.status === 503) throw new HttpError(502, `${app}_unreachable`)
+    // L'entreprise n'a pas encore ouvert l'application (compte inconnu chez elle) : « pas encore utilisée ».
+    if (e.status === 404 && (b.error === 'unknown_org' || b.error === 'not_found' || !b.error)) throw new HttpError(404, `${app}_not_used`)
+    if (b.error === 'person_not_member') throw new HttpError(403, 'person_not_member', { app, reason: b.reason ?? 'not_opened', ...(b.admin ? { admin: b.admin } : {}) })
+    if (b.error === 'person_proof') throw new HttpError(403, 'person_proof', { app, ...(b.person_org_name ? { person_org_name: b.person_org_name } : {}) })
+    if (b.error === 'person_not_allowed') throw new HttpError(403, 'person_not_allowed', { app, ...(b.admin ? { admin: b.admin } : {}) })
+    if (e.status === 404) throw new HttpError(404, 'not_found')
+    throw new HttpError(502, `${app}_error`, { status: e.status, detail: b.error ?? null })
   }
-  if (r.status === 401) throw new HttpError(502, 'crmlead_key_invalid')
-  if (r.status === 404) throw new HttpError(404, 'not_found')
-  if (!r.ok) throw new HttpError(502, 'crmlead_error', { status: r.status })
-  return r.json()
+  throw e
 }
 
-export async function searchLeads(cfg: { url: string; key: string }, q: string) {
-  const out = await crmFetch(cfg, `/leads?limit=20${q ? `&q=${encodeURIComponent(q)}` : ''}`)
-  return (out.data ?? []) as CrmLead[]
+const crmlead = () => ({ app: 'crmlead', url: appUrl('crmlead') })
+
+export async function searchLeads(who: Reader, q: string) {
+  try {
+    const out = await readExchange(crmlead(), { type: 'lead', q: q || undefined, limit: 20 }, who)
+    return (out.data ?? []) as CrmLead[]
+  } catch (e) { return exchangeFailure(e, 'crmlead') }
 }
 
-export const getLead = (cfg: { url: string; key: string }, id: string) =>
-  crmFetch(cfg, `/leads/${encodeURIComponent(id)}`) as Promise<CrmLead>
+/** Un lead par son id, avec la personne ; `link` : CRMlead le suit ensuite (import). 404 s'il n'est pas visible. */
+export async function getLead(who: Reader, id: string, o: { link?: boolean } = {}) {
+  let out: any
+  try { out = await readExchange(crmlead(), { type: 'lead', ids: [id], link: o.link }, who) } catch (e) { return exchangeFailure(e, 'crmlead') }
+  const lead = (out.data ?? []).find((l: CrmLead) => String(l.id) === id)
+  if (!lead) throw new HttpError(404, 'not_found')
+  return lead as CrmLead
+}
 
 /**
  * « Rue de Bourg 12, 1003 Lausanne » → rue, numéro, NPA, localité. L'adresse de CRMlead est

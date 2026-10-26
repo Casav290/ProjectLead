@@ -1,6 +1,7 @@
-import type { Ctx, Db } from '../db.js'
+import { withTenant, type Ctx, type Db } from '../db.js'
 import { HttpError } from './http.js'
-import { createDraftInvoice, ensureContact, invoiceleadConfig, type InvoiceLine } from './invoicelead.js'
+import { invoiceUrl, sendInvoiceDraft, type InvoiceLine } from './invoicelead.js'
+import { ExchangeError } from './leadId.js'
 
 /**
  * Facturation mensuelle vers InvoiceLead.
@@ -109,56 +110,112 @@ export async function billableProjects(db: Db) {
 }
 
 export type RunResult = { projectId: string; project: string; status: 'created' | 'empty' | 'error' | 'skipped'
-                          invoiceId?: string; invoiceUrl?: string; amountCents?: number; error?: string }
+                          invoiceId?: string; invoiceUrl?: string; amountCents?: number; error?: string
+                          detail?: Record<string, unknown> }
 
-/** Crée les brouillons du mois dans InvoiceLead. Idempotent : un mois déjà facturé est passé. */
-export async function runMonthly(db: Db, ctx: Ctx | null, period: string, projectIds?: string[]): Promise<RunResult[]> {
+/** Qui facture : l'organisation ERPlead, la personne (sa preuve) ou, pour la tâche mensuelle, personne (`sub` seul). */
+export type Biller = { org: string; personProof?: string | null; sub?: string | null; auto?: boolean }
+
+/**
+ * Crée les brouillons du mois dans InvoiceLead. Idempotent : un mois déjà facturé est passé ; deux envois identiques
+ * donnent un seul brouillon chez InvoiceLead (source.id run:<projet>:<mois>).
+ *
+ * Une COURTE transaction par projet, jamais d'appel HTTP dedans : (1) le brouillon est calculé, (2) l'enveloppe part
+ * (hors transaction), (3) le résultat est inscrit et le temps / les étapes envoyés sont marqués. Un échec sur le projet 2
+ * garde le projet 1. Refus d'InvoiceLead : 404 → invoicelead_not_used (rien de plus n'est tenté) ; 409 contact_limit →
+ * erreur `contact_limit`, que la tâche horaire ne relance pas (il faut un geste dans InvoiceLead) ; 409 already_issued →
+ * « créé » avec l'identifiant rendu ; 403 person_proof (Compte Lead d'une autre entreprise) → nouvel essai sans personne.
+ * Aucune formule n'est exigée, ni ici ni chez InvoiceLead.
+ */
+export async function runMonthly(ctx: Ctx, actorId: string | null, period: string, who: Biller, projectIds?: string[]): Promise<RunResult[]> {
   if (!/^\d{4}-\d{2}$/.test(period)) throw new HttpError(400, 'invalid_period')
-  const cfg = await invoiceleadConfig(db)
-  if (!cfg) throw new HttpError(400, 'invoicelead_not_configured')
-  const accountId = (await db.query('select app_account() as a')).rows[0].a
+  const t = <T>(fn: (db: Db) => Promise<T>) => withTenant(ctx, fn)
+  const ids = projectIds ?? await t(billableProjects)
+  const language = await t(async (db) => (await db.query('select invoice_language from account_settings where account_id = app_account()')).rows[0]?.invoice_language ?? 'fr')
   const out: RunResult[] = []
-  for (const id of projectIds ?? await billableProjects(db)) {
-    const d = await draftFor(db, id, period)
+  const record = (id: string, d: Draft, status: 'error' | 'empty', error: string | null, code: string | null) => t((db) => db.query(
+    `insert into invoice_runs (account_id, project_id, period, status, error, error_code, amount_cents, lines, created_by)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     on conflict (account_id, project_id, period) do update set status = excluded.status, error = excluded.error, error_code = excluded.error_code
+       where invoice_runs.status <> 'created'`,
+    [ctx.accountId, id, period, status, error, code, d.totalCents, JSON.stringify(d.lines), actorId]))
+
+  for (const id of ids) {
+    const d = await t(async (db) => {
+      const d = await draftFor(db, id, period)
+      const run = (await db.query('select status, error_code from invoice_runs where project_id = $1 and period = $2', [id, period])).rows[0]
+      return { ...d, errorCode: run?.error_code as string | null }
+    })
     if (d.existing?.status === 'created') { out.push({ projectId: id, project: d.project.name, status: 'skipped' }); continue }
+    // La tâche horaire ne relance pas un refus qui attend un geste de la personne (formule d'InvoiceLead pleine).
+    if (who.auto && d.existing?.status === 'error' && d.errorCode === 'contact_limit') {
+      out.push({ projectId: id, project: d.project.name, status: 'skipped', error: 'contact_limit' }); continue
+    }
     if (!d.lines.length) {
-      await db.query(
-        `insert into invoice_runs (account_id, project_id, period, status, created_by) values ($1,$2,$3,'empty',$4)
-         on conflict (account_id, project_id, period) do update set status = 'empty', error = null`,
-        [accountId, id, period, ctx?.userId ?? null])
+      await record(id, d, 'empty', null, null)
       out.push({ projectId: id, project: d.project.name, status: 'empty' })
       continue
     }
+    if (!d.client) {
+      await record(id, d, 'error', 'client_missing', 'client_missing')
+      out.push({ projectId: id, project: d.project.name, status: 'error', error: 'client_missing' })
+      continue
+    }
+    const draft = {
+      org: who.org, sub: who.sub, projectId: id, period, language, client: d.client,
+      title: `${d.project.code ? d.project.code + ' · ' : ''}${d.project.name} — ${periodLabel(period)}`,
+      intro: `Prestations du projet « ${d.project.name} », ${periodLabel(period)}.`,
+      serviceDate: periodEnd(period), currency: d.project.currency, vatCode: d.project.vat_code, lines: d.lines,
+    }
+    let inv: { id: string; url: string; totalCents: number; contactId: string | null } | null = null
+    let failure: { error: string; detail?: Record<string, unknown> } | null = null
+    // L'envoi, HORS transaction. Le contact retenu est gardé ensuite, dans la transaction courte.
+    const attempt = (personProof: string | null | undefined) => sendInvoiceDraft({ ...draft, personProof })
     try {
-      if (!d.client) throw new Error('client_missing')
-      const contactId = await ensureContact(db, cfg, d.client)
-      const inv = await createDraftInvoice(cfg, {
-        contactId, title: `${d.project.code ? d.project.code + ' · ' : ''}${d.project.name} — ${periodLabel(period)}`,
-        intro: `Prestations du projet « ${d.project.name} », ${periodLabel(period)}.`,
-        serviceDate: periodEnd(period), currency: d.project.currency, vatCode: d.project.vat_code, lines: d.lines,
-      })
+      try { inv = await attempt(who.personProof) } catch (e) {
+        // Compte Lead de la personne dans une autre entreprise : le brouillon part quand même, sans elle (attribué
+        // par InvoiceLead à son premier administrateur qui facture, et journalisé chez lui).
+        if (e instanceof ExchangeError && e.status === 403 && e.body?.error === 'person_proof' && who.personProof) inv = await attempt(null)
+        else throw e
+      }
+    } catch (e) {
+      if (e instanceof ExchangeError) {
+        const b = e.body ?? {}
+        if (e.status === 404) throw new HttpError(404, 'invoicelead_not_used')
+        if (e.status === 409 && b.error === 'already_issued' && b.id) {
+          inv = { id: String(b.id), url: '', totalCents: d.totalCents, contactId: null }
+        } else if (e.status === 409 && b.error === 'contact_limit') {
+          failure = { error: 'contact_limit', detail: { limit: b.limit ?? null, count: b.count ?? null, plan: b.plan ?? null } }
+        } else if (e.status === 503) failure = { error: 'invoicelead_unreachable' }
+        else if (e.status === 403 && b.error) failure = { error: String(b.error), detail: b.admin ? { admin: b.admin } : undefined }
+        else failure = { error: String(b.error ?? `invoicelead_${e.status}`).slice(0, 100) }
+      } else failure = { error: String((e as Error)?.message ?? e).slice(0, 300) }
+    }
+    if (!inv) {
+      await record(id, d, 'error', failure!.error, failure!.error)
+      out.push({ projectId: id, project: d.project.name, status: 'error', error: failure!.error, ...(failure!.detail ? { detail: failure!.detail } : {}) })
+      continue
+    }
+    const sent = inv
+    const url = sent.url || invoiceUrl(sent.id, language)
+    await t(async (db) => {
+      if (sent.contactId && sent.contactId !== d.client.invoicelead_contact_id)
+        await db.query('update clients set invoicelead_contact_id = $1 where id = $2', [sent.contactId, d.client.id])
+      // Seulement le temps et les étapes envoyés, encore non facturés (une saisie arrivée entre-temps attend le mois suivant).
       if (d.timeEntryIds.length)
-        await db.query('update time_entries set invoiced_at = now(), invoice_ref = $2 where id = any($1)', [d.timeEntryIds, inv.id])
+        await db.query('update time_entries set invoiced_at = now(), invoice_ref = $2 where id = any($1) and invoiced_at is null', [d.timeEntryIds, sent.id])
       if (d.stageIds.length)
-        await db.query('update stages set invoiced_at = now(), invoice_ref = $2 where id = any($1)', [d.stageIds, inv.id])
+        await db.query('update stages set invoiced_at = now(), invoice_ref = $2 where id = any($1) and invoiced_at is null', [d.stageIds, sent.id])
       await db.query(
         `insert into invoice_runs (account_id, project_id, period, status, invoice_id, invoice_url, amount_cents, lines, created_by)
          values ($1,$2,$3,'created',$4,$5,$6,$7,$8)
          on conflict (account_id, project_id, period) do update set status = 'created', invoice_id = excluded.invoice_id,
-           invoice_url = excluded.invoice_url, amount_cents = excluded.amount_cents, lines = excluded.lines, error = null`,
-        [accountId, id, period, inv.id, inv.url, d.totalCents, JSON.stringify(d.lines), ctx?.userId ?? null])
+           invoice_url = excluded.invoice_url, amount_cents = excluded.amount_cents, lines = excluded.lines, error = null, error_code = null`,
+        [ctx.accountId, id, period, sent.id, url, d.totalCents, JSON.stringify(d.lines), actorId])
       await db.query(`insert into activities (account_id, project_id, actor_id, kind, data) values ($1,$2,$3,'invoice_created',$4)`,
-        [accountId, id, ctx?.userId ?? null, JSON.stringify({ period, invoice_id: inv.id, amount_cents: d.totalCents })])
-      out.push({ projectId: id, project: d.project.name, status: 'created', invoiceId: inv.id, invoiceUrl: inv.url, amountCents: d.totalCents })
-    } catch (e: any) {
-      const error = e instanceof HttpError ? e.code : String(e?.message ?? e).slice(0, 300)
-      await db.query(
-        `insert into invoice_runs (account_id, project_id, period, status, error, amount_cents, lines, created_by)
-         values ($1,$2,$3,'error',$4,$5,$6,$7)
-         on conflict (account_id, project_id, period) do update set status = 'error', error = excluded.error`,
-        [accountId, id, period, error, d.totalCents, JSON.stringify(d.lines), ctx?.userId ?? null])
-      out.push({ projectId: id, project: d.project.name, status: 'error', error })
-    }
+        [ctx.accountId, id, actorId, JSON.stringify({ period, invoice_id: sent.id, amount_cents: d.totalCents })])
+    })
+    out.push({ projectId: id, project: d.project.name, status: 'created', invoiceId: sent.id, invoiceUrl: url, amountCents: d.totalCents })
   }
   return out
 }

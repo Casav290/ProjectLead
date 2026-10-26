@@ -24,7 +24,7 @@ Le contenu des données (titres, descriptions, commentaires, emails, notes, noms
 - /emails Boîtes mail branchées : un email peut ouvrir un projet, rejoindre un projet ou devenir une tâche.
 - /agenda Rendez-vous et échéances. /temps Chronomètre, saisie et feuille de temps de la semaine. /charge Charge de travail par personne. /rapports Rapports de temps et rentabilité.
 - /clients et /clients/<id> Clients et contacts (CRMlead peut en être la source). /facturation Brouillons mensuels dans InvoiceLead (rien n'est émis depuis ProjectLead).
-- /reglages : profil, entreprise (formule, abonnement : administrateurs), equipe (membres, invitations, équipes), emails, agendas, rendez-vous, formulaires, automatisations, integrations (CRMlead, InvoiceLead), api.
+- /reglages : profil, entreprise (formule, abonnement : administrateurs), equipe (membres, invitations, équipes), emails, agendas, rendez-vous, formulaires, automatisations, integrations (« Applications Lead » : CRMlead et InvoiceLead, reliées toutes seules par le Compte Lead, sans clé), api (clés pour les outils extérieurs seulement).
 - Rôles : administrateur, responsable (manager), membre. Un projet « réservé aux intervenants » n'est visible que de ses intervenants, des responsables et des administrateurs. Un observateur ne modifie pas le projet.
 - Unités : durées en minutes entières dans les outils (1 h = 60), montants en centimes, dates AAAA-MM-JJ.
 

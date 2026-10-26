@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ClientFields, draftToBody, emptyClient, isFromCrmlead, type ClientDraft } from '../components/clients/ClientFields'
-import { Badge, Button, ButtonLink, Empty, ErrorNote, Input, Modal, PageHeader, Spinner, TableStack, Tabs, toast } from '../components/ui'
+import { Badge, Button, Empty, ErrorNote, Input, Modal, PageHeader, Spinner, TableStack, Tabs, toast } from '../components/ui'
+import { NotUsed } from '../components/LeadLinks'
 import { api, ApiError } from '../lib/api'
 import { useApp, useLoad } from '../lib/store'
 import type { Client } from '../lib/types'
@@ -13,8 +14,19 @@ export default function Clients() {
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<'active' | 'archived'>('active')
   const [creating, setCreating] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [ilImporting, setIlImporting] = useState(false)
+  // Le dialogue d'import et sa recherche vivent dans l'adresse (?importer=crmlead&iq=…) : une reconnexion silencieuse au
+  // Compte Lead (lead_reauth, src/lib/api.ts) ramène exactement ici, dialogue ouvert, recherche relancée.
+  const [params, setParams] = useSearchParams()
+  const importer = params.get('importer')
+  const importQ = params.get('iq') ?? ''
+  const openImport = (app: 'crmlead' | 'invoicelead' | null, iq = '') => setParams((p) => {
+    const n = new URLSearchParams(p)
+    if (app) n.set('importer', app); else n.delete('importer')
+    if (app && iq) n.set('iq', iq); else n.delete('iq')
+    return n
+  }, { replace: true })
+  const setImporting = (v: boolean) => openImport(v ? 'crmlead' : null)
+  const setIlImporting = (v: boolean) => openImport(v ? 'invoicelead' : null)
 
   // La recherche part une fois la frappe posée.
   useEffect(() => { const t = setTimeout(() => setQuery(q.trim()), 250); return () => clearTimeout(t) }, [q])
@@ -86,8 +98,10 @@ export default function Clients() {
       )}
 
       <NewClientDialog open={creating} onClose={() => setCreating(false)} />
-      <CrmleadImportDialog open={importing} onClose={() => { setImporting(false); reload() }} connected={Boolean(me?.features.crmlead)} />
-      <InvoiceleadImportDialog open={ilImporting} onClose={() => { setIlImporting(false); reload() }} connected={Boolean(me?.features.invoicelead)} />
+      <CrmleadImportDialog open={importer === 'crmlead'} onClose={() => { setImporting(false); reload() }} connected={Boolean(me?.features.crmlead)}
+        initialQ={importQ} onQuery={(v) => openImport('crmlead', v)} />
+      <InvoiceleadImportDialog open={importer === 'invoicelead'} onClose={() => { setIlImporting(false); reload() }} connected={Boolean(me?.features.invoicelead)}
+        initialQ={importQ} onQuery={(v) => openImport('invoicelead', v)} />
     </>
   )
 }
@@ -127,8 +141,9 @@ type CrmResult = { id: string; title: string; company: string | null; address: s
 
 const LEAD_STATUS: Record<string, string> = { new: 'Nouveau', open: 'En cours', won: 'Gagné', lost: 'Perdu' }
 
-function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onClose: () => void; connected: boolean }) {
-  const { me } = useApp()
+type ImportProps = { open: boolean; onClose: () => void; connected: boolean; initialQ: string; onQuery: (q: string) => void }
+
+function CrmleadImportDialog({ open, onClose, connected, initialQ, onQuery }: ImportProps) {
   const nav = useNavigate()
   const [q, setQ] = useState('')
   const [results, setResults] = useState<CrmResult[] | null>(null)
@@ -137,18 +152,25 @@ function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onCl
   const [error, setError] = useState<unknown>(null)
   const [notConnected, setNotConnected] = useState(!connected)
 
-  useEffect(() => { if (open) { setQ(''); setResults(null); setError(null); setNotConnected(!connected) } }, [open, connected])
-
-  const search = async (e?: FormEvent) => {
+  const search = async (e?: FormEvent, text = q) => {
     e?.preventDefault()
     setBusy(true); setError(null)
+    onQuery(text.trim())
     try {
-      setResults(await api.get<CrmResult[]>(`/clients/crmlead/search?q=${encodeURIComponent(q.trim())}`))
+      setResults(await api.get<CrmResult[]>(`/clients/crmlead/search?q=${encodeURIComponent(text.trim())}`))
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'crmlead_not_configured') setNotConnected(true)
+      if (err instanceof ApiError && err.code === 'crmlead_not_used') setNotConnected(true)
       else setError(err)
     } finally { setBusy(false) }
   }
+
+  useEffect(() => {
+    if (!open) return
+    setQ(initialQ); setResults(null); setError(null); setNotConnected(!connected)
+    // Retour d'une reconnexion silencieuse : la recherche d'avant est relancée.
+    if (connected && initialQ) search(undefined, initialQ)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, connected])
 
   const take = async (r: CrmResult) => {
     setTaking(r.id)
@@ -164,11 +186,9 @@ function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onCl
     <Modal open={open} onClose={onClose} title="Importer depuis CRMlead" wide>
       {notConnected ? (
         <div className="space-y-3 text-sm">
-          <p>CRMlead n'est pas encore branché à ProjectLead. Une fois relié, vous retrouvez ici les entreprises de vos leads
-             et reprenez leur adresse et leurs contacts en un clic, sans rien ressaisir.</p>
-          {me?.user.role === 'admin'
-            ? <ButtonLink to="/reglages/integrations" variant="primary">Brancher CRMlead</ButtonLink>
-            : <p className="text-muted-foreground">Demandez à un administrateur de le brancher dans Réglages → Intégrations.</p>}
+          <NotUsed app="crmlead" />
+          <p className="text-muted-foreground">Ensuite, vous retrouvez ici les entreprises de vos leads et reprenez leur adresse et leurs
+            contacts en un clic, sans rien ressaisir.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -218,8 +238,7 @@ function CrmleadImportDialog({ open, onClose, connected }: { open: boolean; onCl
 type IlResult = { id: string; name: string; email: string | null; address: string | null; imported: boolean }
 
 /** Le carnet de contacts d'InvoiceLead : un contact, ou tous d'un coup. */
-function InvoiceleadImportDialog({ open, onClose, connected }: { open: boolean; onClose: () => void; connected: boolean }) {
-  const { me } = useApp()
+function InvoiceleadImportDialog({ open, onClose, connected, initialQ, onQuery }: ImportProps) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<IlResult[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -227,28 +246,32 @@ function InvoiceleadImportDialog({ open, onClose, connected }: { open: boolean; 
   const [error, setError] = useState<unknown>(null)
   const [notConnected, setNotConnected] = useState(!connected)
 
-  const search = async (e?: FormEvent) => {
+  const [searched, setSearched] = useState('')
+  const search = async (e?: FormEvent, text = q) => {
     e?.preventDefault()
     setBusy(true); setError(null)
+    onQuery(text.trim())
     try {
-      setResults(await api.get<IlResult[]>(`/clients/invoicelead/search?q=${encodeURIComponent(q.trim())}`))
+      setResults(await api.get<IlResult[]>(`/clients/invoicelead/search?q=${encodeURIComponent(text.trim())}`))
+      setSearched(text.trim())
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'invoicelead_not_configured') setNotConnected(true)
+      if (err instanceof ApiError && err.code === 'invoicelead_not_used') setNotConnected(true)
       else setError(err)
     } finally { setBusy(false) }
   }
 
   useEffect(() => {
     if (!open) return
-    setQ(''); setResults(null); setError(null); setNotConnected(!connected)
-    if (connected) search()
+    setQ(initialQ); setResults(null); setError(null); setNotConnected(!connected)
+    if (connected) search(undefined, initialQ)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, connected])
 
   const take = async (r: IlResult | null) => {
     setTaking(r?.id ?? 'all')
     try {
-      const { count } = await api.post<{ id: string; count: number }>('/clients/invoicelead/import', r ? { contactId: r.id } : { all: true })
+      const { count } = await api.post<{ id: string; count: number }>('/clients/invoicelead/import',
+        r ? { contactId: r.id, q: searched } : { all: true, q: searched })
       toast(r ? `${r.name} repris d'InvoiceLead` : `${count} client${count > 1 ? 's' : ''} repris d'InvoiceLead`)
       setResults((x) => x?.map((y) => (!r || y.id === r.id ? { ...y, imported: true } : y)) ?? null)
     } catch (err) { setError(err) } finally { setTaking(null) }
@@ -258,11 +281,9 @@ function InvoiceleadImportDialog({ open, onClose, connected }: { open: boolean; 
     <Modal open={open} onClose={onClose} title="Importer depuis InvoiceLead" wide>
       {notConnected ? (
         <div className="space-y-3 text-sm">
-          <p>InvoiceLead n'est pas encore branché à ProjectLead. Une fois relié avec une clé d'API, vous retrouvez ici vos
-             contacts InvoiceLead et les reprenez comme clients, sans rien ressaisir.</p>
-          {me?.user.role === 'admin'
-            ? <ButtonLink to="/reglages/integrations" variant="primary">Brancher InvoiceLead</ButtonLink>
-            : <p className="text-muted-foreground">Demandez à un administrateur de le brancher dans Réglages → Intégrations.</p>}
+          <NotUsed app="invoicelead" />
+          <p className="text-muted-foreground">Ensuite, vous retrouvez ici vos contacts InvoiceLead et les reprenez comme clients, sans
+            rien ressaisir.</p>
         </div>
       ) : (
         <div className="space-y-4">

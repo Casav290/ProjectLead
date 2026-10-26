@@ -1,8 +1,9 @@
 import clsx from 'clsx'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Badge, Button, ButtonLink, Card, Empty, ErrorNote, PageHeader, Select, Spinner, TableStack, toast } from '../components/ui'
-import { api, errorText } from '../lib/api'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Select, Spinner, TableStack, toast } from '../components/ui'
+import { api, errorText, linkErrorText } from '../lib/api'
+import { NotUsed } from '../components/LeadLinks'
 import { BILLING_LABEL, fmtDateTime, money } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
 
@@ -16,7 +17,7 @@ type PreviewProject = {
   existing: { status: 'created' | 'empty' | 'error'; invoice_id: string | null; invoice_url: string | null; amount_cents: number } | null
 }
 type RunResult = { projectId: string; project: string; status: 'created' | 'empty' | 'error' | 'skipped'
-  invoiceId?: string; invoiceUrl?: string; amountCents?: number; error?: string }
+  invoiceId?: string; invoiceUrl?: string; amountCents?: number; error?: string; detail?: Record<string, unknown> }
 type InvoiceRun = { id: string; project_id: string; project_name: string; period: string; status: 'created' | 'empty' | 'error'
   invoice_id: string | null; invoice_url: string | null; amount_cents: number | null; error: string | null; created_at: string; created_by_name: string | null }
 
@@ -35,15 +36,19 @@ const UNIT: Record<string, string> = { hour: 'h', month: 'mois', flat: 'forfait'
 const qty = (n: number) => n.toLocaleString('fr-CH', { maximumFractionDigits: 2 })
 
 /** Les erreurs de facturation, dites pour qu'on sache quoi faire. */
-const runError = (code?: string | null) => {
+const runError = (code?: string | null, detail?: Record<string, unknown>) => {
   if (!code) return 'Erreur inconnue.'
   if (code === 'client_missing') return 'Ajoutez un client au projet, puis relancez.'
-  return errorText(code)
+  return linkErrorText(code, detail ?? {}) ?? errorText(code)
 }
 
 export default function Billing() {
   const { me } = useApp()
-  const [period, setPeriod] = useState(() => shiftPeriod(thisPeriod(), -1))
+  // Le mois choisi vit dans l'adresse (?mois=AAAA-MM) : une reconnexion silencieuse au Compte Lead y ramène.
+  const [params, setParams] = useSearchParams()
+  const fromUrl = params.get('mois')
+  const period = fromUrl && /^\d{4}-\d{2}$/.test(fromUrl) ? clampPeriod(fromUrl) : shiftPeriod(thisPeriod(), -1)
+  const setPeriod = (p: string) => setParams((x) => { const n = new URLSearchParams(x); n.set('mois', p); return n }, { replace: true })
   const { data, error, loading, reload } = useLoad<{ period: string; projects: PreviewProject[] }>(`/integrations/billing/preview?period=${period}`, [period])
   const runs = useLoad<InvoiceRun[]>('/integrations/billing/runs')
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -86,13 +91,9 @@ export default function Billing() {
       <PageHeader title="Facturation" subtitle="Chaque mois, un brouillon de facture par projet, préparé dans InvoiceLead." />
 
       {!connected && (
-        <div className="mb-5 border-l-[3px] border-soon bg-card px-4 py-3 text-sm">
-          <p className="font-bold">InvoiceLead n'est pas branché.</p>
-          <p className="mt-1 text-muted-foreground">L'aperçu ci-dessous montre ce que chaque projet facturerait. Pour créer les brouillons,
-            reliez InvoiceLead avec une clé d'API (formule Pro+).</p>
-          {me?.user.role === 'admin'
-            ? <ButtonLink to="/reglages/integrations" className="mt-3 border border-input bg-card">Brancher InvoiceLead</ButtonLink>
-            : <p className="mt-2 text-muted-foreground">Un administrateur peut le faire dans Réglages → Intégrations.</p>}
+        <div className="mb-5 space-y-2 border-l-[3px] border-soon bg-card px-4 py-3 text-sm">
+          <NotUsed app="invoicelead" compact />
+          <p className="text-muted-foreground">L'aperçu ci-dessous montre ce que chaque projet facturerait.</p>
         </div>
       )}
 
@@ -239,7 +240,7 @@ function ResultLine({ r }: { r: RunResult }) {
       {r.invoiceUrl && <a href={r.invoiceUrl} target="_blank" rel="noreferrer" className="font-bold text-accent hover:text-accent-dark">Ouvrir dans InvoiceLead ↗</a>}
     </span>
   )
-  if (r.status === 'error') return <span className="flex flex-wrap items-center gap-2"><Badge tone="late">Erreur</Badge><span className="text-late">{runError(r.error)}</span></span>
+  if (r.status === 'error') return <span className="flex flex-wrap items-center gap-2"><Badge tone="late">Erreur</Badge><span className="text-late">{runError(r.error, { ...(r.detail ?? {}), project: r.project })}</span></span>
   if (r.status === 'skipped') return <span className="flex items-center gap-2"><Badge>Passé</Badge>Ce mois est déjà facturé.</span>
   return <span className="flex items-center gap-2"><Badge>Vide</Badge>Rien à facturer ce mois-ci.</span>
 }

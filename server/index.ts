@@ -138,6 +138,8 @@ app.use('/api/*', async (c, next) => {
   c.set('ctx', { accountId: s.account_id, userId: s.user_id, role: s.role })
   c.set('name', s.name)
   c.set('email', s.email)
+  // La preuve de la personne (lib/personProof.ts) se relit par la session : jamais dans un cookie ni dans l'écran.
+  c.set('sessionHash', hashToken(token))
   await next()
 })
 
