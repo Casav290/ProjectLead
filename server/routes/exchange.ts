@@ -77,11 +77,21 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
     let status: 'created' | 'updated' = link ? 'updated' : 'created'
     if (e.type === 'deal') {
       const amount = Number.isInteger(d.amount) && d.amount >= 0 ? d.amount : null
-      if (projectId && (await db.query('select 1 from projects where id = $1', [projectId])).rowCount) {
+      const currency = ['CHF', 'EUR', 'USD', 'GBP'].includes(d.currency) ? d.currency : null
+      const live = projectId ? (await db.query('select billing_mode from projects where id = $1', [projectId])).rows[0] : null
+      if (live) {
+        // L'affaire a changé dans CRMlead (devis accepté, montant ou devise corrigés) : budget, forfait et devise
+        // suivent (26.10.2026). La devise ne change plus une fois le projet facturé une première fois.
+        const billed = (await db.query(`select 1 from invoice_runs where project_id = $1 and status = 'created' limit 1`, [projectId])).rowCount ?? 0
         await db.query(
           `update projects set name = coalesce($2, name), description = case when description = '' then coalesce($3, '') else description end,
-                  budget_cents = coalesce($4, budget_cents), updated_at = now() where id = $1`,
-          [projectId, d.title ? String(d.title).slice(0, 200) : null, d.description ?? null, amount])
+                  budget_cents = coalesce($4, budget_cents),
+                  fixed_cents = case when billing_mode = 'fixed' then coalesce($4, fixed_cents) else fixed_cents end,
+                  currency = case when $6 then currency else coalesce($5, currency) end, updated_at = now() where id = $1`,
+          [projectId, d.title ? String(d.title).slice(0, 200) : null, d.description ?? null, amount, currency, billed > 0])
+      } else if (link && d.update === true) {
+        // Un changement d'une affaire dont le projet a été supprimé ici : on ne le recrée pas.
+        status = 'updated'
       } else {
         // Formule pleine (lib/plans.ts) : l'affaire n'est pas perdue, elle arrive « à qualifier », et on le dit.
         const p = await planOf(db, acc.id, true)
@@ -92,7 +102,7 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
                                  fixed_cents, billing_mode, currency, created_by)
            values ($1,$2,$3,$4,$5,$10,'crmlead',$6,$7,$7,$8,$9,$5) returning id`,
           [acc.id, String(d.title || `Projet ${clientName}`).slice(0, 200), d.description ?? '', clientId, fallbackOwner,
-           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', ['CHF', 'EUR', 'USD', 'GBP'].includes(d.currency) ? d.currency : 'CHF', projectStatus])).rows[0].id
+           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', currency ?? 'CHF', projectStatus])).rows[0].id
         await createDefaultColumns(db, acc.id, projectId!)
         if (fallbackOwner) {
           await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead') on conflict do nothing`, [projectId, fallbackOwner, acc.id])
