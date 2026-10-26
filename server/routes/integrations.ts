@@ -20,7 +20,7 @@ app.get('/', async (c) => tx(c, async (db, ctx) => {
     `select (select max(created_at) from projects where source = 'crmlead') as last_deal_at,
             (select max(updated_at) from exchange_links where app = 'crmlead' and type = 'client') as last_client_update_at,
             (select max(created_at) from invoice_runs where status = 'created') as last_invoice_at`)).rows[0]
-  const links = await linkState(db, ctx.accountId, { email: c.get('email'), fresh: c.req.query('fresh') === '1' })
+  const links = await linkState(db, ctx.accountId, { email: c.get('email'), fresh: c.req.query('fresh') === '1', screen: true })
   return c.json({ links, company: links.company, ...last, ...s })
 }))
 

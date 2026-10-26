@@ -44,22 +44,28 @@ async function refreshUsed(accountId: string, org: string) {
     await saveAppsUsed(accountId, rights, org)
     return usedMap(rights)
   } catch {
-    // ERPlead injoignable : on garde la copie, et on réessaie dans une minute (pas à chaque requête).
-    await anon((db) => db.query(`update accounts set lead_apps_checked_at = now() - interval '9 minutes' where id = $1`, [accountId]))
+    // ERPlead injoignable : on garde la copie ; nouvel essai dans 30 s si une application attend, sinon dans 10 min
+    // (jamais à chaque requête).
+    await anon((db) => db.query(`update accounts set lead_apps_checked_at = now() where id = $1`, [accountId]))
     return null
   }
 }
 
 /** L'état des liens de l'entreprise. `db` : une transaction de l'entreprise (ou anon), `email` : la personne connectée. */
-export async function linkState(db: Db, accountId: string, o: { email?: string; fresh?: boolean } = {}): Promise<LinkState> {
+export async function linkState(db: Db, accountId: string, o: { email?: string; fresh?: boolean; screen?: boolean } = {}): Promise<LinkState> {
   const a = (await db.query(
     `select name, lead_org, lead_apps_used,
-            (lead_apps_checked_at is null or lead_apps_checked_at < now() - make_interval(secs => $2)) as stale
-       from accounts where id = $1`, [accountId, (o.fresh ? 0 : REFRESH_MS) / 1000])).rows[0]
+            (lead_apps_checked_at is null or lead_apps_checked_at < now() - make_interval(secs => $2)) as stale,
+            (lead_apps_checked_at is null or lead_apps_checked_at < now() - make_interval(secs => $3)) as stale_waiting
+       from accounts where id = $1`, [accountId, (o.fresh ? 0 : REFRESH_MS) / 1000, o.screen ? 5 : 30])).rows[0]
   if (!a) throw new HttpError(404, 'not_found')
   const lead = Boolean(a.lead_org) && leadIdOn()
   let used: Record<string, boolean> = a.lead_apps_used ?? {}
-  if (lead && a.stale) used = (await refreshUsed(accountId, a.lead_org)) ?? used
+  // Une application « pas encore utilisée » se relit plus vite (30 s ; 5 s quand l'écran Applications Lead s'ouvre) : la personne vient souvent de l'ouvrir dans
+  // un autre onglet et revient ici (parcours local du 26.10.2026 : InvoiceLead ouvert après ProjectLead restait
+  // « Pas encore utilisée » pendant 10 minutes).
+  const waiting = LINKED_APPS.some((x) => used[x] !== true)
+  if (lead && (a.stale || (waiting && a.stale_waiting))) used = (await refreshUsed(accountId, a.lead_org)) ?? used
   const st = (app: LinkedApp): LinkStatus => (lead && used[app] === true ? 'linked' : 'not_used')
   return { company: a.name, ...(o.email ? { email: o.email } : {}), lead, crmlead: st('crmlead'), invoicelead: st('invoicelead') }
 }
