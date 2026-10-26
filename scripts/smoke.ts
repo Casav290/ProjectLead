@@ -500,6 +500,21 @@ r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope,
 check('renvoi → même projet, mis à jour', r.status === 200 && r.body.id === dealProject, r.body)
 r = await eve.get(`/api/projects/${dealProject}`)
 check('projet : nom à jour, budget, client et contact', r.body.name === 'Nouvelle boutique (v2)' && r.body.budget_cents === 800000 && r.body.client?.name === 'Fleurs Blanc' && r.body.contacts.length === 1, r.body)
+// 26.10.2026 : l'affaire change dans CRMlead (nouveau devis accepté, autre devise) → forfait, budget et devise suivent.
+r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope, data: { ...envelope.data, title: 'Nouvelle boutique (v2)', amount: 750000, currency: 'EUR', update: true } }, { authorization: `Bearer ${exchangeJwt()}` })
+r = await eve.get(`/api/projects/${dealProject}`)
+check('changement d\u2019affaire : forfait, budget et devise suivent', r.body.fixed_cents === 750000 && r.body.budget_cents === 750000 && r.body.currency === 'EUR', r.body)
+await pool.query(`insert into invoice_runs (account_id, project_id, period, status) values ($1, $2, '2026-01', 'created')`, [accountId, dealProject])
+r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope, data: { ...envelope.data, title: 'Nouvelle boutique (v2)', amount: 760000, currency: 'CHF', update: true } }, { authorization: `Bearer ${exchangeJwt()}` })
+r = await eve.get(`/api/projects/${dealProject}`)
+check('projet déjà facturé : le montant suit, la devise reste', r.body.fixed_cents === 760000 && r.body.currency === 'EUR', r.body)
+await pool.query(`delete from invoice_runs where project_id = $1`, [dealProject])
+const goneEnvelope = { ...envelope, source: { ...envelope.source, id: `lead-supprime-${stamp}` } }
+r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', goneEnvelope, { authorization: `Bearer ${exchangeJwt()}` })
+await pool.query(`delete from projects where id = $1`, [r.body.id])
+r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...goneEnvelope, data: { ...goneEnvelope.data, amount: 1, update: true } }, { authorization: `Bearer ${exchangeJwt()}` })
+check('projet supprimé ici : un changement d\u2019affaire ne le recrée pas',
+  r.status === 200 && (await pool.query(`select count(*)::int as n from projects where source_ref = $1`, [`crmlead:lead-supprime-${stamp}`])).rows[0].n === 0, r.body)
 r = await new Client().req('POST', '/api/lead-exchange/v1/inbox', { ...envelope, source: { ...envelope.source, app: 'scanlead' } }, { authorization: `Bearer ${exchangeJwt()}` })
 check('expéditeur usurpé → 403', r.status === 403)
 r = await new Client().get('/.well-known/lead-app.json')
