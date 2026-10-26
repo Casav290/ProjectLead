@@ -342,10 +342,13 @@ Cahier commun des six applications : `~/projets/.unlazy/assistant-ia/CAHIER.md` 
    la ligne `GLM_API_KEY` de `server_secrets` (ancien chiffré illisible).
 2. **Essai réel en formule gratuite** : Ève (eve.gemmet@gmail.com, Free) doit entrer dans ProjectLead et
    voir « Gratuit : 3 projets en cours ». Ne pas lui offrir de formule : elle veut vérifier le gratuit.
-3. **Clés d'Ève** : Ève crée la clé CRMlead
-   (https://crmlead.io/integrations) et la clé InvoiceLead (https://invoicelead.io/fr/app/settings/api,
-   Pro+) et les colle elle-même dans https://projectlead.io/reglages/integrations (adresses déjà
-   remplies). Ni Claude Desktop ni un agent ne saisissent une clé dans un site.
+3. **Liaison sans clé (26.10.2026, branche `liens-sans-cle`)** : plus aucune clé à coller. CRMlead et InvoiceLead
+   se relient d'eux-mêmes quand l'entreprise les utilise avec le même Compte Lead (Réglages → Applications Lead,
+   `docs/INTEGRATIONS.md`). Mise en ligne : après ERPlead (jetons d'échange liés à l'org) ; poser `LEAD_PROOF_KEY`
+   (32 signes au moins) sur Vercel avant ; migration `db/012_liens_sans_cle.sql` (efface les jetons d'identité gardés en
+   clair : une reconnexion silencieuse suit) ; puis `EXCHANGE_ORG_SENDERS=crmlead` quand CRMlead envoie avec l'org.
+   Étape 5b : `db/etape-5b/013_drop_link_keys.sql` (hors des migrations automatiques), après 7 jours verts et un
+   instantané Neon.
 4. **CRMlead en ligne** : carré PL ocre et ProjectLead dans le sélecteur d'applications (migration
    `114_projectlead_live.sql` prête par la session CRMlead, publication avec l'accord d'Ève).
 5. **Comptes de contrôle** : 14 comptes « Contrôle … » (`controle-…@exemple.test`) créés en production

@@ -70,7 +70,10 @@ de test), puis `scripts/e2e-abonnement.mjs` (en-tête du fichier) → `E2E_ABONN
 ## Variables d'environnement
 
 Voir `.env.example`. Indispensables : `DATABASE_URL`, `PUBLIC_URL`, `APP_SECRET` (chiffre les secrets
-des boîtes mail et les clés CRMlead / InvoiceLead ; le changer oblige à tout rebrancher).
+des boîtes mail ; le changer oblige à les rebrancher), `LEAD_PROOF_KEY` (scelle la preuve de la personne gardée
+avec la session pour lire CRMlead et InvoiceLead ; sans elle, clé dérivée d'`APP_SECRET`). CRMlead et InvoiceLead
+se relient sans clé, par le Compte Lead (`docs/INTEGRATIONS.md`) ; `EXCHANGE_ORG_SENDERS` (défaut vide) exige un
+jeton lié à l'organisation de ces expéditeurs ; `CRMLEAD_URL` / `INVOICELEAD_URL` seulement en local.
 Facultatives : `SMTP_URL` et `EMAIL_FROM` (envoi système quand aucune boîte n'est branchée ; sans
 eux, les emails sont seulement journalisés dans `sent_emails`), `LEAD_ID_*` (Compte Lead),
 `GOOGLE_*` et `MICROSOFT_*` (boîtes en un clic, mêmes applications OAuth que CRMlead ;

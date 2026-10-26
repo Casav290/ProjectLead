@@ -9,9 +9,10 @@ Langue de travail : français. Commits en français, courts.
 - `docs/FONCTIONNALITES.md` : les fonctions et ce qui vient de chaque leader du marché et de CRMlead.
 - `docs/PASSATION.md` : à lire en premier en reprenant le projet (état, hébergement, ce qui reste).
 - `docs/PLAN.md` : décisions, étapes, état, ce qui bloque. À tenir à jour.
-- `docs/INTEGRATIONS.md` : CRMlead (adresses, affaires gagnées) et InvoiceLead (facturation mensuelle).
-- Dépôts sœurs : `Casav290/crmlead` (fournisseur du Compte Lead, `docs/LEAD-ID.md`), `Casav290/InvoiceLead`
-  (API v1 `il_live_…`, `docs/API.md`).
+- `docs/INTEGRATIONS.md` : CRMlead (adresses, affaires gagnées) et InvoiceLead (facturation mensuelle), reliés
+  SANS CLÉ par le Compte Lead depuis le 26.10.2026.
+- Dépôts sœurs : `Casav290/crmlead` (`docs/LEAD-ID.md`), `Casav290/InvoiceLead` (`docs/API.md`), ERPlead (émetteur du
+  Compte Lead et des jetons d'échange).
 
 ## Pile
 
@@ -54,6 +55,10 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   portail (`server/routes/billing.ts`). Le compte Stripe est partagé par toutes les applications Lead : ne créer,
   lire, modifier ou annuler QUE des objets `metadata.app = projectlead` ; jamais `client_reference_id`. Un
   événement d'une autre application reçoit 200 sans aucune écriture (`own`, `server/lib/stripe.ts`).
+- Liaison sans clé (Ève, 26.10.2026) : entre deux applications Lead, AUCUNE clé ni adresse à coller ; même
+  organisation ERPlead = reliées ; la personne agit avec SES droits (preuve scellée, `server/lib/personProof.ts`) ;
+  relier ne coûte rien (jamais de formule exigée, jamais de 402). Aucun texte ne doit dire qu'une clé ou Pro+ relie
+  deux apps Lead. Les clés d'API ne servent qu'aux outils extérieurs.
 - Les pages publiques (`/suivi`, `/rdv`, `/demande`) ne rendent que ce qui est destiné au client : ni compte,
   ni jeton, ni email interne, ni ce qui n'est pas coché « visible par le client ».
 - Suites de l'abonnement (15.10.2026, `docs/PASSATION.md`) : jamais une offre égale ou inférieure à la formule acquise

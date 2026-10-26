@@ -51,10 +51,12 @@ CRMlead.
   écrire à l'équipe.
 - **Facturation mensuelle par InvoiceLead** : à l'heure (temps du mois, ligne par tâche et par taux),
   forfait mensuel, par étape livrée ou forfait global à la fin ; un brouillon par projet et par mois,
-  jamais deux, temps et étapes marqués facturés. Manuellement ou automatiquement le jour choisi.
+  jamais deux, temps et étapes marqués facturés. Manuellement ou automatiquement le jour choisi. Sans clé,
+  dans toutes les formules : InvoiceLead est relié dès que l'entreprise l'utilise avec le même Compte Lead.
 - **Adresses tenues dans CRMlead** : recherche et reprise d'une entreprise de CRMlead (adresse découpée
-  en rue, numéro, NPA, localité, et ses contacts), mise à jour d'un clic ; une affaire gagnée dans
-  CRMlead arrive toute seule en projet (échange du Compte Lead, type `deal`).
+  en rue, numéro, NPA, localité, et ses contacts), avec les droits de la personne dans CRMlead ; ensuite CRMlead
+  envoie lui-même les changements d'adresse et de contacts (type `client`) ; une affaire gagnée dans
+  CRMlead arrive toute seule en projet (échange du Compte Lead, type `deal`). Reliés sans clé (26.10.2026).
 
 ## Pas repris (pour l'instant)
 

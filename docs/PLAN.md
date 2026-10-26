@@ -15,8 +15,8 @@ Version 3, 13.10.2026 (hébergement Vercel).
 | Emails sortants | Resend, domaine `projectlead.io`, comme InvoiceLead |
 | Connexion | Compte Lead (CRMlead), tout droit comme InvoiceLead ; email et mot de passe en secours |
 | Formules | Tout compte entre, même gratuit (Ève, 02.10) ; Gratuit 3 projets en cours et 1 personne, Pro sans limite de projets (19 €/mois, 190 €/an), Pro+ 5 personnes (39 €/mois, 390 €/an) (`server/lib/plans.ts`). Chaque application vend sa propre formule (Ève, 13.10) : celle de ProjectLead se prend dans ProjectLead (Stripe Checkout, portail) et ne vaut qu'ici ; en production depuis le 13.10.2026 (objets Stripe live : `docs/PASSATION.md`) |
-| Facturation | Brouillons mensuels dans InvoiceLead par son API (clé `il_live_…`, formule Pro+ d'InvoiceLead, prise dans InvoiceLead) |
-| Adresses | CRMlead par son API (clé `crm_…`) ; affaires gagnées reçues par l'échange du Compte Lead |
+| Facturation | Brouillons mensuels dans InvoiceLead par l'échange du Compte Lead (enveloppe `invoice`), sans clé, dans toutes les formules (26.10.2026) |
+| Adresses | CRMlead par la lecture d'échange avec la preuve de la personne, sans clé ; affaires gagnées et adresses à jour reçues par l'échange du Compte Lead |
 
 ## Étapes
 
@@ -27,14 +27,14 @@ Version 3, 13.10.2026 (hébergement Vercel).
 | 2. Domaine | `projectlead.io` vers la fonction (domaine personnalisé Neon + DNS Porkbun) | `https://projectlead.io/api/health` répond | fait (01.10), avec et sans www |
 | 3. Emails | Resend, `RESEND_API_KEY` dans la fonction | Premier envoi réel reçu | fait (01.10) : suivi client reçu dans la boîte de réception Gmail d'Ève, depuis `suivi@invoicelead.io` ; passer sur `suivi@projectlead.io` quand le domaine sera vérifié chez Resend |
 | 4. Compte Lead | Connexion comme InvoiceLead : tout droit vers le Compte Lead, inscription locale fermée, écran d'erreur ocre | Connexion réelle avec le compte d'Ève | aller-retour réel crmlead.io ↔ projectlead.io fait (01.10) ; depuis le 02.10 tout compte entre, même gratuit (limites dans `server/lib/plans.ts`) ; reste l'essai réel en gratuit après publication |
-| 5. Liens famille | Clés CRMlead et InvoiceLead posées dans l'entreprise d'Ève ; `projectlead` en `live` dans `lead_apps` de CRMlead | Une adresse reprise de CRMlead, un brouillon dans InvoiceLead | migration CRMlead `114_projectlead_live.sql` prête (session CRMlead), publication à confirmer ; clés à poser par Ève |
+| 5. Liens famille, sans clé (26.10.2026) | Même entreprise dans le Compte Lead = reliées : écran « Applications Lead », lectures CRMlead / InvoiceLead avec la preuve de la personne, brouillons par l'enveloppe `invoice`, boîte d'échange `deal` + `client` ; clés retirées (410) | `npm test` (sections « Applications Lead », « CRMlead : reprendre… », « InvoiceLead : facturation mensuelle, sans clé ni formule », « Échange ») | branche `liens-sans-cle`, pas encore en ligne ; dépend d'ERPlead (jetons liés à l'org), CRMlead (lecture `lead`, envoi `client`) et InvoiceLead (boîte `invoice`, lecture `contact`) ; étape 5b (suppression des colonnes de clé) préparée dans `db/etape-5b/` |
 | 6. Vercel | Hébergement comme les autres applications : projet Vercel, base Neon inchangée, tâches de fond sans VPS | projectlead.io et www servis par Vercel, connexion réelle par ERPlead (navigateur sans tête, compte de test), tâche de fond passée sur Vercel | fait (13.10) |
 | 7. Suites de l'abonnement | Aucune offre égale ou inférieure à la formule acquise (409 `plan_not_above` avant Stripe), liste des places avec dernière venue, « Retirer » et « Rétablir », refus « places » avec « Changer de compte » et conseil selon la formule, page publique `/formules` | `scripts/suites-check.ts` → `PROJECTLEAD_SUITES_UNIT_OK`, `npm test` (section « Suites de l'abonnement ») | enregistré (15.10), pas encore en ligne |
 
 ## Ce qui bloque
 
-Rien de technique. Restent des gestes d'Ève : ses clés CRMlead et InvoiceLead, qu'elle colle
-elle-même dans ProjectLead. Détail dans
+Rien de technique. Plus aucune clé à coller pour relier CRMlead et InvoiceLead (26.10.2026) : la mise en ligne
+de la liaison sans clé suit l'ordre du contrat (ERPlead, puis les applications), avec `LEAD_PROOF_KEY` posée sur Vercel. Détail dans
 `docs/PASSATION.md`.
 
 ## Publier une nouvelle version
