@@ -1,4 +1,5 @@
 /** Le navigateur ne parle jamais à la base : tout passe par l'API serveur (`/api`). */
+import { t } from '../i18n'
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public body: any) { super(code) }
@@ -64,74 +65,44 @@ export const api = {
   upload: <T,>(p: string, form: FormData) => req<T>(p, { method: 'POST', body: form }),
 }
 
-/** Les codes d'erreur de l'API, dits en clair. */
-const MESSAGES: Record<string, string> = {
-  invalid_credentials: 'Email ou mot de passe incorrect.',
-  email_taken: 'Cette adresse a déjà un compte.',
-  signup_via_lead: "L'inscription se fait avec le Compte Lead.",
-  invitation_via_lead: "Acceptez l'invitation avec votre Compte Lead.",
-  plan_limit_projects: 'La formule gratuite mène 3 projets en cours à la fois : terminez ou archivez un projet. Pour davantage, un administrateur peut passer à Pro (Réglages → Entreprise).',
-  plan_limit_seats: 'Toutes les places de la formule sont prises. Pour une personne de plus, un administrateur peut passer à Pro+, jusqu\'à 5 personnes (Réglages → Entreprise).',
-  plan_limit_seats_full: 'Les 5 places de Pro+ sont prises : retirez une personne ou une invitation en attente pour en inviter une autre.',
-  invalid_input: 'Une valeur est refusée : vérifiez les champs.',
-  forbidden: "Votre rôle ne permet pas cette action.",
-  not_found: 'Introuvable, ou vous n\'y avez pas accès.',
-  last_admin: "L'entreprise doit garder au moins un administrateur actif.",
-  already_member: 'Cette personne fait déjà partie de l\'équipe.',
-  dependency_cycle: 'Cette dépendance créerait une boucle.',
-  dependency_other_project: 'Une dépendance doit rester dans le même projet.',
-  already_invoiced: 'Ce temps est déjà facturé : il ne se modifie plus.',
-  no_recipient: "Aucun destinataire : ajoutez l'email du client ou d'un contact.",
-  slot_taken: 'Ce créneau vient d\'être pris. Choisissez-en un autre.',
-  crmlead_not_used: "Votre entreprise n'utilise pas encore CRMlead.",
-  invoicelead_not_used: "Votre entreprise n'utilise pas encore InvoiceLead.",
-  crmlead_unreachable: 'CRMlead ne répond pas. Réessayez dans un instant.',
-  invoicelead_unreachable: 'InvoiceLead ne répond pas. Réessayez dans un instant.',
-  crmlead_error: 'CRMlead a refusé la demande. Réessayez dans un instant.',
-  invoicelead_error: 'InvoiceLead a refusé la demande. Réessayez dans un instant.',
-  lead_required: 'Connectez-vous une fois avec votre Compte Lead pour relier vos applications.',
-  lead_reauth: 'Votre connexion au Compte Lead est à renouveler : rechargez la page.',
-  keys_retired: 'Les applications Lead se relient toutes seules : plus rien à coller (Réglages → Applications Lead).',
-  not_from_crmlead: "Ce client n'a pas été repris de CRMlead.",
-  client_missing: 'Le projet n\'a pas de client : choisissez-en un pour le facturer.',
-  calendar_url_invalid: "L'adresse de l'agenda doit commencer par https:// (ou webcal://).",
-  servers_unknown: 'Messagerie non reconnue : indiquez les serveurs IMAP et SMTP.',
-  imap_auth_failed: 'Identifiant ou mot de passe IMAP refusé.',
-  smtp_auth_failed: 'Identifiant ou mot de passe SMTP refusé.',
-  imap_unreachable: 'Serveur IMAP injoignable.',
-  smtp_unreachable: 'Serveur SMTP injoignable.',
-  conflict: 'Cet élément existe déjà.',
-  last_column: 'Un tableau garde au moins une colonne.',
-  invitation_invalid: 'Invitation expirée ou déjà utilisée.',
-  url_not_allowed: 'Adresse refusée : https et serveur public uniquement.',
-  already_subscribed: "Vous avez déjà un abonnement ProjectLead : changez de formule dans « Gérer l'abonnement ».",
-  plan_not_above: 'Votre entreprise a déjà cette formule ou une formule supérieure : rien à payer.',
-  cannot_remove_self: 'Vous ne pouvez pas vous retirer vous-même : un autre administrateur peut le faire.',
-  use_remove_restore: 'La place d\'une personne se règle avec « Retirer » ou « Rétablir », dans la liste des places (Réglages → Équipe).',
-  billing_not_configured: "Le paiement en ligne n'est pas encore ouvert.",
-  no_customer: "Aucun abonnement ProjectLead à gérer pour l'instant.",
-  stripe_error: "Le paiement n'a pas pu s'ouvrir. Réessayez dans un instant.",
-}
+/**
+ * Les codes d'erreur de l'API, dits en clair : le texte est la clé `shell.err.<code>`, traduite au moment de l'affichage
+ * (errorText est appelée au rendu, jamais au chargement du module).
+ */
+const MESSAGES = new Set([
+  'invalid_credentials', 'email_taken', 'signup_via_lead', 'invitation_via_lead', 'plan_limit_projects',
+  'plan_limit_seats', 'plan_limit_seats_full', 'invalid_input', 'forbidden', 'not_found', 'last_admin',
+  'already_member', 'dependency_cycle', 'dependency_other_project', 'already_invoiced', 'no_recipient', 'slot_taken',
+  'crmlead_not_used', 'invoicelead_not_used', 'crmlead_unreachable', 'invoicelead_unreachable', 'crmlead_error',
+  'invoicelead_error', 'lead_required', 'lead_reauth', 'keys_retired', 'not_from_crmlead', 'client_missing',
+  'calendar_url_invalid', 'servers_unknown', 'imap_auth_failed', 'smtp_auth_failed', 'imap_unreachable',
+  'smtp_unreachable', 'conflict', 'last_column', 'invitation_invalid', 'url_not_allowed', 'already_subscribed',
+  'plan_not_above', 'cannot_remove_self', 'use_remove_restore', 'billing_not_configured', 'no_customer',
+  'stripe_error',
+])
 const APP_NAMES: Record<string, string> = { crmlead: 'CRMlead', invoicelead: 'InvoiceLead' }
 
 /** Les refus d'une application sœur, avec ce qu'ils disent (application, administrateur, formule, nombres). */
 export function linkErrorText(code: string, b: any = {}): string | null {
-  const app = APP_NAMES[b?.app] ?? 'cette application'
+  const app = APP_NAMES[b?.app] ?? t('shell.err.link.thisApp')
+  const admin = b?.admin ?? t('shell.err.link.anAdmin')
   switch (code) {
     case 'person_not_member':
-      return b?.reason === 'no_seat'
-        ? `Vous n'avez pas de place dans ${app} (formule de ${app}). Demandez à ${b?.admin ?? 'un administrateur'}, ou reprenez ce client à la main.`
-        : b?.reason === 'disabled'
-          ? `Votre accès à ${app} est désactivé. Demandez à ${b?.admin ?? 'un administrateur'}.`
-          : `Ouvrez ${app} une fois avec votre Compte Lead pour y accéder depuis ProjectLead.`
+      return b?.reason === 'no_seat' ? t('shell.err.link.noSeat', { app, admin })
+        : b?.reason === 'disabled' ? t('shell.err.link.disabled', { app, admin })
+          : t('shell.err.link.openOnce', { app })
     case 'person_proof':
-      return `Votre Compte Lead${b?.email ? ` (${b.email})` : ''} appartient à ${b?.person_org_name ?? 'une autre entreprise'}${b?.company ? `, pas à ${b.company}` : ''}.`
+      return t('shell.err.link.proof', { email: b?.email ? ` (${b.email})` : '', org: b?.person_org_name ?? t('shell.err.link.otherCompany'),
+        company: b?.company ? t('shell.err.link.proofCompany', { company: b.company }) : '' })
     case 'person_not_allowed':
-      return `Vous n'avez pas le droit de facturer dans InvoiceLead : demandez à ${b?.admin ?? 'un administrateur'}.`
-    case 'contact_limit':
-      return `InvoiceLead${b?.plan ? ` (formule ${b.plan})` : ''} a déjà ${b?.count ?? b?.limit ?? 'trop de'} clients : le brouillon${b?.project ? ` de ${b.project}` : ''} n'a pas été créé. Archivez un client dans InvoiceLead ou changez de formule dans InvoiceLead, puis relancez.`
+      return t('shell.err.link.notAllowed', { admin })
+    case 'contact_limit': {
+      const vars = { plan: b?.plan ? t('shell.err.link.contactPlan', { plan: b.plan }) : '', count: b?.count ?? b?.limit ?? '',
+        project: b?.project ? t('shell.err.link.contactProject', { project: b.project }) : '' }
+      return t(vars.count === '' ? 'shell.err.link.contactLimitMany' : 'shell.err.link.contactLimit', vars)
+    }
     case 'already_issued':
-      return `Une facture${b?.month ? ` de ${b.month}` : ' de ce mois'} est déjà émise dans InvoiceLead pour ce projet.`
+      return b?.month ? t('shell.err.link.alreadyIssuedMonth', { month: b.month }) : t('shell.err.link.alreadyIssued')
   }
   return null
 }
@@ -141,6 +112,6 @@ export const errorText = (e: unknown) => {
   const linked = linkErrorText(code, e instanceof ApiError ? e.body : {})
   if (linked) return linked
   // En Pro+, plus de formule au-dessus : on dit quoi faire plutôt que de renvoyer vers une mise à niveau.
-  if (code === 'plan_limit_seats' && e instanceof ApiError && e.body?.plan === 'pro_plus') return MESSAGES.plan_limit_seats_full
-  return MESSAGES[code] ?? `Erreur : ${code}`
+  if (code === 'plan_limit_seats' && e instanceof ApiError && e.body?.plan === 'pro_plus') return t('shell.err.plan_limit_seats_full')
+  return MESSAGES.has(code) ? t(`shell.err.${code}`) : t('common.error', { code })
 }

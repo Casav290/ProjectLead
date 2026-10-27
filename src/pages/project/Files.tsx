@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useRef, useState } from 'react'
 import { Button, Confirm, Empty, ErrorNote, Spinner, TableStack, toast } from '../../components/ui'
+import { intlLocale, t, useT } from '../../i18n'
 import { api, errorText } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 import { useLoad } from '../../lib/store'
@@ -11,10 +12,12 @@ type FileRow = { id: string; filename: string; mime: string; size: number; task_
   created_at: string; uploaded_by_name: string | null; task_title: string | null }
 
 export const fmtSize = (n: number) =>
-  n < 1024 ? `${n} o` : n < 1024 * 1024 ? `${Math.round(n / 1024)} Ko` : `${(n / 1024 / 1024).toLocaleString('fr-CH', { maximumFractionDigits: 1 })} Mo`
+  n < 1024 ? t('ptabs.files.bytes', { n }) : n < 1024 * 1024 ? t('ptabs.files.kb', { n: Math.round(n / 1024) })
+    : t('ptabs.files.mb', { n: (n / 1024 / 1024).toLocaleString(intlLocale(), { maximumFractionDigits: 1 }) })
 
 /** Les fichiers du projet (et de ses tâches) ; certains se partagent avec le client. */
 export default function Files({ project }: Props) {
+  const t = useT()
   const { data, error, reload } = useLoad<FileRow[]>(`/projects/${project.id}/files`)
   const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(0)
@@ -26,10 +29,10 @@ export default function Files({ project }: Props) {
     if (!list.length) return
     setBusy(list.length)
     for (const f of list) {
-      if (f.size > 15 * 1024 * 1024) { toast(`« ${f.name} » dépasse 15 Mo.`); setBusy((n) => n - 1); continue }
+      if (f.size > 15 * 1024 * 1024) { toast(t('ptabs.files.tooBig', { name: f.name })); setBusy((n) => n - 1); continue }
       const form = new FormData()
       form.append('file', f)
-      try { await api.upload(`/projects/${project.id}/files`, form) } catch (e) { toast(`« ${f.name} » : ${errorText(e)}`) }
+      try { await api.upload(`/projects/${project.id}/files`, form) } catch (e) { toast(t('ptabs.files.uploadError', { name: f.name, error: errorText(e) })) }
       setBusy((n) => n - 1)
     }
     if (input.current) input.current.value = ''
@@ -39,7 +42,7 @@ export default function Files({ project }: Props) {
     try { await api.patch(`/projects/files/${f.id}`, { visible_to_client: !f.visible_to_client }); reload() } catch (e) { toast(errorText(e)) }
   }
   const remove = async (f: FileRow) => {
-    try { await api.del(`/projects/files/${f.id}`); toast('Fichier supprimé.'); reload() } catch (e) { toast(errorText(e)) }
+    try { await api.del(`/projects/files/${f.id}`); toast(t('ptabs.files.deleted')); reload() } catch (e) { toast(errorText(e)) }
   }
 
   return (
@@ -48,37 +51,37 @@ export default function Files({ project }: Props) {
            onDrop={(e) => { e.preventDefault(); setDrag(false); upload(e.dataTransfer.files) }}
            className={clsx('flex flex-col items-center gap-2 border-2 border-dashed px-4 py-6 text-center text-sm',
                            drag ? 'border-accent bg-accent-veil' : 'border-input bg-card')}>
-        <p className="font-semibold">{busy ? `Envoi en cours (${busy})…` : 'Déposez des fichiers ici'}</p>
-        <p className="text-xs text-muted-foreground">ou</p>
-        <Button onClick={() => input.current?.click()} disabled={busy > 0}>Choisir des fichiers</Button>
-        <p className="text-xs text-muted-foreground">15 Mo au plus par fichier.</p>
+        <p className="font-semibold">{busy ? t('ptabs.files.uploading', { n: busy }) : t('ptabs.files.drop')}</p>
+        <p className="text-xs text-muted-foreground">{t('ptabs.files.or')}</p>
+        <Button onClick={() => input.current?.click()} disabled={busy > 0}>{t('ptabs.files.choose')}</Button>
+        <p className="text-xs text-muted-foreground">{t('ptabs.files.maxSize')}</p>
         <input ref={input} type="file" multiple className="hidden" onChange={(e) => e.target.files && upload(e.target.files)} />
       </div>
       <ErrorNote error={error} />
-      {!data ? <Spinner /> : !data.length ? <Empty title="Aucun fichier">Devis, maquettes, comptes rendus : tout au même endroit, et à portée du client si vous le souhaitez.</Empty> : (
+      {!data ? <Spinner /> : !data.length ? <Empty title={t('ptabs.files.emptyTitle')}>{t('ptabs.files.emptyBody')}</Empty> : (
         <TableStack>
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-head text-left text-[11px] font-extrabold uppercase tracking-[.05em] text-muted-foreground">
-              <tr><th className="px-3 py-2">Fichier</th><th className="px-3 py-2">Taille</th><th className="px-3 py-2">Déposé</th>
-                  <th className="px-3 py-2">Visible par le client</th><th className="px-3 py-2"><span className="sr-only">Actions</span></th></tr>
+              <tr><th className="px-3 py-2">{t('ptabs.files.file')}</th><th className="px-3 py-2">{t('ptabs.files.size')}</th><th className="px-3 py-2">{t('ptabs.files.uploaded')}</th>
+                  <th className="px-3 py-2">{t('ptabs.files.visible')}</th><th className="px-3 py-2"><span className="sr-only">{t('ptabs.field.actions')}</span></th></tr>
             </thead>
             <tbody>
               {data.map((f) => (
                 <tr key={f.id} className="border-t border-border">
                   <td className="max-w-[24rem] px-3 py-2">
                     <a href={`/api/projects/files/${f.id}`} className="font-semibold text-accent hover:underline [overflow-wrap:anywhere]" download>{f.filename}</a>
-                    {f.task_title && <span className="block text-xs text-muted-foreground">Tâche : {f.task_title}</span>}
+                    {f.task_title && <span className="block text-xs text-muted-foreground">{t('ptabs.files.task', { title: f.task_title })}</span>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums text-muted-foreground">{fmtSize(f.size)}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{fmtDate(f.created_at)}{f.uploaded_by_name && `, ${f.uploaded_by_name}`}</td>
                   <td className="px-3 py-2">
                     <label className="inline-flex cursor-pointer items-center gap-2">
                       <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={f.visible_to_client} onChange={() => toggle(f)} />
-                      <span className="text-xs">{f.visible_to_client ? 'Oui' : 'Non'}</span>
+                      <span className="text-xs">{f.visible_to_client ? t('common.yes') : t('common.no')}</span>
                     </label>
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button className="text-xs font-semibold text-muted-foreground hover:text-late" onClick={() => setRemoving(f)}>Supprimer</button>
+                    <button className="text-xs font-semibold text-muted-foreground hover:text-late" onClick={() => setRemoving(f)}>{t('common.delete')}</button>
                   </td>
                 </tr>
               ))}
@@ -87,9 +90,9 @@ export default function Files({ project }: Props) {
         </TableStack>
       )}
       {data && data.some((f) => f.visible_to_client) && !project.portal_enabled &&
-        <p className="text-xs text-muted-foreground">La page de suivi est fermée : le client ne voit pas encore ces fichiers (onglet Suivi client).</p>}
-      <Confirm open={Boolean(removing)} onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)} danger confirmLabel="Supprimer"
-        title="Supprimer ce fichier ?">« {removing?.filename} » sera effacé pour de bon.</Confirm>
+        <p className="text-xs text-muted-foreground">{t('ptabs.files.portalClosed')}</p>}
+      <Confirm open={Boolean(removing)} onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)} danger confirmLabel={t('common.delete')}
+        title={t('ptabs.files.deleteTitle')}>{t('ptabs.files.deleteBody', { name: removing?.filename ?? '' })}</Confirm>
     </div>
   )
 }

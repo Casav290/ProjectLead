@@ -5,20 +5,20 @@ import { fmtRelative } from '../../lib/format'
 import { useApp, useLoad } from '../../lib/store'
 import { ColorChoice } from './Profile'
 import { CopyField, SettingsHeader } from './kit'
+import { useT } from '../../i18n'
 
 type Feed = { id: string; name: string; color: string; last_synced_at: string | null; sync_error: string | null; events: number }
 type SyncResult = { ok: true; count: number } | { ok: false; error: string }
 
+/** Les marches à suivre par service : nom, puis clés des textes (traduits au rendu). */
 const HELP = [
-  { name: 'Google Agenda', steps: 'Dans Google Agenda, ouvrez les paramètres de l\'agenda, section « Intégrer l\'agenda », et copiez l\'« Adresse secrète au format iCal ».',
-    back: 'Pour voir ProjectLead dans Google : « Autres agendas » → + → « À partir de l\'URL », collez votre lien iCal.' },
-  { name: 'Outlook / Microsoft 365', steps: 'Dans Outlook sur le web : Paramètres → Calendrier → Calendriers partagés → « Publier un calendrier », choisissez « Peut afficher tous les détails » et copiez le lien ICS.',
-    back: 'Pour voir ProjectLead dans Outlook : « Ajouter un calendrier » → « S\'abonner à partir du web ».' },
-  { name: 'iCloud (Apple)', steps: 'Dans Calendrier sur iCloud.com, partagez l\'agenda en « Calendrier public » et copiez le lien (webcal://…).',
-    back: 'Pour voir ProjectLead sur Mac ou iPhone : Fichier → « Nouvel abonnement à un calendrier », collez votre lien iCal.' },
+  { id: 'google', steps: 'settings2.cal.help.google.steps', back: 'settings2.cal.help.google.back' },
+  { id: 'outlook', steps: 'settings2.cal.help.outlook.steps', back: 'settings2.cal.help.outlook.back' },
+  { id: 'icloud', steps: 'settings2.cal.help.icloud.steps', back: 'settings2.cal.help.icloud.back' },
 ]
 
 export default function Calendars() {
+  const t = useT()
   const { me } = useApp()
   const { data, error, loading, reload } = useLoad<Feed[]>('/calendar/feeds')
   const [name, setName] = useState('')
@@ -34,7 +34,7 @@ export default function Calendars() {
     setBusy(true); setAddErr(null)
     try {
       const r = await api.post<{ id: string } & SyncResult>('/calendar/feeds', { name: name.trim(), url: url.trim(), color })
-      toast(r.ok ? `Agenda ajouté : ${r.count} événement${r.count > 1 ? 's' : ''}` : 'Agenda ajouté, mais sa lecture a échoué')
+      toast(r.ok ? t('settings2.cal.addedToast', { n: r.count }) : t('settings2.cal.addedReadFailed'))
       setName(''); setUrl(''); reload()
     } catch (err) { setAddErr(err) } finally { setBusy(false) }
   }
@@ -42,31 +42,31 @@ export default function Calendars() {
     setSyncing(f.id)
     try {
       const r = await api.post<SyncResult>(`/calendar/feeds/${f.id}/sync`)
-      toast(r.ok ? `${r.count} événement${r.count > 1 ? 's' : ''} relu${r.count > 1 ? 's' : ''}` : 'La lecture a échoué')
+      toast(r.ok ? t('settings2.cal.syncedToast', { n: r.count }) : t('settings2.cal.readFailed'))
       reload()
     } catch (err) { toast(errorText(err)) } finally { setSyncing(null) }
   }
   const remove = async (f: Feed) => {
-    try { await api.del(`/calendar/feeds/${f.id}`); toast('Agenda retiré'); reload() } catch (err) { toast(errorText(err)) }
+    try { await api.del(`/calendar/feeds/${f.id}`); toast(t('settings2.cal.removedToast')); reload() } catch (err) { toast(errorText(err)) }
   }
 
   return (
     <>
-      <SettingsHeader title="Agendas">Voyez ProjectLead dans votre agenda habituel, et vos autres agendas dans ProjectLead.</SettingsHeader>
+      <SettingsHeader title={t('settings2.cal.title')}>{t('settings2.cal.intro')}</SettingsHeader>
       <div className="max-w-3xl space-y-5">
         {me && (
-          <Card title="ProjectLead dans votre agenda">
+          <Card title={t('settings2.cal.feedTitle')}>
             <div className="space-y-2 p-4 text-sm">
-              <p className="text-muted-foreground">Vos réunions, rendez-vous et échéances de tâches, mis à jour automatiquement. Ce lien est personnel.</p>
-              <CopyField value={me.icalUrl} label="Lien iCal personnel" />
+              <p className="text-muted-foreground">{t('settings2.cal.feedText')}</p>
+              <CopyField value={me.icalUrl} label={t('settings2.cal.feedLabel')} />
             </div>
           </Card>
         )}
 
-        <Card title="Agendas extérieurs">
-          <div className="px-4 pt-3 text-sm text-muted-foreground">Leurs événements s'affichent dans l'Agenda (en lecture) et comptent comme occupés pour la prise de rendez-vous.</div>
+        <Card title={t('settings2.cal.externalTitle')}>
+          <div className="px-4 pt-3 text-sm text-muted-foreground">{t('settings2.cal.externalText')}</div>
           {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} /></div> : (
-            data!.length === 0 ? <p className="px-4 py-4 text-sm">Aucun agenda extérieur pour l'instant.</p> : (
+            data!.length === 0 ? <p className="px-4 py-4 text-sm">{t('settings2.cal.externalEmpty')}</p> : (
               <ul className="mt-3 divide-y divide-border border-t border-border">
                 {data!.map((f) => (
                   <li key={f.id} className="space-y-1.5 px-4 py-3">
@@ -74,47 +74,48 @@ export default function Calendars() {
                       <ColorDot color={f.color} />
                       <span className="min-w-0 flex-1">
                         <span className="block font-bold break-words">{f.name}</span>
-                        <span className="block text-xs text-muted-foreground">{f.events} événement{f.events > 1 ? 's' : ''} ·{' '}
-                          {f.last_synced_at ? `relu ${fmtRelative(f.last_synced_at)}` : 'pas encore relu'}</span>
+                        <span className="block text-xs text-muted-foreground">{t('settings2.cal.events', { n: f.events })} ·{' '}
+                          {f.last_synced_at ? t('settings2.cal.syncedAgo', { when: fmtRelative(f.last_synced_at) }) : t('settings2.cal.notSynced')}</span>
                       </span>
-                      <Button size="sm" onClick={() => sync(f)} disabled={syncing === f.id}>{syncing === f.id ? 'Lecture…' : 'Resynchroniser'}</Button>
-                      <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(f)}>Retirer</Button>
+                      <Button size="sm" onClick={() => sync(f)} disabled={syncing === f.id}>{syncing === f.id ? t('settings2.cal.reading') : t('settings2.cal.resync')}</Button>
+                      <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(f)}>{t('settings2.cal.remove')}</Button>
                     </div>
                     {f.sync_error && <p className="border-l-[3px] border-late bg-late/5 px-3 py-1.5 text-xs text-late">
-                      Lecture impossible ({f.sync_error}). Vérifiez que le lien est toujours valable et public.</p>}
+                      {t('settings2.cal.syncError', { error: f.sync_error })}</p>}
                   </li>
                 ))}
               </ul>
             )
           )}
           <form onSubmit={add} className="space-y-3 border-t border-border p-4">
-            <p className="text-sm font-bold">Ajouter un agenda</p>
+            <p className="text-sm font-bold">{t('settings2.cal.addTitle')}</p>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Nom"><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} placeholder="Agenda perso" /></Field>
-              <Field label="Lien iCal (https:// ou webcal://)" className="sm:col-span-2">
+              <Field label={t('settings2.shared.name')}><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} placeholder={t('settings2.cal.namePlaceholder')} /></Field>
+              <Field label={t('settings2.cal.urlLabel')} className="sm:col-span-2">
+                {/* i18n-ok */}
                 <Input value={url} onChange={(e) => setUrl(e.target.value)} required placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
               </Field>
             </div>
-            <Field label="Couleur"><ColorChoice value={color} onChange={setColor} /></Field>
+            <Field label={t('settings2.cal.color')}><ColorChoice value={color} onChange={setColor} /></Field>
             <ErrorNote error={addErr} />
-            <Button type="submit" variant="primary" disabled={busy || !name.trim() || !url.trim()}>{busy ? 'Lecture de l\'agenda…' : 'Ajouter'}</Button>
+            <Button type="submit" variant="primary" disabled={busy || !name.trim() || !url.trim()}>{busy ? t('settings2.cal.readingCalendar') : t('common.add')}</Button>
           </form>
         </Card>
 
-        <Card title="Où trouver le lien">
+        <Card title={t('settings2.cal.whereTitle')}>
           <ul className="divide-y divide-border">
             {HELP.map((h) => (
-              <li key={h.name} className="space-y-1 px-4 py-3 text-sm">
-                <p className="font-bold">{h.name}</p>
-                <p>{h.steps}</p>
-                <p className="text-xs text-muted-foreground">{h.back}</p>
+              <li key={h.id} className="space-y-1 px-4 py-3 text-sm">
+                <p className="font-bold">{t(`settings2.cal.help.${h.id}.name`)}</p>
+                <p>{t(h.steps)}</p>
+                <p className="text-xs text-muted-foreground">{t(h.back)}</p>
               </li>
             ))}
           </ul>
         </Card>
       </div>
-      <Confirm open={Boolean(removing)} onClose={() => setRemoving(null)} title="Retirer cet agenda ?" danger confirmLabel="Retirer"
-        onConfirm={() => removing && remove(removing)}>Ses événements disparaissent de l'Agenda de ProjectLead ; l'agenda d'origine n'est pas touché.</Confirm>
+      <Confirm open={Boolean(removing)} onClose={() => setRemoving(null)} title={t('settings2.cal.removeTitle')} danger confirmLabel={t('settings2.cal.remove')}
+        onConfirm={() => removing && remove(removing)}>{t('settings2.cal.removeText')}</Confirm>
     </>
   )
 }

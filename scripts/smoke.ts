@@ -847,13 +847,17 @@ delete process.env.LEAD_ID_CLIENT_SECRET
   // Les écrans : plus aucun champ ni texte de clé pour relier deux applications Lead (contrat §4).
   const { readFileSync } = await import('node:fs')
   const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
-  const screen = read('src/components/settings/Integrations.tsx')
+  // Cinq langues (27.10.2026) : les textes des écrans vivent dans src/i18n/locales/<langue>/*.json ; le français fait foi.
+  const { readdirSync } = await import('node:fs')
+  const frTexts = readdirSync(new URL('../src/i18n/locales/fr/', import.meta.url)).filter((f) => f.endsWith('.json'))
+    .map((f) => Object.values(JSON.parse(read(`src/i18n/locales/fr/${f}`)) as Record<string, string>).join('\n')).join('\n')
+  const screen = read('src/components/settings/Integrations.tsx') + '\n' + frTexts
   check('écran « Applications Lead » : textes exigés (Reliée, Pas encore utilisée, Pas besoin de clé pour relier)',
     ['Applications Lead', 'Reliée', 'Pas encore utilisée', 'Pas besoin de clé pour relier les applications Lead', 'rien à copier ni à coller']
-      .every((t) => screen.includes(t)) && read('src/components/LeadLinks.tsx').includes('pas encore utilisée par votre entreprise'))
+      .every((t) => screen.includes(t)) && (read('src/components/LeadLinks.tsx') + frTexts).includes('pas encore utilisée par votre entreprise'))
   const files = ['src/components/settings/Integrations.tsx', 'src/pages/Clients.tsx', 'src/pages/Billing.tsx', 'src/pages/ClientDetail.tsx',
     'src/components/PlanCard.tsx', 'src/pages/Legal.tsx', 'src/lib/api.ts', 'src/pages/Settings.tsx']
-  const bad = files.filter((f) => /il_live_|crm_…|Clé d'API InvoiceLead|clé d'API \(formule|clé d\\'API InvoiceLead|relie par une clé|Brancher (CRMlead|InvoiceLead)|formule Pro\+ d'InvoiceLead|type="password"/i.test(read(f)))
+  const bad = [...files, 'src/i18n/locales/fr'].filter((f) => /il_live_|crm_…|Clé d'API InvoiceLead|clé d'API \(formule|clé d\\'API InvoiceLead|relie par une clé|Brancher (CRMlead|InvoiceLead)|formule Pro\+ d'InvoiceLead|type="password"/i.test(f.endsWith('/fr') ? frTexts : read(f)))
   check('aucun écran ne demande ni ne cite une clé ou Pro+ pour relier CRMlead / InvoiceLead', bad.length === 0, bad)
 }
 
@@ -1641,6 +1645,7 @@ void proSession
 
 section('Arrivée : adresse d’entrée /login, racine, liens profonds, un seul départ (src/lib/arrival.ts)')
 {
+  { const { useLocaleFromFiles } = await import('./i18n-node.js'); useLocaleFromFiles('fr') }
   const { sameSitePath, requestedPage, leadStart, alreadyInTarget, departsAlone, REFUSED, startLeaving, stopLeaving, isLeaving, leave, leavingState, watchLeaving } = await import('../src/lib/arrival.js')
   // Une personne sortie par ERPlead AVANT le passage (db/009_passage.sql : rien ne distingue cette sortie d'une
   // désactivation par un administrateur) voit aussi cet écran : il ne doit pas accuser un administrateur, et donne le remède.
@@ -2017,6 +2022,7 @@ section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six
   const { homedir } = await import('node:os')
   const { createElement } = await import('react')
   const { renderToStaticMarkup } = await import('react-dom/server')
+  { const { useLocaleFromFiles } = await import('./i18n-node.js'); useLocaleFromFiles('fr') }
   const { LEAD_FAMILY, HERE_APP } = await import('../src/lib/leadFamily.js')
   const { default: AppSwitcher, launcherDismiss } = await import('../src/components/AppSwitcher.js')
   // La copie de référence (banc lead-e2e), sinon la conception du passage ; chaque dépôt garde une copie identique.
@@ -2074,7 +2080,9 @@ section('Lanceur de la famille Lead : la liste canonique (lead-family.json), six
   const layout = readFileSync(new URL('../src/components/Layout.tsx', import.meta.url), 'utf8')
   check('l’en-tête de l’espace porte le lanceur, à gauche du menu de la personne, et data-lead-org', /<AppSwitcher[^>]*\/>\s*<UserMenu \/>/.test(layout)
     && layout.includes('data-lead-org={me?.account.lead_org'))
-  const login = readFileSync(new URL('../src/pages/Login.tsx', import.meta.url), 'utf8')
+  const frDir = new URL('../src/i18n/locales/fr/', import.meta.url)
+  const login = readFileSync(new URL('../src/pages/Login.tsx', import.meta.url), 'utf8') + '\n'
+    + (await import('node:fs')).readdirSync(frDir).filter((f) => f.endsWith('.json')).map((f) => readFileSync(new URL(f, frDir), 'utf8')).join('\n')
   check('écran de connexion : « Le même compte pour toutes les applications Lead. »', login.includes('Le même compte pour toutes les applications Lead.'))
 }
 
@@ -2652,6 +2660,171 @@ section('Abonnement ProjectLead : Checkout, portail, webhook (faux Stripe)')
   fakeStripe.close()
   for (const k of ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_PRO_MONTHLY', 'STRIPE_PRICE_PRO_YEARLY', 'STRIPE_PRICE_PROPLUS_MONTHLY',
     'STRIPE_PRICE_PROPLUS_YEARLY', 'STRIPE_PORTAL_CONFIGURATION', 'STRIPE_API_BASE']) delete process.env[k]
+}
+
+section('Cinq langues (27.10.2026) : langue de la personne, de l’entreprise et des documents, devise selon le pays')
+{
+  const { tr, LOCALES } = await import('../server/lib/i18n.js')
+  const FIVE = LOCALES as readonly string[]
+  // Ce qui trahirait un texte resté en français dans une autre langue.
+  const FRENCH = /Bonjour|Étapes|Avancement|Cordialement|Votre rendez-vous|Pour l'annuler|Lieu :/
+  r = await new Client().post('/api/me/locale', { locale: 'de' })
+  check('POST /api/me/locale sans session → 401', r.status === 401, r)
+  r = await eve.post('/api/me/locale', { locale: 'pt' })
+  check('POST /api/me/locale : une langue hors des cinq refusée (400)', r.status === 400, r.body)
+  r = await eve.post('/api/me/locale', { locale: 'de' })
+  const eveLocale = (await pool.query('select locale from users where id = $1', [eveId])).rows[0]?.locale
+  check('POST /api/me/locale avec session : enregistrée (users.locale), relue par /api/me', r.status === 200 && eveLocale === 'de'
+    && (await eve.get('/api/me')).body.user.locale === 'de', { status: r.status, eveLocale })
+  r = await eve.get('/api/time/export.csv')
+  check('export CSV : en-têtes dans la langue de la personne (de)', r.status === 200 && String(r.body).replace(/^﻿/, '').startsWith('Datum;Person;Code;Projekt;Kunde;Aufgabe;Stunden;Verrechenbar;Notiz;Rechnung')
+    && /zeiten\.csv/.test(r.headers.get('content-disposition') ?? ''), String(r.body).slice(0, 120))
+  r = await eve.get('/api/time/export.csv?lang=es')
+  check('export CSV : ?lang=es l’emporte (en-têtes, « sí/no », nom du fichier)', String(r.body).replace(/^﻿/, '').startsWith('Fecha;Persona;Código;Proyecto;Cliente;Tarea;Horas;Facturable;Nota;Factura')
+    && /;(sí|no);/.test(String(r.body)) && /tiempos\.csv/.test(r.headers.get('content-disposition') ?? ''), String(r.body).slice(0, 160))
+  r = await eve.get('/api/time/export.csv?lang=en')
+  check('export CSV en anglais : en-têtes anglais, aucun en-tête français', String(r.body).replace(/^﻿/, '').startsWith('Date;Person;Code;Project;Client;Task;Hours;Billable;Note;Invoice')
+    && !/Personne|Tâche|Facturable/.test(String(r.body).split('\r\n')[0]), String(r.body).slice(0, 120))
+  r = await eve.get('/api/time/report?group=task&lang=it')
+  check('rapport de temps : « (senza attività) » dans la langue demandée', r.status === 200 && !r.body.some((x: any) => x.label === '(sans tâche)'), r.body)
+  await eve.post('/api/me/locale', { locale: 'fr' })
+
+  r = await eve.patch('/api/account', { locale: 'it' })
+  const accLocale = (await eve.get('/api/me')).body.account.locale
+  check('PATCH /api/account { locale } : langue de l’entreprise enregistrée', r.status === 200 && accLocale === 'it', { status: r.status, accLocale })
+  r = await eve.patch('/api/account', { locale: 'xx' })
+  check('PATCH /api/account : langue inconnue refusée (400)', r.status === 400, r.body)
+  await eve.patch('/api/account', { locale: 'fr' })
+
+  r = await eve.patch(`/api/projects/${projId}`, { doc_locale: 'de' })
+  const detail = (await eve.get(`/api/projects/${projId}`)).body
+  check('projet : doc_locale accepté par PATCH et rendu par le détail', r.status === 200 && detail.doc_locale === 'de', { status: r.status, doc: detail.doc_locale })
+  check('projet : doc_locale rendu aussi par la liste', (await eve.get('/api/projects')).body.find((p: any) => p.id === projId)?.doc_locale === 'de')
+  r = await eve.patch(`/api/projects/${projId}`, { doc_locale: 'pt' })
+  check('projet : doc_locale inconnu refusé (400)', r.status === 400, r.body)
+  r = await eve.post(`/api/projects/${projId}/duplicate`, { name: 'Copie de', as_template: true })
+  const dupDoc = r.status === 201 ? (await eve.get(`/api/projects/${r.body.id}`)).body : null
+  check('duplication : la langue des documents et la devise suivent', dupDoc?.doc_locale === 'de' && dupDoc?.currency === detail.currency, dupDoc && { doc: dupDoc.doc_locale, cur: dupDoc.currency })
+
+  // Le suivi client, construit dans chacune des cinq langues.
+  const subjects: string[] = []
+  const reports: Record<string, any> = {}
+  for (const l of FIVE) {
+    await eve.patch(`/api/projects/${projId}`, { doc_locale: l })
+    reports[l] = (await eve.get(`/api/projects/${projId}/client-report`)).body
+    subjects.push(reports[l]?.subject)
+  }
+  check('suivi client : un objet différent dans chacune des cinq langues', new Set(subjects).size === 5 && subjects.every(Boolean), subjects)
+  check('suivi client : objet tiré de la langue du document (fr, de, en, it, es)', FIVE.every((l, i) => subjects[i] === tr(l, 'report.subject', { name: detail.name })), subjects)
+  const leaks = FIVE.filter((l) => l !== 'fr').filter((l) => FRENCH.test(reports[l]?.text ?? '') || FRENCH.test(reports[l]?.html ?? '')
+    || reports[l]?.text.includes(tr('fr', 'report.stage.done')))
+  check('suivi client de/en/it/es : aucun texte français (Bonjour, Étapes, Avancement, Terminée…)', leaks.length === 0, leaks.map((l) => [l, reports[l]?.text?.slice(0, 200)]))
+  check('suivi client : libellés d’étapes et santé traduits (de : « Abgeschlossen », « Phasen: »)', reports.de?.text.includes(`: ${tr('de', 'report.stage.done')}`)
+    && reports.de?.text.includes(tr('de', 'report.stages')) && reports.de?.html.includes('lang="de"'), reports.de?.text)
+  check('suivi client : le lien de la page de suivi porte ?lang=<langue>', FIVE.every((l) => reports[l]?.portalUrl?.endsWith(`?lang=${l}`)), FIVE.map((l) => reports[l]?.portalUrl))
+  r = await new Client().get(`/api/public/portal/${portalToken}`)
+  check('page de suivi publique : rend la langue du document (locale)', r.status === 200 && r.body.locale === 'es', r.body?.locale)
+  await eve.patch(`/api/projects/${projId}`, { doc_locale: null })
+  r = await new Client().get(`/api/public/portal/${portalToken}`)
+  check('doc_locale vide : la page de suivi prend la langue de l’entreprise', r.body.locale === 'fr', r.body?.locale)
+  r = await eve.post(`/api/projects/${projId}/client-report`, { message: null })
+  check('suivi envoyé sans doc_locale : en français (langue de l’entreprise), comme avant', r.status === 200
+    && (await pool.query(`select subject from sent_emails where account_id = $1 order by created_at desc limit 1`, [accountId])).rows[0]?.subject === tr('fr', 'report.subject', { name: detail.name }))
+
+  // La confirmation de rendez-vous, dans la langue de la personne qui réserve (corps du POST), lue dans sent_emails.
+  const slug = `cinq-${stamp}`
+  const all = Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((d) => [d, [['07:00', '19:00']]]))
+  r = await eve.post('/api/booking', { slug, name: 'Visite', duration_minutes: 15, min_notice_hours: 0, max_days_ahead: 30, availability: all, host_ids: [eveId] })
+  check('type de rendez-vous pour les cinq langues', r.status === 201, r.body)
+  r = await new Client().get(`/api/public/booking/${slug}?from=${addDays(today, 3)}&days=2`)
+  const times: string[] = (r.body.slots ?? []).flatMap((s: any) => s.times.map((x: any) => x.start))
+  const confs: Record<string, any> = {}
+  for (const [i, l] of FIVE.entries()) {
+    const to = `rdv-${l}-${stamp}@exemple.test`
+    const got = await new Client().post(`/api/public/booking/${slug}`, { starts_at: times[i * 2], name: `Client ${l}`, email: to, locale: l })
+    confs[l] = { status: got.status, mail: (await pool.query(`select subject, body from sent_emails where to_emails @> array[$1::text]`, [to])).rows[0],
+                 stored: (await pool.query(`select locale from bookings where email = $1`, [to])).rows[0]?.locale }
+  }
+  check('rendez-vous : confirmation dans chacune des cinq langues (objet de la langue choisie)', FIVE.every((l) => confs[l].status === 201
+    && confs[l].mail?.subject === tr(l, 'booking.confirmedSubject', { type: 'Visite' })), FIVE.map((l) => [l, confs[l].status, confs[l].mail?.subject]))
+  check('rendez-vous de/en/it/es : aucun texte français dans la confirmation', FIVE.filter((l) => l !== 'fr').every((l) => !FRENCH.test(confs[l].mail?.body ?? '')),
+    FIVE.map((l) => confs[l].mail?.body?.slice(0, 120)))
+  check('rendez-vous : langue gardée sur la réservation, lien de gestion ?lang=', FIVE.every((l) => confs[l].stored === l && confs[l].mail?.body.includes(`?lang=${l}`)),
+    FIVE.map((l) => [confs[l].stored, confs[l].mail?.body?.match(/\?lang=\w+/)?.[0]]))
+  r = await new Client().get(`/api/public/booking/${slug}`)
+  const sansLangue = `rdv-sans-${stamp}@exemple.test`
+  await new Client().req('POST', `/api/public/booking/${slug}`, { starts_at: times[11], name: 'Hans', email: sansLangue }, { 'accept-language': 'de-CH,de;q=0.9' })
+  check('rendez-vous sans langue dans le corps : celle du navigateur (Accept-Language)', (await pool.query(`select subject from sent_emails where to_emails @> array[$1::text]`, [sansLangue])).rows[0]?.subject
+    === tr('de', 'booking.confirmedSubject', { type: 'Visite' }))
+  const hostNotif = (await pool.query(`select title from notifications where user_id = $1 and kind = 'booking' order by created_at desc limit 1`, [eveId])).rows[0]?.title
+  check('rendez-vous : l’hôte est prévenu dans SA langue (fr)', hostNotif === tr('fr', 'booking.newNotif', { name: 'Hans' }), hostNotif)
+
+  // Devise et langue à la création de l'entreprise : x-vercel-ip-country de la requête de retour du Compte Lead.
+  async function leadLoginFrom(claims: (nonce: string) => Record<string, unknown>, headers: Record<string, string>) {
+    const start = await app.request('http://localhost/auth/lead/start', { headers })
+    const to = new URL(start.headers.get('location') ?? 'http://x/')
+    const jar = (start.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+    nextIdClaims = claims(to.searchParams.get('nonce') ?? '')
+    const back = await app.request(`http://localhost/auth/lead/callback?code=c&state=${to.searchParams.get('state')}`, { headers: { cookie: jar, ...headers } })
+    return { authorize: to, session: (back.headers.get('set-cookie') ?? '').match(/projectlead_session=[^;]+/)?.[0] ?? '' }
+  }
+  const want: Record<string, string> = { CH: 'CHF', FR: 'EUR', DE: 'EUR', AT: 'EUR', IT: 'EUR', ES: 'EUR', US: 'USD', GB: 'GBP', JP: 'CHF' }
+  const got: Record<string, string> = {}
+  for (const cc of Object.keys(want)) {
+    const org = `pays-${cc.toLowerCase()}-${stamp}`
+    await leadLoginFrom((n) => ({ ...lead(n, true, org), lead: rights('pro_plus') }), { 'x-vercel-ip-country': cc })
+    got[cc] = (await pool.query('select currency from accounts where lead_org = $1', [org])).rows[0]?.currency
+  }
+  check('devise à la création selon x-vercel-ip-country : CH→CHF, FR/DE/AT/IT/ES→EUR, US→USD, GB→GBP, JP→CHF',
+    Object.keys(want).every((cc) => got[cc] === want[cc]), got)
+  const deOrg = `langue-de-${stamp}`
+  const de = await leadLoginFrom((n) => ({ ...lead(n, true, deOrg), locale: 'de-CH', lead: rights('pro_plus') }), { 'x-vercel-ip-country': 'DE' })
+  check('départ vers le Compte Lead : ui_locales tiré du navigateur (Accept-Language), sinon fr',
+    (await leadLoginFrom((n) => lead(n, true, `ui-${stamp}`), { 'accept-language': 'it-CH,it;q=0.9' })).authorize.searchParams.get('ui_locales') === 'it'
+    && new URL((await app.request('http://localhost/auth/lead/start?locale=es')).headers.get('location') ?? 'http://x/').searchParams.get('ui_locales') === 'es')
+  const deAcc = (await pool.query('select id, currency, locale from accounts where lead_org = $1', [deOrg])).rows[0]
+  const deUser = (await pool.query(`select locale from users where lead_sub = $1`, [`sub-${deOrg}`])).rows[0]
+  check('langue du Compte Lead (de-CH) : personne et entreprise en allemand, devise EUR (pays DE)', deAcc?.locale === 'de' && deUser?.locale === 'de' && deAcc?.currency === 'EUR', { deAcc, deUser })
+  const tpl = (await pool.query(`select id, name, description from projects where account_id = $1 and is_template`, [deAcc?.id])).rows[0]
+  const tplStages = (await pool.query('select name from stages where project_id = $1 order by position', [tpl?.id])).rows.map((x) => x.name)
+  const tplCols = (await pool.query('select name from board_columns where project_id = $1 order by position', [tpl?.id])).rows.map((x) => x.name)
+  const tplTasks = (await pool.query('select title from tasks where project_id = $1', [tpl?.id])).rows.map((x) => x.title)
+  check('modèle de départ dans la langue de l’entreprise (de) : nom, étapes, colonnes, tâches', tpl?.name === tr('de', 'defaults.template.name')
+    && tplStages.join('|') === ['scoping', 'design', 'build', 'delivery'].map((k) => tr('de', `defaults.stage.${k}.name`)).join('|')
+    && tplCols[0] === tr('de', 'defaults.column.todo') && tplCols[3] === tr('de', 'defaults.column.done') && tplTasks.length === 10
+    && !tplTasks.some((x) => FRENCH.test(x) || /Réunion|Rédiger|Recette/.test(x)), { name: tpl?.name, tplStages, tplCols })
+  check('langue des factures de l’entreprise = sa langue (de)', (await pool.query('select invoice_language from account_settings where account_id = $1', [deAcc?.id])).rows[0]?.invoice_language === 'de')
+  const deC = new Client(); deC.cookie = de.session
+  r = await deC.post('/api/projects', { name: 'Neues Projekt' })
+  const deProj = (await deC.get(`/api/projects/${r.body.id}`)).body
+  check('nouveau projet sans devise : celle de l’entreprise (EUR), colonnes dans sa langue', r.status === 201 && deProj.currency === 'EUR'
+    && deProj.columns[0]?.name === tr('de', 'defaults.column.todo'), { status: r.status, cur: deProj.currency, col: deProj.columns?.[0]?.name })
+  r = await deC.post('/api/projects', { name: 'Projekt CHF', currency: 'CHF' })
+  check('une autre devise reste possible dans une formule gratuite comme payante (aucune réservée)', r.status === 201
+    && (await deC.get(`/api/projects/${r.body.id}`)).body.currency === 'CHF')
+  const ptOrg = `langue-pt-${stamp}`
+  await leadLoginFrom((n) => ({ ...lead(n, true, ptOrg), locale: 'pt-BR' }), { 'accept-language': 'es-ES,es;q=0.9' })
+  check('langue du Compte Lead hors des cinq (pt) : celle du navigateur (es)', (await pool.query('select locale from accounts where lead_org = $1', [ptOrg])).rows[0]?.locale === 'es')
+
+  // Invitation : la langue du corps, sinon celle de qui invite ; lien avec ?lang=.
+  const invTo = `cinq-inv-${stamp}@exemple.test`
+  r = await deC.post('/api/team/invite', { email: invTo, locale: 'en' })
+  const invMail = (await pool.query(`select subject, body from sent_emails where to_emails @> array[$1::text]`, [invTo])).rows[0]
+  check('invitation dans la langue demandée (en), lien ?lang=en', r.status === 201 && invMail?.subject === tr('en', 'invite.subject', { account: `Entreprise ${deOrg}` })
+    && invMail.body.includes('?lang=en') && !FRENCH.test(invMail.body), { status: r.status, invMail })
+  const invTo2 = `cinq-inv2-${stamp}@exemple.test`
+  r = await deC.post('/api/team/invite', { email: invTo2 })
+  check('invitation sans langue : celle de qui invite (de)', (await pool.query(`select subject from sent_emails where to_emails @> array[$1::text]`, [invTo2])).rows[0]?.subject
+    === tr('de', 'invite.subject', { account: `Entreprise ${deOrg}` }))
+  r = await deC.post('/api/team/invite', { email: `cinq-inv3-${stamp}@exemple.test`, locale: 'pt' })
+  check('invitation : langue inconnue refusée (400)', r.status === 400, r.body)
+
+  // Notifications dans la langue du destinataire.
+  await pool.query(`update users set locale = 'en' where id = $1`, [marcId])
+  r = await eve.post('/api/tasks', { project_id: projId, title: 'Task for Marc', assignee_ids: [marcId] })
+  const marcNotif = (await pool.query(`select title from notifications where user_id = $1 and kind = 'assigned' order by created_at desc limit 1`, [marcId])).rows[0]?.title
+  check('notification « vous a confié » dans la langue de la personne (en)', marcNotif === tr('en', 'notif.assigned', { who: 'Ève Test', title: 'Task for Marc' }), marcNotif)
+  await pool.query(`update users set locale = 'fr' where id = $1`, [marcId])
 }
 
 delete process.env.LEAD_ID_CLIENT_SECRET

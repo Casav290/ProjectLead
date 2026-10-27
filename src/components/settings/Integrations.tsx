@@ -6,6 +6,7 @@ import { fmtDate as formatDate } from '../../lib/format'
 import { useLoad } from '../../lib/store'
 import { NotUsed, OpenApp, type LinkedApp } from '../LeadLinks'
 import { SettingsHeader, useRole } from './kit'
+import { labels, useT } from '../../i18n'
 
 /**
  * Réglages → « Applications Lead » (liaison sans clé, 26.10.2026) : même entreprise dans le Compte Lead = reliées. Rien
@@ -16,17 +17,21 @@ type Settings = {
   links: { company: string; email?: string; lead: boolean; crmlead: Status; invoicelead: Status }
   company: string
   last_deal_at: string | null; last_client_update_at: string | null; last_invoice_at: string | null
-  monthly_billing_auto: boolean; monthly_billing_day: number; invoice_language: 'fr' | 'de' | 'it' | 'en'
+  monthly_billing_auto: boolean; monthly_billing_day: number; invoice_language: 'fr' | 'de' | 'it' | 'en' | 'es'
   client_update_signature: string | null
 }
 
-const LANG: Record<string, string> = { fr: 'Français', de: 'Allemand', it: 'Italien', en: 'Anglais' }
+const LANG = labels('settings.integrations.lang', ['fr', 'de', 'it', 'en', 'es'])
 
-const State = ({ s }: { s: Status }) => s === 'linked'
-  ? <Badge tone="ok"><span data-link-badge="linked">Reliée</span></Badge>
-  : <Badge><span data-link-badge="not_used">Pas encore utilisée</span></Badge>
+function State({ s }: { s: Status }) {
+  const t = useT()
+  return s === 'linked'
+    ? <Badge tone="ok"><span data-link-badge="linked">{t('settings.integrations.linked')}</span></Badge>
+    : <Badge><span data-link-badge="not_used">{t('settings.integrations.notUsed')}</span></Badge>
+}
 
 export default function Integrations() {
+  const t = useT()
   const { data, error, loading, reload } = useLoad<Settings>('/integrations?fresh=1')
 
   if (loading && !data) return <Spinner />
@@ -35,44 +40,40 @@ export default function Integrations() {
 
   return (
     <>
-      <SettingsHeader title="Applications Lead">ProjectLead travaille avec les autres applications de la famille Lead : les adresses
-        viennent de CRMlead, les factures partent dans InvoiceLead.</SettingsHeader>
+      <SettingsHeader title={t('settings.menu.integrations')}>{t('settings.integrations.intro')}</SettingsHeader>
       <div className="max-w-3xl space-y-5">
         {l.lead ? (
-          <p data-lead-company className="text-sm">Entreprise du Compte Lead : <b>{l.company}</b>{l.email ? ` (${l.email})` : ''}. Les applications
-            ouvertes avec cette entreprise se relient toutes seules : rien à copier ni à coller.</p>
+          <p data-lead-company className="text-sm">{t('settings.integrations.companyLabel')} <b>{l.company}</b>{l.email ? ` (${l.email})` : ''}{t('settings.integrations.companyAfter')}</p>
         ) : (
           <Card>
             <div className="space-y-3 p-4 text-sm">
-              <p>Connectez-vous une fois avec votre Compte Lead pour relier vos applications.</p>
+              <p>{t('settings.integrations.signInOnce')}</p>
               <a href="/auth/lead/start?next=%2Freglages%2Fintegrations" className="inline-flex border border-input bg-card px-3 py-1.5 font-bold hover:bg-muted">
-                Se connecter avec le Compte Lead</a>
+                {t('settings.integrations.signIn')}</a>
             </div>
           </Card>
         )}
 
-        <AppRow app="crmlead" title="CRMlead" state={l.crmlead}>
-          <p className="text-sm">Les affaires gagnées dans CRMlead arrivent ici comme projets, et l'adresse de leurs clients reste à jour.
-            Reprenez un autre client de CRMlead depuis <Link to="/clients" className="font-semibold text-accent">Clients</Link>. Pour arrêter
-            l'envoi : CRMlead → Intégrations → Applications Lead.</p>
+        {/* i18n-ok */}<AppRow app="crmlead" title="CRMlead" state={l.crmlead}>
+          <p className="text-sm">{t('settings.integrations.crmBefore')}<Link to="/clients" className="font-semibold text-accent">{t('settings.integrations.clients')}</Link>{t('settings.integrations.crmAfter')}</p>
           {(data.last_deal_at || data.last_client_update_at) && (
             <p className="text-xs text-muted-foreground">
-              {data.last_deal_at && <>Dernière affaire reçue : {formatDate(data.last_deal_at)}. </>}
-              {data.last_client_update_at && <>Dernière adresse mise à jour : {formatDate(data.last_client_update_at)}.</>}
+              {data.last_deal_at && <>{t('settings.integrations.lastDeal', { date: formatDate(data.last_deal_at) })} </>}
+              {data.last_client_update_at && <>{t('settings.integrations.lastAddress', { date: formatDate(data.last_client_update_at) })}</>}
             </p>
           )}
         </AppRow>
 
-        <AppRow app="invoicelead" title="InvoiceLead" state={l.invoicelead}>
-          <p className="text-sm">Les brouillons de factures du mois partent dans InvoiceLead ; vous les relisez et les émettez là-bas.</p>
-          {data.last_invoice_at && <p className="text-xs text-muted-foreground">Dernier brouillon créé : {formatDate(data.last_invoice_at)}.</p>}
+        {/* i18n-ok */}<AppRow app="invoicelead" title="InvoiceLead" state={l.invoicelead}>
+          <p className="text-sm">{t('settings.integrations.invoiceText')}</p>
+          {data.last_invoice_at && <p className="text-xs text-muted-foreground">{t('settings.integrations.lastInvoice', { date: formatDate(data.last_invoice_at) })}</p>}
           <BillingSchedule data={data} onChange={reload} />
         </AppRow>
 
-        <Card title="API et outils extérieurs">
+        <Card title={t('settings.integrations.apiTitle')}>
           <div className="space-y-2 p-4 text-sm">
-            <p>Pour Zapier, Make, Claude, ChatGPT ou vos scripts. Pas besoin de clé pour relier les applications Lead.</p>
-            <ButtonLink to="/reglages/api">Clés d'API pour les outils extérieurs</ButtonLink>
+            <p>{t('settings.integrations.apiText')}</p>
+            <ButtonLink to="/reglages/api">{t('settings.integrations.apiKeys')}</ButtonLink>
           </div>
         </Card>
       </div>
@@ -92,6 +93,7 @@ function AppRow({ app, title, state, children }: { app: LinkedApp; title: string
 
 /** Langue des factures et brouillons automatiques : seulement si InvoiceLead est reliée (la page est réservée aux administrateurs). */
 function BillingSchedule({ data, onChange }: { data: Settings; onChange: () => void }) {
+  const t = useT()
   const { isAdmin } = useRole()
   const [auto, setAuto] = useState(data.monthly_billing_auto)
   const [day, setDay] = useState(data.monthly_billing_day)
@@ -105,27 +107,26 @@ function BillingSchedule({ data, onChange }: { data: Settings; onChange: () => v
     setBusy(true)
     try {
       await api.patch('/integrations/settings', { monthly_billing_auto: auto, monthly_billing_day: day, invoice_language: lang })
-      toast('Facturation enregistrée'); onChange()
+      toast(t('settings.integrations.billingSaved')); onChange()
     } catch (err) { toast(errorText(err)) } finally { setBusy(false) }
   }
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <Field label="Langue des factures" className="max-w-xs">
+      <Field label={t('settings.integrations.invoiceLanguage')} className="max-w-xs">
         <Select value={lang} onChange={(e) => setLang(e.target.value as Settings['invoice_language'])}>
           {Object.entries(LANG).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Checkbox checked={auto} onChange={setAuto} label="Créer les brouillons automatiquement le" />
-        <select value={day} onChange={(e) => setDay(Number(e.target.value))} aria-label="Jour du mois" disabled={!auto}
+        <Checkbox checked={auto} onChange={setAuto} label={t('settings.integrations.autoBefore')} />
+        <select value={day} onChange={(e) => setDay(Number(e.target.value))} aria-label={t('settings.integrations.dayOfMonth')} disabled={!auto}
           className="border border-input bg-card px-1 py-0.5 text-sm disabled:opacity-50">
           {Array.from({ length: 28 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        <span className="text-sm">du mois</span>
+        <span className="text-sm">{t('settings.integrations.autoAfter')}</span>
       </div>
-      <p className="text-xs text-muted-foreground">Les brouillons du mois précédent attendent dans InvoiceLead ; rien n'est envoyé au client sans vous.
-        Vous pouvez aussi les créer à la main depuis <Link to="/facturation" className="font-semibold text-accent">Facturation</Link>.</p>
-      <Button onClick={save} disabled={busy || !dirty}>Enregistrer</Button>
+      <p className="text-xs text-muted-foreground">{t('settings.integrations.draftsBefore')}<Link to="/facturation" className="font-semibold text-accent">{t('settings.integrations.billing')}</Link>{t('settings.integrations.draftsAfter')}</p>
+      <Button onClick={save} disabled={busy || !dirty}>{t('common.save')}</Button>
     </div>
   )
 }

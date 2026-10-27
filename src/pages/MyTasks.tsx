@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import TaskDrawer from '../components/project/TaskDrawer'
 import { DoneToggle, DueLabel, MilestoneMark, PRIORITY_RANK, setTaskDone } from '../components/project/shared'
 import { Badge, Button, Empty, ErrorNote, Input, PageHeader, PriorityBadge, Select, Spinner, toast } from '../components/ui'
+import { intlLocale, labels, useT } from '../i18n'
 import { api, errorText } from '../lib/api'
 import { addDays, fmtRelative, mondayOf, today } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
@@ -12,14 +13,15 @@ import type { ProjectSummary, Task } from '../lib/types'
 /** Mes tâches, tous projets confondus, rangées par urgence. */
 
 type SectionKey = 'late' | 'today' | 'week' | 'later' | 'none' | 'done'
-const SECTIONS: { key: SectionKey; title: string; tone?: string }[] = [
-  { key: 'late', title: 'En retard', tone: 'text-late' },
-  { key: 'today', title: "Aujourd'hui", tone: 'text-soon' },
-  { key: 'week', title: 'Cette semaine' },
-  { key: 'later', title: 'Plus tard' },
-  { key: 'none', title: 'Sans date' },
-  { key: 'done', title: 'Terminées récemment' },
+const SECTIONS: { key: SectionKey; tone?: string }[] = [
+  { key: 'late', tone: 'text-late' },
+  { key: 'today', tone: 'text-soon' },
+  { key: 'week' },
+  { key: 'later' },
+  { key: 'none' },
+  { key: 'done' },
 ]
+const SECTION_TITLE = labels('tasks.my.section', ['late', 'today', 'week', 'later', 'none', 'done'])
 
 function sectionOf(t: Task, now: string, weekEnd: string, recent: string): SectionKey | null {
   if (t.completed_at) return t.completed_at.slice(0, 10) >= recent ? 'done' : null
@@ -31,6 +33,7 @@ function sectionOf(t: Task, now: string, weekEnd: string, recent: string): Secti
 }
 
 export default function MyTasks() {
+  const t = useT()
   const { me } = useApp()
   const { data, setData, error, loading, reload } = useLoad<Task[]>('/tasks?assignee=me')
   const { data: projects } = useLoad<ProjectSummary[]>('/projects')
@@ -58,7 +61,7 @@ export default function MyTasks() {
   const projectOptions = useMemo(() => {
     const seen = new Map<string, { id: string; name: string; color: string }>()
     for (const t of tasks) seen.set(t.project_id, { id: t.project_id, name: t.project_name, color: t.project_color })
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name, intlLocale()))
   }, [tasks])
 
   const toggle = async (t: Task, v: boolean) => {
@@ -71,10 +74,10 @@ export default function MyTasks() {
 
   return (
     <div className="min-w-0">
-      <PageHeader title="Mes tâches" subtitle={data ? `${openCount} ouverte${openCount > 1 ? 's' : ''}, ${groups.late.length} en retard` : undefined}
+      <PageHeader title={t('tasks.list.mine')} subtitle={data ? t('tasks.my.subtitle', { n: openCount, late: groups.late.length }) : undefined}
         actions={projectOptions.length > 1 && (
-          <Select aria-label="Filtrer par projet" value={project} onChange={(e) => setProject(e.target.value)} className="w-auto max-w-[16rem]">
-            <option value="">Tous les projets</option>
+          <Select aria-label={t('tasks.my.filterProject')} value={project} onChange={(e) => setProject(e.target.value)} className="w-auto max-w-[16rem]">
+            <option value="">{t('tasks.my.allProjects')}</option>
             {projectOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         )} />
@@ -83,7 +86,7 @@ export default function MyTasks() {
         meId={me?.user.id} onCreated={reload} />
 
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !tasks.length ? (
-        <Empty title="Aucune tâche ne vous est confiée">Les tâches qu'on vous assigne dans les projets apparaissent ici.</Empty>
+        <Empty title={t('tasks.my.emptyTitle')}>{t('tasks.my.emptyBody')}</Empty>
       ) : (
         <div className="space-y-4">
           {SECTIONS.map((s) => {
@@ -97,7 +100,7 @@ export default function MyTasks() {
                     onClick={() => setCollapsed((c) => { const n = new Set(c); if (n.has(s.key)) n.delete(s.key); else n.add(s.key); return n })}
                     className="flex w-full items-center gap-2 border-b border-border bg-head px-4 py-2.5 text-left">
                     <span className={clsx('inline-block w-3 text-muted-foreground transition-transform', !isCollapsed && 'rotate-90')} aria-hidden="true">›</span>
-                    <span className={clsx('text-[12px] font-extrabold uppercase tracking-[.08em]', s.tone ?? 'text-foreground')}>{s.title}</span>
+                    <span className={clsx('text-[12px] font-extrabold uppercase tracking-[.08em]', s.tone ?? 'text-foreground')}>{SECTION_TITLE[s.key]}</span>
                     <span className="text-xs font-semibold text-muted-foreground">{list.length}</span>
                   </button>
                 </h2>
@@ -105,7 +108,7 @@ export default function MyTasks() {
                   <ul className="divide-y divide-[#eeebe7]">
                     {list.map((t) => <Row key={t.id} task={t} onToggle={(v) => toggle(t, v)} onOpen={() => setOpenId(t.id)} />)}
                   </ul>
-                ) : <p className="px-4 py-3 text-sm text-muted-foreground">Rien ici.</p>)}
+                ) : <p className="px-4 py-3 text-sm text-muted-foreground">{t('tasks.my.nothing')}</p>)}
               </section>
             )
           })}
@@ -117,24 +120,25 @@ export default function MyTasks() {
   )
 }
 
-function Row({ task: t, onToggle, onOpen }: { task: Task; onToggle: (v: boolean) => void; onOpen: () => void }) {
-  const done = Boolean(t.completed_at)
+function Row({ task, onToggle, onOpen }: { task: Task; onToggle: (v: boolean) => void; onOpen: () => void }) {
+  const t = useT()
+  const done = Boolean(task.completed_at)
   return (
     <li className="flex items-start gap-3 px-4 py-2.5 hover:bg-accent-veil sm:items-center">
-      <span className="mt-0.5 sm:mt-0"><DoneToggle done={done} onChange={onToggle} label={`Terminée : ${t.title}`} /></span>
+      <span className="mt-0.5 sm:mt-0"><DoneToggle done={done} onChange={onToggle} label={t('tasks.list.doneTask', { title: task.title })} /></span>
       <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-3">
         <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2 text-left hover:text-accent sm:flex-1">
-          {t.is_milestone && <MilestoneMark />}
-          <span className={clsx('font-semibold [overflow-wrap:anywhere] sm:truncate', done && 'text-muted-foreground line-through')}>{t.title}</span>
+          {task.is_milestone && <MilestoneMark />}
+          <span className={clsx('font-semibold [overflow-wrap:anywhere] sm:truncate', done && 'text-muted-foreground line-through')}>{task.title}</span>
         </button>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:mt-0 sm:shrink-0">
-          {t.blocked && !done && <Badge tone="warn">Bloquée</Badge>}
-          <PriorityBadge priority={t.priority} />
-          <Link to={`/projets/${t.project_id}?tache=${t.id}`} className="inline-flex max-w-[14rem] items-center gap-1.5 text-muted-foreground hover:text-foreground">
-            <span className="h-2 w-2 shrink-0" style={{ background: t.project_color }} aria-hidden="true" />
-            <span className="truncate">{t.project_name}</span>
+          {task.blocked && !done && <Badge tone="warn">{t('tasks.drawer.blocked')}</Badge>}
+          <PriorityBadge priority={task.priority} />
+          <Link to={`/projets/${task.project_id}?tache=${task.id}`} className="inline-flex max-w-[14rem] items-center gap-1.5 text-muted-foreground hover:text-foreground">
+            <span className="h-2 w-2 shrink-0" style={{ background: task.project_color }} aria-hidden="true" />
+            <span className="truncate">{task.project_name}</span>
           </Link>
-          {done ? <span className="text-muted-foreground">{fmtRelative(t.completed_at)}</span> : <DueLabel task={t} className="w-14 text-right" />}
+          {done ? <span className="text-muted-foreground">{fmtRelative(task.completed_at)}</span> : <DueLabel task={task} className="w-14 text-right" />}
         </div>
       </div>
     </li>
@@ -142,6 +146,7 @@ function Row({ task: t, onToggle, onOpen }: { task: Task; onToggle: (v: boolean)
 }
 
 function QuickAdd({ projects, defaultProject, meId, onCreated }: { projects: ProjectSummary[]; defaultProject: string; meId?: string; onCreated: () => void }) {
+  const t = useT()
   const [title, setTitle] = useState('')
   const [project, setProject] = useState('')
   const [due, setDue] = useState('')
@@ -154,19 +159,19 @@ function QuickAdd({ projects, defaultProject, meId, onCreated }: { projects: Pro
     try {
       await api.post('/tasks', { project_id: chosen, title: title.trim(), due_date: due || null, assignee_ids: meId ? [meId] : [] })
       setTitle(''); setDue('')
-      toast('Tâche ajoutée')
+      toast(t('tasks.my.added'))
       onCreated()
     } catch (err) { toast(errorText(err)) } finally { setBusy(false) }
   }
   if (!projects.length) return null
   return (
     <form onSubmit={submit} className="mb-5 grid grid-cols-1 gap-2 border border-border bg-card p-3 sm:grid-cols-[1fr_14rem_10rem_auto]">
-      <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ajouter une tâche pour moi…" aria-label="Titre de la nouvelle tâche" />
-      <Select aria-label="Projet" value={chosen} onChange={(e) => setProject(e.target.value)}>
+      <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('tasks.my.addPlaceholder')} aria-label={t('tasks.my.newTitle')} />
+      <Select aria-label={t('tasks.field.project')} value={chosen} onChange={(e) => setProject(e.target.value)}>
         {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </Select>
-      <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} aria-label="Échéance" />
-      <Button type="submit" variant="primary" disabled={busy || !title.trim()}>Ajouter</Button>
+      <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} aria-label={t('tasks.field.due')} />
+      <Button type="submit" variant="primary" disabled={busy || !title.trim()}>{t('common.add')}</Button>
     </form>
   )
 }

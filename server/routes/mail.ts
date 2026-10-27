@@ -16,6 +16,7 @@ import { detect, userFor } from '../lib/mailbox/presets.js'
 import { mailboxSecretConfigured, seal } from '../lib/mailbox/secret.js'
 import { addresses, displayName, newMessageId, readable } from '../lib/mailbox/types.js'
 import { createProject } from './projects.js'
+import { fmtDateIn, tr } from '../lib/i18n.js'
 
 /**
  * Emails : les boîtes branchées (Gmail, Microsoft 365, IMAP — repris de CRMlead) et la boîte
@@ -189,6 +190,7 @@ app.post('/messages/:id/project', async (c) => {
     first_task: z.boolean().default(true), status: z.enum(['lead', 'planned', 'active']).default('lead'),
   }))
   const m = await loadMessage(c, c.req.param('id'))
+  const al = c.get('accountLocale')
   const id = await tx(c, async (db, ctx) => {
     let clientId = b.client_id ?? m.client_id ?? null
     if (!clientId) {
@@ -208,8 +210,10 @@ app.post('/messages/:id/project', async (c) => {
       clientId = cl.id
     }
     const pid = await createProject(db, ctx, {
-      name: (b.name || m.subject || `Demande de ${m.from_name || m.from_email}`).slice(0, 200),
-      description: m.body ? `Demande reçue par email le ${new Date(m.received_at).toLocaleDateString('fr-CH')} de ${m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email} :\n\n${m.body.slice(0, 15000)}` : '',
+      // Le projet et sa première tâche sont écrits dans la langue de l'entreprise.
+      name: (b.name || m.subject || tr(al, 'mail.requestFrom', { from: m.from_name || m.from_email })).slice(0, 200),
+      description: m.body ? `${tr(al, 'mail.receivedOn', { date: fmtDateIn(al, new Date(m.received_at).toISOString()),
+        from: m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email })}\n\n${m.body.slice(0, 15000)}` : '',
       client_id: clientId, template_id: b.template_id ?? null, member_ids: b.member_ids, status: b.status,
       source: 'email', source_ref: m.message_id,
     })
@@ -219,7 +223,7 @@ app.post('/messages/:id/project', async (c) => {
         `insert into tasks (account_id, project_id, column_id, number, title, description, due_date, created_by, source_email_id, position, priority)
          values ($1,$2,(select id from board_columns where project_id = $2 order by position limit 1),
                  (select coalesce(max(number),0)+1 from tasks where project_id = $2),$3,$4,current_date + 1,$5,$6,0,'high')`,
-        [ctx.accountId, pid, `Répondre à ${m.from_name || m.from_email}`, `Objet : ${m.subject}`, ctx.userId, m.id])
+        [ctx.accountId, pid, tr(al, 'mail.replyTo', { name: m.from_name || m.from_email }), tr(al, 'mail.subjectLine', { subject: m.subject }), ctx.userId, m.id])
       await db.query('insert into task_assignees (task_id, user_id, account_id) select id, $2, $3 from tasks where project_id = $1 and source_email_id = $4',
         [pid, ctx.userId, ctx.accountId, m.id])
     }
@@ -244,7 +248,7 @@ app.post('/messages/:id/link', async (c) => {
        values ($1,$2,(select id from board_columns where project_id = $2 order by position limit 1),
                (select coalesce(max(number),0)+1 from tasks where project_id = $2),$3,$4,$5,$6,
                (select coalesce(max(position),0)+1 from tasks where project_id = $2)) returning id`,
-      [ctx.accountId, p.id, (m.subject || 'Email').slice(0, 500), `De : ${m.from_email}\n\n${(m.body ?? '').slice(0, 20000)}`, ctx.userId, m.id])).rows[0]
+      [ctx.accountId, p.id, (m.subject || 'Email').slice(0, 500), `${tr(c.get('accountLocale'), 'mail.fromLine', { from: m.from_email })}\n\n${(m.body ?? '').slice(0, 20000)}`, ctx.userId, m.id])).rows[0]
     await db.query('insert into task_assignees (task_id, user_id, account_id) values ($1,$2,$3)', [t.id, ctx.userId, ctx.accountId])
     return t.id
   })
@@ -263,7 +267,7 @@ app.post('/messages/:id/reply', async (c) => {
   const m = await loadMessage(c, c.req.param('id'))
   const ctx = c.get('ctx')
   const subject = /^re\s*:/i.test(m.subject) ? m.subject : `Re: ${m.subject}`
-  const quoted = m.body ? `\n\n---\n${m.from_name ?? m.from_email} a écrit :\n${m.body.slice(0, 5000).split('\n').map((l: string) => '> ' + l).join('\n')}` : ''
+  const quoted = m.body ? `\n\n---\n${tr(c.get('locale'), 'mail.wrote', { name: m.from_name ?? m.from_email })}\n${m.body.slice(0, 5000).split('\n').map((l: string) => '> ' + l).join('\n')}` : ''
   const r = await sendMail({ accountId: ctx.accountId, to: [m.from_email, ...b.cc], subject, text: b.body + quoted, fromUserId: ctx.userId, fromName: c.get('name') })
   await tx(c, (db) => db.query(
     `insert into email_messages (account_id, mailbox_id, message_id, direction, from_email, to_emails, subject, body, status, project_id, client_id,

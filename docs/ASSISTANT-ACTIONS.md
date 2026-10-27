@@ -89,7 +89,7 @@ ligne interdite ; chaque outil `propose_*` figure ici.
 |---|---|---|---|
 | Projets → Nouveau projet, Modèles → Nouveau modèle, Nouveau projet depuis un modèle | Créer un projet, un modèle, ou un projet depuis un modèle | `POST /api/projects` | propose_create_project, propose_project_plan, propose_batch |
 | Projets → Nouveau projet | Créer un projet réservé aux intervenants, ou avec ses intervenants | `POST /api/projects {visibility=members}` | interdit : membres-droits |
-| Projet (en-tête, vue d'ensemble, réglages) | Renommer, statut, santé, priorité, dates, description, code, couleur, client, budget, facturation (mode, taux, forfaits, devise, TVA) | `PATCH /api/projects/:id {name}` | propose_update_project, propose_project_plan, propose_batch |
+| Projet (en-tête, vue d'ensemble, réglages) | Renommer, statut, santé, priorité, dates, description, code, couleur, client, budget, facturation (mode, taux, forfaits, devise, TVA), langue des documents du client | `PATCH /api/projects/:id {name}` | propose_update_project, propose_project_plan, propose_batch |
 | Projet → Suivi client | Ce que la page de suivi montre (tâches, temps) | `PATCH /api/projects/:id {portal_show_tasks=true}` | propose_update_project, propose_batch |
 | Projet → Réglages | Visibilité « réservé aux intervenants » | `PATCH /api/projects/:id {visibility=members}` | interdit : membres-droits |
 | Projet → Réglages | Changer le responsable du projet | `PATCH /api/projects/:id {owner_id}` | interdit : membres-droits |
@@ -161,8 +161,9 @@ ligne interdite ; chaque outil `propose_*` figure ici.
 |---|---|---|---|
 | Cloche (en-tête) | Marquer les notifications comme lues | `POST /api/notifications/read` | propose_mark_notifications_read, propose_batch |
 | Réglages → Profil | Son nom, sa couleur | `PATCH /api/me` | propose_update_settings, propose_batch |
+| Sélecteur de langue (chaque page) | Choisir la langue de l'interface | `POST /api/me/locale` | propose_update_settings, propose_batch |
 | Réglages → Profil | Changer son mot de passe | `POST /api/me/password` | interdit : identifiants |
-| Réglages → Entreprise (administrateurs) | Nom, fuseau, devise, heures par semaine | `PATCH /api/account` | propose_update_settings, propose_batch |
+| Réglages → Entreprise (administrateurs) | Nom, fuseau, devise, heures par semaine, langue des documents | `PATCH /api/account` | propose_update_settings, propose_batch |
 | Réglages → Entreprise, Applications Lead | Facturation mensuelle (automatique, jour, langue, signature du suivi) | `PATCH /api/integrations/settings` | propose_update_settings, propose_batch |
 | Réglages → Entreprise → Formule | Passer à une formule payante | `POST /api/billing/checkout` | interdit : payer |
 | Réglages → Entreprise → Formule | Gérer l'abonnement (portail de paiement) | `POST /api/billing/portal` | interdit : formule |

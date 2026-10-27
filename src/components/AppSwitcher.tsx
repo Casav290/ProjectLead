@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
+import { getLocale } from '../i18n'
 import { HERE_APP, LEAD_FAMILY, leadLocale } from '../lib/leadFamily'
 
 /**
@@ -31,7 +32,8 @@ export default function AppSwitcher({ locale, initialOpen = false }: { locale?: 
   const [open, setOpen] = useState(initialOpen)
   const box = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
-  const l = leadLocale(locale)
+  // La langue de l'interface (Layout passe useI18n().locale) ; sans elle, la langue en cours.
+  const l = leadLocale(locale ?? getLocale())
   const title = LEAD_FAMILY.title[l]
   useEffect(() => {
     if (!open) return

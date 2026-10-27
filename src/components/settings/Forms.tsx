@@ -3,6 +3,7 @@ import { Badge, Button, Card, Checkbox, Confirm, Empty, ErrorNote, Field, Input,
 import { api, errorText } from '../../lib/api'
 import { useApp, useLoad } from '../../lib/store'
 import { CopyField, ReadOnlyNote, SettingsHeader, slugify, SLUG_RE, origin, useRole } from './kit'
+import { useT } from '../../i18n'
 
 type IntakeForm = { id: string; slug: string; name: string; intro: string; template_id: string | null; template_name: string | null
   owner_id: string | null; active: boolean; received: number; url: string }
@@ -12,6 +13,7 @@ const publicLink = (f: Pick<IntakeForm, 'slug' | 'url'>) => (f.url?.startsWith('
 
 /** Les formulaires de demande : chaque demande reçue ouvre un projet « à qualifier ». */
 export default function Forms() {
+  const t = useT()
   const { team } = useApp()
   const { canManage } = useRole()
   const { data, error, loading, reload } = useLoad<IntakeForm[]>('/forms')
@@ -23,14 +25,13 @@ export default function Forms() {
 
   return (
     <>
-      <SettingsHeader title="Formulaires" action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>Nouveau formulaire</Button>}>
-        Un formulaire public à mettre sur votre site ou dans votre signature : chaque demande ouvre un projet « à qualifier », avec son client,
-        d'après le modèle choisi, et prévient le responsable.
+      <SettingsHeader title={t('settings2.forms.title')} action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>{t('settings2.forms.new')}</Button>}>
+        {t('settings2.forms.intro')}
       </SettingsHeader>
       {!canManage && <ReadOnlyNote />}
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : data!.length === 0 ? (
-        <Empty title="Aucun formulaire" action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>Créer le premier</Button>}>
-          Par exemple « Demande de devis » ou « Demande de support ».
+        <Empty title={t('settings2.forms.emptyTitle')} action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>{t('settings2.shared.createFirst')}</Button>}>
+          {t('settings2.forms.emptyText')}
         </Empty>
       ) : (
         <ul className="max-w-3xl space-y-3">
@@ -44,19 +45,19 @@ export default function Forms() {
                       <div className="min-w-0 flex-1">
                         <p className="flex flex-wrap items-center gap-2 font-bold">
                           <span className="break-words">{f.name}</span>
-                          {f.active ? <Badge tone="ok">Actif</Badge> : <Badge>Désactivé</Badge>}
+                          {f.active ? <Badge tone="ok">{t('settings2.shared.active')}</Badge> : <Badge>{t('settings2.shared.disabled')}</Badge>}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {f.received} demande{f.received > 1 ? 's' : ''} reçue{f.received > 1 ? 's' : ''}
-                          {f.template_name && ` · modèle « ${f.template_name} »`}{owner && ` · responsable : ${owner.name}`}
+                          {t('settings2.forms.received', { n: f.received })}
+                          {f.template_name && t('settings2.forms.templateOf', { name: f.template_name })}{owner && t('settings2.forms.ownerOf', { name: owner.name })}
                         </p>
                       </div>
                       {canManage && <>
-                        <Button size="sm" variant="ghost" onClick={() => toggle(f)}>{f.active ? 'Désactiver' : 'Activer'}</Button>
-                        <Button size="sm" onClick={() => setEditing(f)}>Modifier</Button>
+                        <Button size="sm" variant="ghost" onClick={() => toggle(f)}>{f.active ? t('settings2.shared.disable') : t('settings2.shared.enable')}</Button>
+                        <Button size="sm" onClick={() => setEditing(f)}>{t('common.edit')}</Button>
                       </>}
                     </div>
-                    <CopyField value={publicLink(f)} label={`Lien public de ${f.name}`} open />
+                    <CopyField value={publicLink(f)} label={t('settings2.shared.publicLinkOf', { name: f.name })} open />
                   </div>
                 </Card>
               </li>
@@ -70,6 +71,7 @@ export default function Forms() {
 }
 
 function FormDialog({ form, onClose, onSaved }: { form: IntakeForm | 'new' | null; onClose: () => void; onSaved: () => void }) {
+  const t = useT()
   const { me, team } = useApp()
   const { data: templates } = useLoad<Template[]>(form ? '/projects?template=1' : null, [Boolean(form)])
   const [d, setD] = useState({ name: '', slug: '', intro: '', template_id: '', owner_id: '', active: true })
@@ -91,49 +93,49 @@ function FormDialog({ form, onClose, onSaved }: { form: IntakeForm | 'new' | nul
     try {
       if (form === 'new') await api.post('/forms', body)
       else if (form) await api.patch(`/forms/${form.id}`, body)
-      toast('Formulaire enregistré'); onSaved(); onClose()
+      toast(t('settings2.forms.savedToast')); onSaved(); onClose()
     } catch (err) { setError(err) } finally { setBusy(false) }
   }
   const remove = async () => {
     if (!form || form === 'new') return
-    try { await api.del(`/forms/${form.id}`); toast('Formulaire supprimé'); onSaved(); onClose() } catch (err) { setError(err) }
+    try { await api.del(`/forms/${form.id}`); toast(t('settings2.forms.deletedToast')); onSaved(); onClose() } catch (err) { setError(err) }
   }
 
   return (
-    <Modal open={Boolean(form)} onClose={onClose} title={form === 'new' ? 'Nouveau formulaire' : 'Modifier le formulaire'}
+    <Modal open={Boolean(form)} onClose={onClose} title={form === 'new' ? t('settings2.forms.new') : t('settings2.forms.editTitle')}
       footer={<>
-        {form && form !== 'new' && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>Supprimer</Button>}
-        <Button onClick={onClose}>Annuler</Button>
-        <Button variant="primary" type="submit" form="intake-form" disabled={busy || !d.name.trim() || !SLUG_RE.test(d.slug)}>Enregistrer</Button>
+        {form && form !== 'new' && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>{t('common.delete')}</Button>}
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
+        <Button variant="primary" type="submit" form="intake-form" disabled={busy || !d.name.trim() || !SLUG_RE.test(d.slug)}>{t('common.save')}</Button>
       </>}>
       <form id="intake-form" onSubmit={save} className="space-y-3">
-        <Field label="Nom">
-          <Input value={d.name} required maxLength={120} placeholder="Demande de devis"
+        <Field label={t('settings2.shared.name')}>
+          <Input value={d.name} required maxLength={120} placeholder={t('settings2.forms.namePlaceholder')}
             onChange={(e) => setD({ ...d, name: e.target.value, slug: slugTouched ? d.slug : slugify(e.target.value) })} />
         </Field>
-        <Field label="Adresse de la page" hint={`${origin()}/demande/${d.slug || '…'}`}
-          error={d.slug && !SLUG_RE.test(d.slug) ? 'Lettres minuscules, chiffres et tirets.' : null}>
+        <Field label={t('settings2.shared.pageAddress')} hint={`${origin()}/demande/${d.slug || '…'}`}
+          error={d.slug && !SLUG_RE.test(d.slug) ? t('settings2.shared.slugError') : null}>
           <Input value={d.slug} required maxLength={61} onChange={(e) => { setSlugTouched(true); setD({ ...d, slug: e.target.value.toLowerCase() }) }} />
         </Field>
-        <Field label="Introduction" hint="Le texte d'accueil du formulaire.">
+        <Field label={t('settings2.forms.intro2')} hint={t('settings2.forms.introHint')}>
           <Textarea rows={3} value={d.intro} onChange={(e) => setD({ ...d, intro: e.target.value })} maxLength={3000} />
         </Field>
-        <Field label="Modèle de projet" hint="Ses étapes sont reprises dans le projet ouvert.">
+        <Field label={t('settings2.forms.template')} hint={t('settings2.forms.templateHint')}>
           <Select value={d.template_id} onChange={(e) => setD({ ...d, template_id: e.target.value })}>
-            <option value="">Aucun modèle</option>
-            {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <option value="">{t('settings2.forms.noTemplate')}</option>
+            {templates?.map((tp) => <option key={tp.id} value={tp.id}>{tp.name}</option>)}
           </Select>
         </Field>
-        <Field label="Responsable" hint="Prévenu à chaque demande, chef du projet ouvert.">
+        <Field label={t('settings2.forms.owner')} hint={t('settings2.forms.ownerHint')}>
           <Select value={d.owner_id} onChange={(e) => setD({ ...d, owner_id: e.target.value })}>
             {team.filter((m) => m.active).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </Select>
         </Field>
-        <Checkbox label="Actif : la page publique accepte des demandes" checked={d.active} onChange={(v) => setD({ ...d, active: v })} />
+        <Checkbox label={t('settings2.forms.activeLabel')} checked={d.active} onChange={(v) => setD({ ...d, active: v })} />
         <ErrorNote error={error} />
       </form>
-      <Confirm open={removing} onClose={() => setRemoving(false)} title="Supprimer ce formulaire ?" danger confirmLabel="Supprimer" onConfirm={remove}>
-        La page publique cesse de fonctionner ; les projets déjà ouverts restent.
+      <Confirm open={removing} onClose={() => setRemoving(false)} title={t('settings2.forms.deleteTitle')} danger confirmLabel={t('common.delete')} onConfirm={remove}>
+        {t('settings2.forms.deleteText')}
       </Confirm>
     </Modal>
   )

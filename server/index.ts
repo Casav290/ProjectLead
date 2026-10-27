@@ -9,6 +9,7 @@ import { getCookie } from 'hono/cookie'
 import { hashToken, SESSION_COOKIE } from './auth.js'
 import { anon, inSharedTransaction } from './db.js'
 import { HttpError, type Env } from './lib/http.js'
+import { asLocale } from './lib/i18n.js'
 import { runJobsIfDue, runJobs } from './lib/jobs.js'
 import { hydrateServerSecrets, SERVER_SECRETS, setServerSecret, type ServerSecret } from './lib/secrets.js'
 import { mailboxSecretConfigured } from './lib/mailbox/secret.js'
@@ -126,10 +127,11 @@ app.use('/api/*', async (c, next) => {
   if (!token) return c.json({ error: 'unauthenticated' }, 401)
   const s = await anon(async (db) => {
     const row = (await db.query(
-      `select s.user_id, s.account_id, au.role, u.name, u.email,
+      // i18n-ok
+      `select s.user_id, s.account_id, au.role, u.name, u.email, u.locale, a.locale as account_locale,
               (au.last_seen_at is null or au.last_seen_at < now() - interval '1 hour') as seen_stale
          from sessions s join account_users au on au.user_id = s.user_id and au.account_id = s.account_id and au.active
-         join users u on u.id = s.user_id
+         join users u on u.id = s.user_id join accounts a on a.id = s.account_id
         where s.token_hash = $1 and s.expires_at > now()`, [hashToken(token)])).rows[0]
     // La dernière venue (Réglages → Équipe) suit aussi l'activité, au plus une fois par heure : pas une écriture par requête.
     if (row?.seen_stale) await db.query('update account_users set last_seen_at = now() where account_id = $1 and user_id = $2', [row.account_id, row.user_id])
@@ -139,6 +141,9 @@ app.use('/api/*', async (c, next) => {
   c.set('ctx', { accountId: s.account_id, userId: s.user_id, role: s.role })
   c.set('name', s.name)
   c.set('email', s.email)
+  // La langue de la personne (sélecteur, POST /api/me/locale) et celle de l'entreprise (documents) : textes du serveur.
+  c.set('locale', asLocale(s.locale))
+  c.set('accountLocale', asLocale(s.account_locale))
   // La preuve de la personne (lib/personProof.ts) se relit par la session : jamais dans un cookie ni dans l'écran.
   c.set('sessionHash', hashToken(token))
   await next()

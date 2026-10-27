@@ -1,26 +1,28 @@
-/** Dates, durées et montants, à la suisse romande. */
+/** Dates, durées et montants, dans la langue de l'interface (src/i18n). */
+import { intlLocale, labels, t } from '../i18n'
+
 
 export const fmtDate = (d?: string | null) => {
   if (!d) return ''
   const s = d.slice(0, 10)
-  return `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`
+  return new Intl.DateTimeFormat(intlLocale(), { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(s + 'T12:00:00'))
 }
 export const fmtShortDate = (d?: string | null) => {
   if (!d) return ''
   const dt = new Date(d.length === 10 ? d + 'T12:00:00' : d)
-  return new Intl.DateTimeFormat('fr-CH', { day: 'numeric', month: 'short' }).format(dt)
+  return new Intl.DateTimeFormat(intlLocale(), { day: 'numeric', month: 'short' }).format(dt)
 }
 export const fmtDateTime = (d?: string | null) =>
-  d ? new Intl.DateTimeFormat('fr-CH', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(d)) : ''
+  d ? new Intl.DateTimeFormat(intlLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(d)) : ''
 export const fmtTime = (d?: string | null) =>
-  d ? new Intl.DateTimeFormat('fr-CH', { hour: '2-digit', minute: '2-digit' }).format(new Date(d)) : ''
+  d ? new Intl.DateTimeFormat(intlLocale(), { hour: '2-digit', minute: '2-digit' }).format(new Date(d)) : ''
 export const fmtRelative = (d?: string | null) => {
   if (!d) return ''
   const diff = (Date.now() - new Date(d).getTime()) / 1000
-  if (diff < 60) return "à l'instant"
-  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`
-  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`
-  if (diff < 7 * 86400) return `il y a ${Math.floor(diff / 86400)} j`
+  if (diff < 60) return t('time.justNow')
+  if (diff < 3600) return t('time.minutesAgo', { n: Math.floor(diff / 60) })
+  if (diff < 86400) return t('time.hoursAgo', { n: Math.floor(diff / 3600) })
+  if (diff < 7 * 86400) return t('time.daysAgo', { n: Math.floor(diff / 86400) })
   return fmtDate(d)
 }
 
@@ -31,7 +33,7 @@ export const fmtMinutes = (m?: number | null) => {
   return h ? (r ? `${h} h ${String(r).padStart(2, '0')}` : `${h} h`) : `${r} min`
 }
 /** 90 → « 1,5 ». */
-export const hours = (m?: number | null) => ((m ?? 0) / 60).toLocaleString('fr-CH', { maximumFractionDigits: 2 })
+export const hours = (m?: number | null) => ((m ?? 0) / 60).toLocaleString(intlLocale(), { maximumFractionDigits: 2 })
 /** « 1.5 », « 1:30 », « 1h30 », « 90m » → minutes. */
 export const parseDuration = (s: string): number | null => {
   const t = s.trim().toLowerCase().replace(',', '.')
@@ -47,7 +49,7 @@ export const parseDuration = (s: string): number | null => {
 }
 
 export const money = (cents?: number | null, currency = 'CHF') =>
-  `${currency} ${((cents ?? 0) / 100).toLocaleString('fr-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  `${currency} ${((cents ?? 0) / 100).toLocaleString(intlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 /** « 150 », « 150.50 », « 150,50 » → centimes. */
 export const parseMoney = (s: string): number | null => {
   const t = s.trim().replace(/[’'\s]/g, '').replace(',', '.')
@@ -70,16 +72,12 @@ export const mondayOf = (d: string) => {
   return addDays(d, -((x.getDay() + 6) % 7))
 }
 export const daysBetween = (a: string, b: string) => Math.round((Date.parse(b + 'T12:00:00') - Date.parse(a + 'T12:00:00')) / 86400e3)
-export const weekdayShort = (d: string) => new Intl.DateTimeFormat('fr-CH', { weekday: 'short' }).format(new Date(d + 'T12:00:00'))
+export const weekdayShort = (d: string) => new Intl.DateTimeFormat(intlLocale(), { weekday: 'short' }).format(new Date(d + 'T12:00:00'))
 
-export const STATUS_LABEL: Record<string, string> = {
-  lead: 'À qualifier', planned: 'Planifié', active: 'En cours', on_hold: 'En pause', done: 'Terminé', cancelled: 'Abandonné',
-}
-export const HEALTH_LABEL: Record<string, string> = { on_track: 'Dans les temps', at_risk: 'À surveiller', off_track: 'En retard' }
-export const STAGE_LABEL: Record<string, string> = { todo: 'À venir', in_progress: 'En cours', done: 'Terminée', blocked: 'En attente' }
-export const PRIORITY_LABEL: Record<string, string> = { low: 'Basse', normal: 'Normale', high: 'Haute', urgent: 'Urgente' }
-export const BILLING_LABEL: Record<string, string> = {
-  none: 'Non facturable', hourly: "À l'heure", retainer: 'Forfait mensuel', fixed: 'Forfait global', milestone: 'Par étape',
-}
-export const ROLE_LABEL: Record<string, string> = { admin: 'Administrateur', manager: 'Responsable', member: 'Membre' }
-export const PROJECT_ROLE_LABEL: Record<string, string> = { lead: 'Chef de projet', member: 'Intervenant', observer: 'Observateur' }
+export const STATUS_LABEL = labels('status', ['lead', 'planned', 'active', 'on_hold', 'done', 'cancelled'])
+export const HEALTH_LABEL = labels('health', ['on_track', 'at_risk', 'off_track'])
+export const STAGE_LABEL = labels('stage', ['todo', 'in_progress', 'done', 'blocked'])
+export const PRIORITY_LABEL = labels('priority', ['low', 'normal', 'high', 'urgent'])
+export const BILLING_LABEL = labels('billing', ['none', 'hourly', 'retainer', 'fixed', 'milestone'])
+export const ROLE_LABEL = labels('role', ['admin', 'manager', 'member'])
+export const PROJECT_ROLE_LABEL = labels('projectRole', ['lead', 'member', 'observer'])

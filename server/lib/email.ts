@@ -106,8 +106,8 @@ export async function sendMail(m: Mail): Promise<{ via: string }> {
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!))
 
 /** Gabarit HTML sobre, au visuel Trait net : angles vifs, Archivo, une couleur d'action. */
-export function layout(title: string, bodyHtml: string, action?: { label: string; url: string }) {
-  return `<!doctype html><html><body style="margin:0;background:#eceae7;font-family:Archivo,Arial,sans-serif;color:#1b1a19">
+export function layout(title: string, bodyHtml: string, action?: { label: string; url: string }, lang = 'fr') {
+  return `<!doctype html><html lang="${esc(lang)}"><body style="margin:0;background:#eceae7;font-family:Archivo,Arial,sans-serif;color:#1b1a19">
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border:1px solid #cfcac4">
 <tr><td style="padding:20px 24px;border-bottom:1px solid #e7e4e0"><span style="display:inline-block;background:#9a6a00;color:#fff;font-weight:800;padding:4px 7px">PL</span>

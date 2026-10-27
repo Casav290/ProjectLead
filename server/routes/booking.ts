@@ -6,6 +6,8 @@ import { body, email, HttpError, requireRole, router, setClause, tx, uuid } from
 import { ics } from '../lib/ics.js'
 import { localDay, localInstant } from '../lib/time.js'
 import { createDefaultColumns } from '../lib/defaults.js'
+import { asLocale, intlLocale, isLocale, requestLocale, tr } from '../lib/i18n.js'
+import { userLocale } from '../lib/locales.js'
 
 /**
  * Prise de rendez-vous, comme dans CRMlead : une page publique par type de rendez-vous, des
@@ -143,7 +145,8 @@ export const publicBooking = new Hono()
 
 publicBooking.get('/manage/:token', async (c) => {
   const b = await anon(async (db) => (await db.query(
-    `select b.name, b.email, b.starts_at, b.ends_at, b.status, bt.name as type_name, bt.location, a.name as account_name, a.timezone, bt.slug
+    `select b.name, b.email, b.starts_at, b.ends_at, b.status, bt.name as type_name, bt.location, a.name as account_name, a.timezone, bt.slug,
+            coalesce(b.locale, a.locale) as locale
        from bookings b join booking_types bt on bt.id = b.booking_type_id join accounts a on a.id = b.account_id where b.manage_token = $1`,
     [c.req.param('token')])).rows[0])
   if (!b) return c.json({ error: 'not_found' }, 404)
@@ -157,8 +160,9 @@ publicBooking.post('/manage/:token/cancel', async (c) => {
        returning id, account_id, event_id, host_id, name, starts_at`, [c.req.param('token')])).rows[0]
     if (!r) return null
     if (r.event_id) await db.query('delete from events where id = $1', [r.event_id])
-    if (r.host_id) await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'booking','Rendez-vous annulé par ' || $3,'/agenda')`,
-      [r.account_id, r.host_id, r.name])
+    // L'hôte est prévenu dans SA langue.
+    if (r.host_id) await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'booking',$3,'/agenda')`,
+      [r.account_id, r.host_id, tr(await userLocale(db, r.host_id), 'booking.cancelledNotif', { name: r.name })])
     return r
   })
   if (!b) return c.json({ error: 'not_cancellable' }, 409)
@@ -182,10 +186,14 @@ publicBooking.post('/:slug', async (c) => {
   const b = await body(c, z.object({
     starts_at: z.string().datetime({ offset: true }), name: z.string().trim().min(1).max(120), email,
     phone: z.string().trim().max(50).optional(), company: z.string().trim().max(200).optional(), message: z.string().max(3000).default(''),
+    // La langue de la page de réservation (sélecteur) : celle de la confirmation et de la page de gestion.
+    locale: z.string().max(10).optional(),
   }))
+  const chosen = isLocale(b.locale) ? b.locale : requestLocale(c.req.header('cookie'), c.req.header('accept-language'))
   const res = await anonTx(async (db) => {
     const t = await loadType(db, c.req.param('slug'))
     if (!t) throw new HttpError(404, 'not_found')
+    const l = chosen ?? asLocale((await db.query('select locale from accounts where id = $1', [t.account_id])).rows[0]?.locale)
     // Verrou par type : deux personnes ne prennent pas le même créneau au même instant.
     await db.query('select pg_advisory_xact_lock(hashtext($1))', [t.id])
     const start = new Date(b.starts_at)
@@ -214,17 +222,17 @@ publicBooking.post('/:slug', async (c) => {
     let projectId = t.project_id
     if (!projectId && t.create_project) {
       const p = (await db.query(
-        `insert into projects (account_id, name, description, client_id, owner_id, status, source, created_by)
-         values ($1,$2,$3,$4,$5,'lead','booking',$5) returning id`,
-        [t.account_id, `${t.name} — ${b.company || b.name}`, b.message, client.id, host])).rows[0]
+        `insert into projects (account_id, name, description, client_id, owner_id, status, source, created_by, currency, doc_locale)
+         values ($1,$2,$3,$4,$5,'lead','booking',$5,(select currency from accounts where id = $1),$6) returning id`,
+        [t.account_id, `${t.name} — ${b.company || b.name}`, b.message, client.id, host, chosen])).rows[0]
       await createDefaultColumns(db, t.account_id, p.id)
       await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead')`, [p.id, host, t.account_id])
       projectId = p.id
     }
     const booking = (await db.query(
-      `insert into bookings (account_id, booking_type_id, host_id, name, email, phone, company, message, starts_at, ends_at, project_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id, manage_token`,
-      [t.account_id, t.id, host, b.name, b.email, b.phone ?? null, b.company ?? null, b.message, start, end, projectId])).rows[0]
+      `insert into bookings (account_id, booking_type_id, host_id, name, email, phone, company, message, starts_at, ends_at, project_id, locale)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id, manage_token`,
+      [t.account_id, t.id, host, b.name, b.email, b.phone ?? null, b.company ?? null, b.message, start, end, projectId, l])).rows[0]
     const ev = (await db.query(
       `insert into events (account_id, project_id, client_id, organizer_id, title, description, location, kind, starts_at, ends_at, booking_id)
        values ($1,$2,$3,$4,$5,$6,$7,'meeting',$8,$9,$10) returning id`,
@@ -232,24 +240,31 @@ publicBooking.post('/:slug', async (c) => {
     await db.query('update bookings set event_id = $2 where id = $1', [booking.id, ev.id])
     await db.query('insert into event_attendees (event_id, account_id, user_id) values ($1,$2,$3)', [ev.id, t.account_id, host])
     await db.query('insert into event_attendees (event_id, account_id, email, name) values ($1,$2,$3,$4)', [ev.id, t.account_id, b.email, b.name])
+    // L'hôte est prévenu dans SA langue.
+    const hl = await userLocale(db, host)
     await db.query(`insert into notifications (account_id, user_id, kind, title, body, link) values ($1,$2,'booking',$3,$4,'/agenda')`,
-      [t.account_id, host, `Nouveau rendez-vous : ${b.name}`, `${t.name}, ${new Intl.DateTimeFormat('fr-CH', { timeZone: t.timezone, dateStyle: 'full', timeStyle: 'short' }).format(start)}`])
+      [t.account_id, host, tr(hl, 'booking.newNotif', { name: b.name }),
+       `${t.name}, ${new Intl.DateTimeFormat(intlLocale(hl), { timeZone: t.timezone, dateStyle: 'full', timeStyle: 'short' }).format(start)}`])
     if (projectId) await db.query(`insert into activities (account_id, project_id, kind, data) values ($1,$2,'booking',$3)`,
       [t.account_id, projectId, JSON.stringify({ name: b.name, starts_at: start })])
     const hostRow = (await db.query('select name, email from users where id = $1', [host])).rows[0]
-    return { t, booking, start, end, host: hostRow, hostId: host, eventId: ev.id }
+    return { t, booking, start, end, host: hostRow, hostId: host, eventId: ev.id, l }
   })
-  const when = new Intl.DateTimeFormat('fr-CH', { timeZone: res.t.timezone, dateStyle: 'full', timeStyle: 'short' }).format(res.start)
-  const manage = `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/rdv/gerer/${res.booking.manage_token}`
-  const text = `Bonjour ${b.name},\n\nVotre rendez-vous « ${res.t.name} » avec ${res.host.name} (${res.t.account_name}) est confirmé pour le ${when}.` +
-    `${res.t.location ? `\nLieu : ${res.t.location}` : ''}\n\nPour l'annuler : ${manage}`
-  await sendMail({ accountId: res.t.account_id, to: [b.email], subject: `Rendez-vous confirmé : ${res.t.name}`, text,
-    html: layout('Rendez-vous confirmé', htmlParagraphs(text.replace(`\n\nPour l'annuler : ${manage}`, '')), { label: 'Gérer le rendez-vous', url: manage }),
+  // La confirmation, dans la langue de la personne qui réserve ; la page de gestion s'ouvre dans la même langue.
+  const l = res.l
+  const when = new Intl.DateTimeFormat(intlLocale(l), { timeZone: res.t.timezone, dateStyle: 'full', timeStyle: 'short' }).format(res.start)
+  const manageUrl = `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/rdv/gerer/${res.booking.manage_token}`
+  const manage = `${manageUrl}?lang=${l}`
+  const main = `${tr(l, 'booking.hello', { name: b.name })}\n\n${tr(l, 'booking.confirmedText', { type: res.t.name, host: res.host.name, account: res.t.account_name, when })}` +
+    `${res.t.location ? `\n${tr(l, 'booking.where', { location: res.t.location })}` : ''}`
+  const text = `${main}\n\n${tr(l, 'booking.cancelHint', { url: manage })}`
+  await sendMail({ accountId: res.t.account_id, to: [b.email], subject: tr(l, 'booking.confirmedSubject', { type: res.t.name }), text,
+    html: layout(tr(l, 'booking.confirmedTitle'), htmlParagraphs(main), { label: tr(l, 'booking.manage'), url: manage }, l),
     fromUserId: res.hostId, fromName: res.host.name,
-    attachments: [{ filename: 'rendez-vous.ics', contentType: 'text/calendar; method=REQUEST; charset=utf-8', content: Buffer.from(ics([{
+    attachments: [{ filename: `${tr(l, 'booking.icsFile')}.ics`, contentType: 'text/calendar; method=REQUEST; charset=utf-8', content: Buffer.from(ics([{
       uid: `${res.eventId}@projectlead`, title: `${res.t.name} — ${res.t.account_name}`, location: res.t.location, start: res.start, end: res.end,
       organizer: { name: res.host.name, email: res.host.email }, attendees: [{ name: b.name, email: b.email }] }], { method: 'REQUEST' })) }] })
     .catch((e) => console.error('[rendez-vous] confirmation', e.message))
-  return c.json({ ok: true, starts_at: res.start, host: res.host.name, manage_url: manage }, 201)
+  return c.json({ ok: true, starts_at: res.start, host: res.host.name, manage_url: manageUrl }, 201)
 })
 

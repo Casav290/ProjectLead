@@ -2,6 +2,7 @@ import { withTenant, type Ctx, type Db } from '../db.js'
 import { HttpError } from './http.js'
 import { invoiceUrl, sendInvoiceDraft, type InvoiceLine } from './invoicelead.js'
 import { ExchangeError } from './leadId.js'
+import { asLocale, intlLocale, tr, type Locale } from './i18n.js'
 
 /**
  * Facturation mensuelle vers InvoiceLead.
@@ -16,9 +17,9 @@ import { ExchangeError } from './leadId.js'
  * Le temps et les étapes facturés sont marqués : jamais facturés deux fois.
  */
 
-const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
-
-export const periodLabel = (p: string) => `${MONTHS[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}`
+/** « octobre 2026 », « Oktober 2026 », « October 2026 »… : le mois dans la langue du document. */
+export const periodLabel = (p: string, l: Locale = 'fr') =>
+  new Intl.DateTimeFormat(intlLocale(l), { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${p.slice(0, 7)}-15T12:00:00Z`))
 export const periodEnd = (p: string) => {
   const [y, m] = p.split('-').map(Number)
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
@@ -29,6 +30,8 @@ export const previousPeriod = (d = new Date()) => {
 }
 
 export type Draft = {
+  /** La langue du document : celle du projet, sinon la langue des factures de l'entreprise, sinon sa langue. */
+  locale: Locale
   project: { id: string; name: string; code: string | null; billing_mode: string; currency: string; vat_code: string }
   client: any | null
   lines: (InvoiceLine & { amountCents: number })[]
@@ -41,10 +44,13 @@ export type Draft = {
 /** Ce que contiendrait la facture du mois, sans rien envoyer. */
 export async function draftFor(db: Db, projectId: string, period: string): Promise<Draft> {
   const p = (await db.query(
-    `select id, name, code, billing_mode, hourly_rate_cents, retainer_cents, fixed_cents, currency, vat_code, client_id,
-            status, to_char(completed_at, 'YYYY-MM') as completed_period
-       from projects where id = $1`, [projectId])).rows[0]
+    `select p.id, p.name, p.code, p.billing_mode, p.hourly_rate_cents, p.retainer_cents, p.fixed_cents, p.currency, p.vat_code, p.client_id,
+            p.status, to_char(p.completed_at, 'YYYY-MM') as completed_period,
+            coalesce(p.doc_locale, s.invoice_language, a.locale) as locale
+       from projects p join accounts a on a.id = p.account_id left join account_settings s on s.account_id = p.account_id
+      where p.id = $1`, [projectId])).rows[0]
   if (!p) throw new HttpError(404, 'not_found')
+  const l = asLocale(p.locale)
   const end = periodEnd(period)
   const client = p.client_id ? (await db.query('select * from clients where id = $1', [p.client_id])).rows[0] : null
   const existing = (await db.query('select status, invoice_id, invoice_url, amount_cents from invoice_runs where project_id = $1 and period = $2',
@@ -52,20 +58,20 @@ export async function draftFor(db: Db, projectId: string, period: string): Promi
   const lines: Draft['lines'] = []
   let timeEntryIds: string[] = []
   let stageIds: string[] = []
-  const label = periodLabel(period)
+  const label = periodLabel(period, l)
 
   if (p.billing_mode === 'hourly') {
     // Taux : celui figé sur la saisie, sinon celui de la personne sur le projet, celui du projet,
     // puis son taux par défaut dans l'entreprise.
-    const rows = (await db.query(
-      `select t.id, t.minutes, coalesce(k.title, 'Travaux divers') as label,
+    const rows = (await db.query( // i18n-ok
+      `select t.id, t.minutes, coalesce(k.title, $4) as label,
               coalesce(t.rate_cents, pm.hourly_rate_cents, $2::int, au.hourly_rate_cents, 0) as rate
          from time_entries t
          left join tasks k on k.id = t.task_id
          left join project_members pm on pm.project_id = t.project_id and pm.user_id = t.user_id
          left join account_users au on au.account_id = t.account_id and au.user_id = t.user_id
         where t.project_id = $1 and t.billable and t.invoiced_at is null and t.minutes > 0 and t.entry_date <= $3
-        order by t.entry_date`, [projectId, p.hourly_rate_cents, end])).rows
+        order by t.entry_date`, [projectId, p.hourly_rate_cents, end, tr(l, 'billing.misc')])).rows
     const groups = new Map<string, { label: string; rate: number; minutes: number }>()
     for (const r of rows) {
       const k = `${r.label}|${r.rate}`
@@ -81,7 +87,7 @@ export async function draftFor(db: Db, projectId: string, period: string): Promi
     timeEntryIds = rows.map((r) => r.id)
   } else if (p.billing_mode === 'retainer' && p.retainer_cents) {
     if (!existing || existing.status !== 'created') {
-      lines.push({ description: `Forfait mensuel — ${label}`, quantity: 1, unit: 'month', unitPriceCents: p.retainer_cents,
+      lines.push({ description: tr(l, 'billing.retainer', { period: label }), quantity: 1, unit: 'month', unitPriceCents: p.retainer_cents,
                    amountCents: p.retainer_cents })
     }
   } else if (p.billing_mode === 'milestone') {
@@ -89,14 +95,15 @@ export async function draftFor(db: Db, projectId: string, period: string): Promi
       `select id, name, billing_cents from stages
         where project_id = $1 and status = 'done' and billing_cents > 0 and invoiced_at is null
           and (completed_at is null or completed_at::date <= $2) order by position`, [projectId, end])).rows
-    for (const s of st) lines.push({ description: `Étape « ${s.name} »`, quantity: 1, unit: 'flat', unitPriceCents: s.billing_cents, amountCents: s.billing_cents })
+    for (const s of st) lines.push({ description: tr(l, 'billing.stage', { name: s.name }), quantity: 1, unit: 'flat', unitPriceCents: s.billing_cents, amountCents: s.billing_cents })
     stageIds = st.map((s) => s.id)
   } else if (p.billing_mode === 'fixed' && p.fixed_cents && p.status === 'done' && p.completed_period
              && p.completed_period <= period) {
     const already = (await db.query(`select 1 from invoice_runs where project_id = $1 and status = 'created'`, [projectId])).rowCount
-    if (!already) lines.push({ description: `Forfait — ${p.name}`, quantity: 1, unit: 'flat', unitPriceCents: p.fixed_cents, amountCents: p.fixed_cents })
+    if (!already) lines.push({ description: tr(l, 'billing.fixed', { name: p.name }), quantity: 1, unit: 'flat', unitPriceCents: p.fixed_cents, amountCents: p.fixed_cents })
   }
   return {
+    locale: l,
     project: { id: p.id, name: p.name, code: p.code, billing_mode: p.billing_mode, currency: p.currency, vat_code: p.vat_code },
     client, lines, timeEntryIds, stageIds, totalCents: lines.reduce((s, l) => s + l.amountCents, 0), existing,
   }
@@ -131,7 +138,6 @@ export async function runMonthly(ctx: Ctx, actorId: string | null, period: strin
   if (!/^\d{4}-\d{2}$/.test(period)) throw new HttpError(400, 'invalid_period')
   const t = <T>(fn: (db: Db) => Promise<T>) => withTenant(ctx, fn)
   const ids = projectIds ?? await t(billableProjects)
-  const language = await t(async (db) => (await db.query('select invoice_language from account_settings where account_id = app_account()')).rows[0]?.invoice_language ?? 'fr')
   const out: RunResult[] = []
   const record = (id: string, d: Draft, status: 'error' | 'empty', error: string | null, code: string | null) => t((db) => db.query(
     `insert into invoice_runs (account_id, project_id, period, status, error, error_code, amount_cents, lines, created_by)
@@ -161,10 +167,12 @@ export async function runMonthly(ctx: Ctx, actorId: string | null, period: strin
       out.push({ projectId: id, project: d.project.name, status: 'error', error: 'client_missing' })
       continue
     }
+    // La langue du document (projet, sinon factures de l'entreprise) : envoyée à InvoiceLead (`language`), et celle des lignes.
+    const language = d.locale
     const draft = {
       org: who.org, sub: who.sub, projectId: id, period, language, client: d.client,
-      title: `${d.project.code ? d.project.code + ' · ' : ''}${d.project.name} — ${periodLabel(period)}`,
-      intro: `Prestations du projet « ${d.project.name} », ${periodLabel(period)}.`,
+      title: `${d.project.code ? d.project.code + ' · ' : ''}${d.project.name} — ${periodLabel(period, language)}`,
+      intro: tr(language, 'billing.intro', { name: d.project.name, period: periodLabel(period, language) }),
       serviceDate: periodEnd(period), currency: d.project.currency, vatCode: d.project.vat_code, lines: d.lines,
     }
     let inv: { id: string; url: string; totalCents: number; contactId: string | null } | null = null

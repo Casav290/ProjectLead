@@ -5,10 +5,11 @@ import { SESSION_COOKIE } from '../auth.js'
 import { withTenant, type Db } from '../db.js'
 import { body, HttpError, router } from '../lib/http.js'
 import { localDay } from '../lib/time.js'
+import { asLocale, isLocale, tr } from '../lib/i18n.js'
 import { dynamicSystem, STABLE_SYSTEM } from '../lib/assistant/prompt.js'
 import { completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
 import { doneLine, OpFailure, runOps } from '../lib/assistant/run.js'
-import { buildTools, pageAllowed, ROUTE_ERRORS, type AssistantAction } from '../lib/assistant/tools.js'
+import { buildTools, pageAllowed, type AssistantAction } from '../lib/assistant/tools.js'
 import { MAX_TOKEN_CHARS, opAllowed, opLabel, verifyConfirm } from '../lib/assistant/token.js'
 
 /**
@@ -62,7 +63,7 @@ app.post('/', async (c) => {
   const last = b.messages[b.messages.length - 1]
   const lastOk = last.role === 'user' && (typeof last.content === 'string'
     || (last.content as unknown[]).every((x) => textBlock.safeParse(x).success))
-  if (!lastOk) throw new HttpError(400, 'invalid_input', { fields: { messages: 'le dernier message doit être un texte de la personne' } })
+  if (!lastOk) throw new HttpError(400, 'invalid_input', { fields: { messages: 'le dernier message doit être un texte de la personne' } }) // i18n-ok
 
   const ctx = c.get('ctx')
   const reservation = await reserveMessage(ctx)
@@ -71,12 +72,14 @@ app.post('/', async (c) => {
   const account = await withTenant(ctx, async (db) => (await db.query('select name, timezone, locale from accounts where id = app_account()')).rows[0])
   const tz = account?.timezone || 'Europe/Zurich'
   const day = localDay(new Date(), tz)
+  // Consignes au modèle (en français, il répond dans la langue de l'interface) ; les textes renvoyés à la personne : `l`.
+  const l = isLocale(b.locale) ? b.locale : asLocale(c.get('locale'))
   const weekday = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'][day.isoDay - 1]
   const roleFr = { admin: 'administrateur', manager: 'responsable', member: 'membre' }[ctx.role] ?? ctx.role
 
   const actions: AssistantAction[] = []
   const used: string[] = []
-  const tools = buildTools({ cookie: sessionCookie(c), ctx, actions, used, today: day.date })
+  const tools = buildTools({ cookie: sessionCookie(c), ctx, actions, used, today: day.date, locale: l })
   const history: Anthropic.Beta.BetaMessageParam[] = clean(b.messages as Anthropic.Beta.BetaMessageParam[])
   const started = Date.now()
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }
@@ -128,16 +131,16 @@ app.post('/', async (c) => {
     let messages: Anthropic.Beta.BetaMessageParam[]
     if (!final) throw new Error('no_message')
     if (final.stop_reason === 'refusal') {
-      reply = 'Je ne peux pas traiter cette demande.'
+      reply = tr(l, 'assistant.refusal')
       // Le tour refusé n'est pas renvoyé : la demande et une réponse neutre seulement.
       messages = [...history, { role: 'assistant', content: [{ type: 'text', text: reply }] }]
       actions.length = 0
     } else {
       const lastText = final.content.filter((blk) => blk.type === 'text').map((blk: any) => blk.text.trim()).filter(Boolean).join('\n\n')
       reply = lastText || texts.join('\n\n')
-      if (final.stop_reason === 'max_tokens') reply = `${reply}\n\n(Réponse interrompue : elle était trop longue. Demandez une version plus courte.)`.trim()
-      else if (final.stop_reason === 'tool_use') reply = `${reply}\n\n(Je me suis arrêté avant la fin : la demande demandait trop d'étapes. Précisez-la ou découpez-la.)`.trim()
-      if (!reply) reply = actions.some((a) => a.type === 'confirm') ? 'Voici ce que je vous propose. Vérifiez puis confirmez.' : 'C’est fait.'
+      if (final.stop_reason === 'max_tokens') reply = `${reply}\n\n${tr(l, 'assistant.tooLong')}`.trim()
+      else if (final.stop_reason === 'tool_use') reply = `${reply}\n\n${tr(l, 'assistant.tooManySteps')}`.trim()
+      if (!reply) reply = actions.some((a) => a.type === 'confirm') ? tr(l, 'assistant.proposal') : tr(l, 'assistant.done')
       messages = [...history, ...turn]
     }
     await completeUsage(ctx, reservation.id, { ok: true, ...usage, tools: used, duration_ms: Date.now() - started,
@@ -152,6 +155,19 @@ app.post('/', async (c) => {
   }
 })
 
+/** Les refus des routes dits sur la carte, dans la langue de la personne (server/i18n, `assistant.error.*`). */
+const CONFIRM_ERRORS = new Set(['forbidden', 'not_found', 'invalid_input', 'plan_limit_projects', 'already_invoiced', 'other_project',
+  'unknown_reference', 'conflict', 'dependency_cycle', 'dependency_other_project', 'self_dependency', 'last_column', 'unknown_column',
+  'end_before_start', 'invalid_timezone', 'not_from_crmlead', 'operation_not_allowed', 'lead_required', 'person_proof', 'not_opened',
+  'no_seat', 'not_linked'])
+// tr(l, 'assistant.error.forbidden') tr(l, 'assistant.error.not_found') tr(l, 'assistant.error.invalid_input')
+// tr(l, 'assistant.error.plan_limit_projects') tr(l, 'assistant.error.already_invoiced') tr(l, 'assistant.error.other_project')
+// tr(l, 'assistant.error.unknown_reference') tr(l, 'assistant.error.conflict') tr(l, 'assistant.error.dependency_cycle')
+// tr(l, 'assistant.error.dependency_other_project') tr(l, 'assistant.error.self_dependency') tr(l, 'assistant.error.last_column')
+// tr(l, 'assistant.error.unknown_column') tr(l, 'assistant.error.end_before_start') tr(l, 'assistant.error.invalid_timezone')
+// tr(l, 'assistant.error.not_from_crmlead') tr(l, 'assistant.error.operation_not_allowed') tr(l, 'assistant.error.lead_required')
+// tr(l, 'assistant.error.person_proof') tr(l, 'assistant.error.not_opened') tr(l, 'assistant.error.no_seat') tr(l, 'assistant.error.not_linked')
+
 /**
  * « Confirmer » : exécute les écritures de la carte, une seule fois.
  * - `tx` : toutes dans UNE transaction (lib/assistant/run.ts) ; le numéro du jeton y est noté en premier (usage unique,
@@ -160,13 +176,14 @@ app.post('/', async (c) => {
  * Les droits sont revérifiés par chaque route, avec la session de la personne, à ce moment-là.
  */
 app.post('/confirm', async (c) => {
-  const b = await body(c, z.object({ token: z.string().min(10).max(MAX_TOKEN_CHARS) }))
+  const b = await body(c, z.object({ token: z.string().min(10).max(MAX_TOKEN_CHARS), locale: z.string().max(10).optional() }))
   const ctx = c.get('ctx')
+  const l = isLocale(b.locale) ? b.locale : asLocale(c.get('locale'))
   const v = verifyConfirm(b.token, ctx)
   if (!v.ok) throw new HttpError(403, v.error)
   const p = v.payload
   const labels = [...new Set(p.ops.map(opLabel))].slice(0, 50)
-  const tool = p.ops.length === 1 ? labels[0] : `${p.tool} (${p.ops.length} écritures)`
+  const tool = p.ops.length === 1 ? labels[0] : `${p.tool} ×${p.ops.length}`
   if (!p.ops.every((op) => opAllowed(op, p.mode))) { await logConfirm(ctx, tool, 'operation_not_allowed'); throw new HttpError(403, 'operation_not_allowed') }
   const nonce = async (db: Db) => (await db.query(
     `insert into assistant_confirmations (nonce, account_id, user_id) values ($1, $2, $3) on conflict (nonce) do nothing`,
@@ -184,8 +201,9 @@ app.post('/confirm', async (c) => {
     if (e instanceof HttpError) throw e
     if (e instanceof OpFailure) {
       await logConfirm(ctx, tool, e.code)
-      const where = p.ops.length > 1 ? ` (écriture ${e.index + 1} sur ${p.ops.length})` : ''
-      const message = `${ROUTE_ERRORS[e.code] ?? 'L’action a été refusée.'} Rien n’a été enregistré${where}.`
+      // Le refus dans la langue de la personne ; pour un lot, la place de l'écriture refusée (et rien n'est enregistré).
+      const why = tr(l, CONFIRM_ERRORS.has(e.code) ? `assistant.error.${e.code}` : 'assistant.error.refused')
+      const message = p.ops.length > 1 ? `${why} ${tr(l, 'assistant.batchFailed', { i: e.index + 1, n: p.ops.length })}` : why
       return c.json({ ok: false, error: e.code, message }, (e.status >= 400 && e.status < 600 ? e.status : 400) as any)
     }
     await logConfirm(ctx, tool, String((e as Error)?.message ?? 'error').slice(0, 80))
@@ -199,7 +217,8 @@ app.post('/confirm', async (c) => {
     return pageAllowed(real) ? real : null
   }
   const links = (p.links ?? []).map((l) => ({ label: l.label, path: at(l.path) })).filter((l): l is { label: string; path: string } => Boolean(l.path))
-  const message = p.ops.length === 1 ? `${p.summary.title} : fait.` : `${p.summary.title} : fait. ${doneLine(p.ops)}`
+  const done = tr(l, 'assistant.confirmed', { title: p.summary.title })
+  const message = p.ops.length === 1 ? done : `${done} ${doneLine(p.ops, l)}`
   return c.json({ ok: true, message, path: at(p.open), links })
 })
 

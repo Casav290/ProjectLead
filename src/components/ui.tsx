@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { forwardRef, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode,
          type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { Link } from 'react-router-dom'
+import { useT } from '../i18n'
 import { errorText } from '../lib/api'
 import { HEALTH_LABEL, PRIORITY_LABEL, STAGE_LABEL, STATUS_LABEL } from '../lib/format'
 import type { Person } from '../lib/types'
@@ -108,6 +109,7 @@ export function PageHeader({ title, subtitle, actions, back }: { title: ReactNod
 
 export function Modal({ open, onClose, title, children, wide, footer }:
   { open: boolean; onClose?: () => void; title: string; children: ReactNode; wide?: boolean | 'xl'; footer?: ReactNode }) {
+  const t = useT()
   const titleId = useId()
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -134,7 +136,7 @@ export function Modal({ open, onClose, title, children, wide, footer }:
           wide === 'xl' ? 'sm:max-w-4xl' : wide ? 'sm:max-w-2xl' : 'sm:max-w-md')}>
         <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
           <h2 id={titleId} className="min-w-0 font-display text-xl [overflow-wrap:anywhere]">{title}</h2>
-          {onClose && <button onClick={onClose} aria-label="Fermer" className="shrink-0 px-2 text-xl text-muted-foreground hover:bg-muted">×</button>}
+          {onClose && <button onClick={onClose} aria-label={t('common.close')} className="shrink-0 px-2 text-xl text-muted-foreground hover:bg-muted">×</button>}
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3">{footer}</div>}
@@ -159,11 +161,13 @@ export function Drawer({ open, onClose, children, title }: { open: boolean; onCl
   )
 }
 
-export function Spinner({ label = 'Chargement…' }: { label?: string }) {
-  return <p className="p-8 text-center text-sm text-muted-foreground">{label}</p>
+export function Spinner({ label }: { label?: string }) {
+  const t = useT()
+  return <p className="p-8 text-center text-sm text-muted-foreground">{label ?? t('common.loading')}</p>
 }
 
 export function ErrorNote({ error }: { error: unknown }) {
+  useT() // la langue change : le message se redit
   if (!error) return null
   return <p role="alert" className="border-l-[3px] border-late bg-late/5 px-3 py-2 text-sm text-late">{errorText(error)}</p>
 }
@@ -221,18 +225,20 @@ export function AvatarStack({ people, max = 4, size = 22 }: { people: Pick<Perso
   )
 }
 
-export function Progress({ value, className, tone = 'accent', label = 'Avancement' }: { value: number; className?: string; tone?: 'accent' | 'ok' | 'late' | 'warn'; label?: string }) {
+export function Progress({ value, className, tone = 'accent', label }: { value: number; className?: string; tone?: 'accent' | 'ok' | 'late' | 'warn'; label?: string }) {
+  const t = useT()
   const v = Math.max(0, Math.min(100, value))
   return (
-    <div className={clsx('h-1.5 w-full bg-muted', className)} role="progressbar" aria-label={label} aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={clsx('h-1.5 w-full bg-muted', className)} role="progressbar" aria-label={label ?? t('shell.ui.progress')} aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
       <div className={clsx('h-full', tone === 'accent' && 'bg-accent', tone === 'ok' && 'bg-won', tone === 'late' && 'bg-late', tone === 'warn' && 'bg-soon')} style={{ width: `${v}%` }} />
     </div>
   )
 }
 
 export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: ReactNode; to?: string }[]; active: string; onChange?: (id: string) => void }) {
+  const tr = useT()
   return (
-    <nav className="-mx-1 mb-4 flex gap-0 overflow-x-auto border-b border-input px-1" aria-label="Onglets">
+    <nav className="-mx-1 mb-4 flex gap-0 overflow-x-auto border-b border-input px-1" aria-label={tr('shell.ui.tabs')}>
       {tabs.map((t) => {
         const cls = clsx('whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-bold',
           active === t.id ? 'border-accent text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')
@@ -283,8 +289,9 @@ export function Toaster() {
 }
 
 /** Sélection de personnes (intervenants, assignés). */
-export function PeoplePicker({ people, value, onChange, placeholder = 'Ajouter…' }:
+export function PeoplePicker({ people, value, onChange, placeholder }:
   { people: Person[]; value: string[]; onChange: (ids: string[]) => void; placeholder?: string }) {
+  const t = useT()
   const chosen = people.filter((p) => value.includes(p.id))
   const rest = people.filter((p) => !value.includes(p.id))
   return (
@@ -292,12 +299,12 @@ export function PeoplePicker({ people, value, onChange, placeholder = 'Ajouter�
       {chosen.map((p) => (
         <span key={p.id} className="inline-flex items-center gap-1 border border-input bg-card py-0.5 pl-0.5 pr-1.5 text-xs">
           <Avatar person={p} size={18} />{p.name}
-          <button type="button" aria-label={`Retirer ${p.name}`} className="ml-0.5 text-muted-foreground hover:text-late" onClick={() => onChange(value.filter((v) => v !== p.id))}>×</button>
+          <button type="button" aria-label={t('shell.ui.removePerson', { name: p.name })} className="ml-0.5 text-muted-foreground hover:text-late" onClick={() => onChange(value.filter((v) => v !== p.id))}>×</button>
         </span>
       ))}
       {rest.length > 0 && (
         <select className="border border-dashed border-input bg-card px-2 py-1 text-xs" value="" onChange={(e) => e.target.value && onChange([...value, e.target.value])}>
-          <option value="">{placeholder}</option>
+          <option value="">{placeholder ?? t('shell.ui.addPerson')}</option>
           {rest.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       )}
@@ -308,11 +315,12 @@ export function PeoplePicker({ people, value, onChange, placeholder = 'Ajouter�
 export const ColorDot = ({ color, className }: { color: string; className?: string }) =>
   <span className={clsx('inline-block h-2.5 w-2.5 shrink-0', className)} style={{ background: color }} aria-hidden="true" />
 
-export function Confirm({ open, title, children, onConfirm, onClose, confirmLabel = 'Confirmer', danger }:
+export function Confirm({ open, title, children, onConfirm, onClose, confirmLabel, danger }:
   { open: boolean; title: string; children: ReactNode; onConfirm: () => void; onClose: () => void; confirmLabel?: string; danger?: boolean }) {
+  const t = useT()
   return (
     <Modal open={open} onClose={onClose} title={title}
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant={danger ? 'danger' : 'primary'} onClick={() => { onConfirm(); onClose() }}>{confirmLabel}</Button></>}>
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant={danger ? 'danger' : 'primary'} onClick={() => { onConfirm(); onClose() }}>{confirmLabel ?? t('common.confirm')}</Button></>}>
       <div className="text-sm">{children}</div>
     </Modal>
   )

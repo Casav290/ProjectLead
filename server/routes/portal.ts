@@ -2,6 +2,8 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { anon, anonTx, type Db } from '../db.js'
 import { body, email, notFound, router, tx } from '../lib/http.js'
+import { asLocale, tr } from '../lib/i18n.js'
+import { userLocale } from '../lib/locales.js'
 
 /**
  * La page de suivi du client (`/suivi/<jeton>`) : l'état des étapes, l'avancement, les points
@@ -12,7 +14,7 @@ import { body, email, notFound, router, tx } from '../lib/http.js'
 async function portalData(db: Db, where: string, arg: string) {
   const p = (await db.query(
     `select p.id, p.account_id, p.name, p.code, p.description, p.status, p.health, p.start_date, p.due_date, p.color,
-            p.portal_show_tasks, p.portal_show_time, p.portal_token, a.name as account_name, c.name as client_name, u.name as owner_name, u.email as owner_email
+            p.portal_show_tasks, p.portal_show_time, p.portal_token, p.doc_locale, a.locale as account_locale, a.name as account_name, c.name as client_name, u.name as owner_name, u.email as owner_email
        from projects p join accounts a on a.id = p.account_id left join clients c on c.id = p.client_id left join users u on u.id = p.owner_id
       where ${where}`, [arg])).rows[0]
   if (!p) return null
@@ -38,6 +40,8 @@ async function portalData(db: Db, where: string, arg: string) {
   return {
     project: { name: p.name, code: p.code, description: p.description, status: p.status, health: p.health, start_date: p.start_date,
                due_date: p.due_date, color: p.color, account: p.account_name, client: p.client_name, owner: p.owner_name },
+    // La langue du document (celle du projet, sinon de l'entreprise) : la page de suivi l'adopte si le visiteur n'a rien choisi.
+    locale: asLocale(p.doc_locale ?? p.account_locale),
     progress: stages.length ? Math.round((done / stages.length) * 100) : 0,
     stages, tasks, updates, files, time, events, _id: p.id, _account: p.account_id, _owner_email: p.owner_email,
   }
@@ -79,17 +83,19 @@ publicPortal.post('/:token/message', async (c) => {
   if (!TOKEN.test(c.req.param('token'))) return c.json({ error: 'not_found' }, 404)
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(120), email, body: z.string().trim().min(1).max(5000) }))
   const ok = await anonTx(async (db) => {
-    const p = (await db.query(`select id, account_id, owner_id, name from projects where portal_token = $1 and portal_enabled`, [c.req.param('token')])).rows[0]
+    const p = (await db.query(
+      `select p.id, p.account_id, p.owner_id, p.name, a.locale from projects p join accounts a on a.id = p.account_id
+        where p.portal_token = $1 and p.portal_enabled`, [c.req.param('token')])).rows[0]
     if (!p) return false
     // Pas plus de dix messages par heure et par projet : la page est publique.
     const recent = (await db.query(`select count(*)::int as n from activities where project_id = $1 and kind = 'client_message' and created_at > now() - interval '1 hour'`, [p.id])).rows[0].n
     if (recent >= 10) return false
     await db.query(`insert into comments (account_id, project_id, author_id, body) values ($1,$2,null,$3)`,
-      [p.account_id, p.id, `Message du client ${b.name} <${b.email}> :\n\n${b.body}`])
+      [p.account_id, p.id, `${tr(p.locale, 'portal.clientComment', { name: b.name, email: b.email })}\n\n${b.body}`])
     await db.query(`insert into activities (account_id, project_id, kind, data) values ($1,$2,'client_message',$3)`,
       [p.account_id, p.id, JSON.stringify({ name: b.name, email: b.email })])
     if (p.owner_id) await db.query(`insert into notifications (account_id, user_id, kind, title, body, link) values ($1,$2,'client_message',$3,$4,$5)`,
-      [p.account_id, p.owner_id, `Message du client sur « ${p.name} »`, b.body.slice(0, 300), `/projets/${p.id}/activite`])
+      [p.account_id, p.owner_id, tr(await userLocale(db, p.owner_id), 'notif.clientMessage', { name: p.name }), b.body.slice(0, 300), `/projets/${p.id}/activite`])
     return true
   })
   if (!ok) return c.json({ error: 'not_accepted' }, 429)

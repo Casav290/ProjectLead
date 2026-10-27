@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as RPointerEvent } from 'react'
+import { intlLocale, labels, useT } from '../../i18n'
 import { api, errorText } from '../../lib/api'
 import { addDays, daysBetween, fmtDate, mondayOf, today } from '../../lib/format'
 import type { ProjectDetail, Stage, Task } from '../../lib/types'
@@ -12,12 +13,12 @@ type Scale = 'day' | 'week' | 'month'
 const DAY_W: Record<Scale, number> = { day: 30, week: 14, month: 4.5 }
 const ROW_H = 34
 const HEAD_H = 44
-const SCALE_LABEL: Record<Scale, string> = { day: 'Jour', week: 'Semaine', month: 'Mois' }
+const SCALE_LABEL = labels('ptabs.gantt.scale', ['day', 'week', 'month'])
 
 type Row = { kind: 'stage'; stage: Stage | null; label: string } | { kind: 'task'; task: Task }
 type Drag = { id: string; mode: 'move' | 'end'; x0: number; delta: number; moved: boolean }
 
-const monthName = (d: string, long = false) => new Intl.DateTimeFormat('fr-CH', { month: long ? 'long' : 'short' }).format(new Date(d + 'T12:00:00'))
+const monthName = (d: string, long = false) => new Intl.DateTimeFormat(intlLocale(), { month: long ? 'long' : 'short' }).format(new Date(d + 'T12:00:00'))
 /** Numéro de semaine ISO. */
 const isoWeek = (d: string) => {
   const x = new Date(d + 'T12:00:00')
@@ -35,6 +36,7 @@ const span = (t: Task): [string, string] | null => {
 }
 
 export default function Gantt({ project, onChanged }: { project: ProjectDetail; onChanged: () => void }) {
+  const t = useT()
   const { data, setData, error, loading, reload } = useProjectTasks(project.id)
   const openTask = useOpenTask()
   const [scale, setScale] = useState<Scale>('week')
@@ -46,7 +48,7 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
   // Bornes de l'échelle : tout ce qui est daté, plus aujourd'hui, avec une marge.
   const [from, days] = useMemo(() => {
     const dates = [today(), project.start_date, project.due_date,
-      ...tasks.flatMap((t) => [t.start_date, t.due_date]), ...project.stages.flatMap((s) => [s.start_date, s.due_date])]
+      ...tasks.flatMap((x) => [x.start_date, x.due_date]), ...project.stages.flatMap((s) => [s.start_date, s.due_date])]
       .filter(Boolean).map((d) => (d as string).slice(0, 10)).sort()
     let a = addDays(dates[0], -7), b = addDays(dates[dates.length - 1], 21)
     if (scale !== 'day') a = mondayOf(a)
@@ -60,15 +62,15 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
     const out: Row[] = []
     for (const s of project.stages) {
       out.push({ kind: 'stage', stage: s, label: s.name })
-      for (const t of ordered) if (t.stage_id === s.id) out.push({ kind: 'task', task: t })
+      for (const x of ordered) if (x.stage_id === s.id) out.push({ kind: 'task', task: x })
     }
-    const rest = ordered.filter((t) => !t.stage_id || !known.has(t.stage_id))
+    const rest = ordered.filter((x) => !x.stage_id || !known.has(x.stage_id))
     if (rest.length) {
-      if (project.stages.length) out.push({ kind: 'stage', stage: null, label: 'Sans étape' })
-      for (const t of rest) out.push({ kind: 'task', task: t })
+      if (project.stages.length) out.push({ kind: 'stage', stage: null, label: t('ptabs.common.noStage') })
+      for (const x of rest) out.push({ kind: 'task', task: x })
     }
     return out
-  }, [tasks, project.stages])
+  }, [tasks, project.stages, t])
 
   // À l'ouverture, on amène la ligne du jour à l'écran.
   const centered = useRef(false)
@@ -82,45 +84,46 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
   const width = days * dayW
 
   /** Les dates d'une tâche, décalées par le glisser en cours. */
-  const shown = (t: Task): [string, string] | null => {
-    const s = span(t)
-    if (!s || drag?.id !== t.id || !drag.delta) return s
+  const shown = (task: Task): [string, string] | null => {
+    const s = span(task)
+    if (!s || drag?.id !== task.id || !drag.delta) return s
     if (drag.mode === 'move') return [addDays(s[0], drag.delta), addDays(s[1], drag.delta)]
     const end = addDays(s[1], drag.delta)
     return [s[0], end < s[0] ? s[0] : end]
   }
 
-  const onPointerDown = (e: RPointerEvent, t: Task, mode: Drag['mode']) => {
+  const onPointerDown = (e: RPointerEvent, task: Task, mode: Drag['mode']) => {
     if (e.button !== 0) return
     e.stopPropagation()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    setDrag({ id: t.id, mode, x0: e.clientX, delta: 0, moved: false })
+    setDrag({ id: task.id, mode, x0: e.clientX, delta: 0, moved: false })
   }
   const onPointerMove = (e: RPointerEvent) => {
     if (!drag) return
     const px = e.clientX - drag.x0
     setDrag({ ...drag, delta: Math.round(px / dayW), moved: drag.moved || Math.abs(px) > 4 })
   }
-  const onPointerUp = async (t: Task) => {
+  const onPointerUp = async (task: Task) => {
     const d = drag
     setDrag(null)
     if (!d) return
-    if (!d.moved) { openTask(t.id); return }
+    if (!d.moved) { openTask(task.id); return }
     if (!d.delta) return
-    const s = span(t)!
+    const s = span(task)!
     const patch: Partial<Task> = {}
     if (d.mode === 'move') {
-      if (t.start_date) patch.start_date = addDays(s[0], d.delta)
-      if (t.due_date) patch.due_date = addDays(t.due_date, d.delta)
+      if (task.start_date) patch.start_date = addDays(s[0], d.delta)
+      if (task.due_date) patch.due_date = addDays(task.due_date, d.delta)
     } else {
       const end = addDays(s[1], d.delta)
       patch.due_date = end < s[0] ? s[0] : end
-      if (!t.start_date && patch.due_date !== s[1]) patch.start_date = s[0] // la tâche s'étire depuis son ancien jour
+      if (!task.start_date && patch.due_date !== s[1]) patch.start_date = s[0] // la tâche s'étire depuis son ancien jour
     }
-    setData(tasks.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))
+    setData(tasks.map((x) => (x.id === task.id ? { ...x, ...patch } : x)))
     try {
-      await api.patch(`/tasks/${t.id}`, patch)
-      toast(`« ${t.title} » : ${patch.start_date ? fmtDate(patch.start_date) + ' → ' : ''}${fmtDate(patch.due_date ?? t.due_date)}`)
+      await api.patch(`/tasks/${task.id}`, patch)
+      toast(t('ptabs.gantt.movedToast', { title: task.title,
+        dates: `${patch.start_date ? fmtDate(patch.start_date) + ' → ' : ''}${fmtDate(patch.due_date ?? task.due_date)}` }))
     } catch (err) { toast(errorText(err)) }
     await reload()
     onChanged()
@@ -141,7 +144,7 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
       i += n
     } else if (scale === 'week') {
       const n = Math.min(7 - ((new Date(d + 'T12:00:00').getDay() + 6) % 7), days - i)
-      bottom.push({ label: `S${isoWeek(d)}`, x: i * dayW, w: n * dayW })
+      bottom.push({ label: t('ptabs.gantt.weekShort', { n: isoWeek(d) }), x: i * dayW, w: n * dayW })
       i += n
     } else {
       const wd = new Date(d + 'T12:00:00').getDay()
@@ -167,12 +170,12 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
   // Flèches de dépendance : de la fin de la tâche attendue au début de celle qui attend.
   const rowIndex = new Map<string, number>()
   rows.forEach((r, i) => r.kind === 'task' && rowIndex.set(r.task.id, i))
-  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const byId = new Map(tasks.map((x) => [x.id, x]))
   const arrows: { key: string; d: string; late: boolean }[] = []
-  for (const t of tasks) {
-    const ti = rowIndex.get(t.id), ts = shown(t)
+  for (const task of tasks) {
+    const ti = rowIndex.get(task.id), ts = shown(task)
     if (ti === undefined || !ts) continue
-    for (const dep of t.depends_on) {
+    for (const dep of task.depends_on) {
       const p = byId.get(dep), pi = rowIndex.get(dep), ps = p && shown(p)
       if (!p || pi === undefined || !ps) continue
       const x1 = x(addDays(ps[1], 1)), y1 = pi * ROW_H + ROW_H / 2
@@ -181,37 +184,37 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
       const path = x2 - 6 >= x1 + 6
         ? `M${x1},${y1} H${mid} V${y2} H${x2}`
         : `M${x1},${y1} h6 V${y1 + (y2 > y1 ? ROW_H / 2 : -ROW_H / 2)} H${x2 - 8} V${y2} H${x2}`
-      arrows.push({ key: `${dep}-${t.id}`, d: path, late: x2 < x1 })
+      arrows.push({ key: `${dep}-${task.id}`, d: path, late: x2 < x1 })
     }
   }
   const todayX = x(today())
-  const undated = tasks.filter((t) => !span(t)).length
+  const undated = tasks.filter((x) => !span(x)).length
 
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex border border-input" role="group" aria-label="Échelle">
+        <div className="inline-flex border border-input" role="group" aria-label={t('ptabs.gantt.scaleLabel')}>
           {(['day', 'week', 'month'] as Scale[]).map((s) => (
             <button key={s} type="button" aria-pressed={scale === s} onClick={() => { setScale(s); centered.current = false }}
               className={clsx('px-3 py-1.5 text-[13px] font-bold', scale === s ? 'bg-foreground text-background' : 'bg-card hover:bg-muted')}>{SCALE_LABEL[s]}</button>
           ))}
         </div>
-        <Button size="sm" variant="ghost" onClick={() => scroller.current?.scrollTo({ left: Math.max(0, todayX - 160), behavior: 'smooth' })}>Aujourd'hui</Button>
+        <Button size="sm" variant="ghost" onClick={() => scroller.current?.scrollTo({ left: Math.max(0, todayX - 160), behavior: 'smooth' })}>{t('ptabs.common.today')}</Button>
         <span className="ml-auto flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          <Legend className="bg-accent" label="En cours" />
-          <Legend className="bg-late" label="En retard" />
-          <Legend className="bg-won" label="Terminée" />
-          {undated > 0 && <span>{undated} sans date</span>}
+          <Legend className="bg-accent" label={t('ptabs.gantt.legendActive')} />
+          <Legend className="bg-late" label={t('ptabs.gantt.legendLate')} />
+          <Legend className="bg-won" label={t('ptabs.gantt.legendDone')} />
+          {undated > 0 && <span>{t('ptabs.gantt.undated', { n: undated })}</span>}
         </span>
       </div>
 
-      {!rows.length ? <p className="text-sm text-muted-foreground">Aucune tâche dans ce projet.</p> : (
+      {!rows.length ? <p className="text-sm text-muted-foreground">{t('ptabs.gantt.empty')}</p> : (
         <div ref={scroller} className="relative max-h-[75vh] overflow-auto [--gantt-left:150px] sm:[--gantt-left:260px] overscroll-x-contain border border-border bg-card">
           <div className="relative" style={{ width: `calc(var(--gantt-left) + ${width}px)` }}>
             {/* En-tête : reste en haut au défilement vertical */}
             <div className="sticky top-0 z-20 flex bg-head" style={{ height: HEAD_H }}>
               <div className="sticky left-0 z-10 flex w-[var(--gantt-left)] shrink-0 items-end border-b border-r border-input bg-head px-3 pb-1.5 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-muted-foreground">
-                Tâche
+                {t('ptabs.gantt.task')}
               </div>
               <div className="relative shrink-0 border-b border-input" style={{ width }}>
                 {top.map((m, i) => (
@@ -273,7 +276,7 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
                 </svg>
                 {todayX >= 0 && todayX <= width && (
                   <div className="absolute inset-y-0 w-0 border-l-2 border-soon" style={{ left: todayX + dayW / 2 }}>
-                    <span className="absolute -top-0 left-1 whitespace-nowrap bg-soon px-1 text-[10px] font-bold text-white">Aujourd'hui</span>
+                    <span className="absolute -top-0 left-1 whitespace-nowrap bg-soon px-1 text-[10px] font-bold text-white">{t('ptabs.common.today')}</span>
                   </div>
                 )}
               </div>
@@ -281,7 +284,7 @@ export default function Gantt({ project, onChanged }: { project: ProjectDetail; 
           </div>
         </div>
       )}
-      <p className="text-xs text-muted-foreground">Glissez une barre pour décaler ses dates, tirez son bord droit pour changer l'échéance. Un clic ouvre la tâche.</p>
+      <p className="text-xs text-muted-foreground">{t('ptabs.gantt.help')}</p>
     </div>
   )
 }
@@ -307,23 +310,24 @@ function StageBar({ stage, x, dayW }: { stage: Stage | null; x: (d: string) => n
   )
 }
 
-function TaskBar({ task: t, span: s, x, dayW, dragging, onDown, onMove, onUp, onCancel, onOpen }: {
+function TaskBar({ task, span: s, x, dayW, dragging, onDown, onMove, onUp, onCancel, onOpen }: {
   task: Task; span: [string, string] | null; x: (d: string) => number; dayW: number; dragging: boolean; onOpen: () => void
   onDown: (e: RPointerEvent, t: Task, mode: Drag['mode']) => void; onMove: (e: RPointerEvent) => void; onUp: () => void; onCancel: () => void
 }) {
-  if (!s) return <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] italic text-muted-foreground">sans date</span>
-  const done = Boolean(t.completed_at)
-  const tone = done ? 'bg-won' : isOverdue(t) ? 'bg-late' : 'bg-accent'
+  const t = useT()
+  if (!s) return <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] italic text-muted-foreground">{t('ptabs.gantt.noDate')}</span>
+  const done = Boolean(task.completed_at)
+  const tone = done ? 'bg-won' : isOverdue(task) ? 'bg-late' : 'bg-accent'
   const handlers = {
     onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onCancel,
     onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } },
   }
-  const label = `${t.title} : ${s[0] !== s[1] ? `${fmtDate(s[0])} → ` : ''}${fmtDate(s[1])}`
-  if (t.is_milestone) {
+  const label = t('ptabs.gantt.barLabel', { title: task.title, dates: `${s[0] !== s[1] ? `${fmtDate(s[0])} → ` : ''}${fmtDate(s[1])}` })
+  if (task.is_milestone) {
     const cx = x(s[1]) + dayW / 2
     return (
-      <div role="button" tabIndex={0} aria-label={`Jalon ${label}`} title={label} {...handlers}
-        onPointerDown={(e) => onDown(e, t, 'move')}
+      <div role="button" tabIndex={0} aria-label={t('ptabs.gantt.milestoneLabel', { label })} title={label} {...handlers}
+        onPointerDown={(e) => onDown(e, task, 'move')}
         className={clsx('absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-grab touch-pan-y', done ? 'bg-won' : 'bg-foreground',
           dragging && 'cursor-grabbing ring-2 ring-accent-light')} style={{ left: cx }}>
       </div>
@@ -333,16 +337,16 @@ function TaskBar({ task: t, span: s, x, dayW, dragging, onDown, onMove, onUp, on
   return (
     <>
       <div role="button" tabIndex={0} aria-label={label} title={label} {...handlers}
-        onPointerDown={(e) => onDown(e, t, 'move')}
+        onPointerDown={(e) => onDown(e, task, 'move')}
         className={clsx('group absolute top-[7px] h-5 cursor-grab touch-pan-y', tone, done && 'opacity-70', dragging && 'cursor-grabbing outline outline-2 outline-accent-light')}
         style={{ left, width: w }}>
-        {t.blocked && !done && <span className="absolute inset-y-0 left-0 w-1 bg-soon" aria-hidden="true" />}
-        <span role="presentation" onPointerDown={(e) => onDown(e, t, 'end')}
+        {task.blocked && !done && <span className="absolute inset-y-0 left-0 w-1 bg-soon" aria-hidden="true" />}
+        <span role="presentation" onPointerDown={(e) => onDown(e, task, 'end')}
           className="absolute inset-y-0 -right-1 w-3 cursor-ew-resize after:absolute after:inset-y-1 after:right-1.5 after:w-0.5 after:bg-white/70 after:opacity-0 group-hover:after:opacity-100" />
       </div>
       {w < 120 && (
         <span className="pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] text-muted-foreground" style={{ left: left + w + 6 }}>
-          {t.assignees.map((a) => a.name.split(' ')[0]).join(', ')}
+          {task.assignees.map((a) => a.name.split(' ')[0]).join(', ')}
         </span>
       )}
     </>

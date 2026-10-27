@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { useT } from '../i18n'
 import { useLoad } from '../lib/store'
 import { Card, ColorDot, Empty, ErrorNote, Input, PageHeader, Spinner, StatusBadge } from '../components/ui'
 
@@ -11,32 +12,33 @@ type Results = {
 
 /** Recherche globale : projets, tâches et clients. */
 export default function Search() {
+  const t = useT()
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const [text, setText] = useState(q)
   useEffect(() => setText(q), [q])
   useEffect(() => {
-    const t = setTimeout(() => { if (text.trim() !== q) setParams(text.trim() ? { q: text.trim() } : {}, { replace: true }) }, 300)
-    return () => clearTimeout(t)
+    const id = setTimeout(() => { if (text.trim() !== q) setParams(text.trim() ? { q: text.trim() } : {}, { replace: true }) }, 300)
+    return () => clearTimeout(id)
   }, [text, q, setParams])
   const { data, error, loading } = useLoad<Results>(q.length >= 2 ? `/search?q=${encodeURIComponent(q)}` : null)
   const count = data ? data.projects.length + data.tasks.length + data.clients.length : 0
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Recherche" />
+      <PageHeader title={t('home.search.title')} />
       <form onSubmit={(e) => { e.preventDefault(); setParams(text.trim() ? { q: text.trim() } : {}) }}>
-        <Input type="search" autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="Un projet, une tâche, un client…"
-          aria-label="Rechercher" className="py-3 text-base" />
+        <Input type="search" autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={t('home.search.placeholder')}
+          aria-label={t('common.search')} className="py-3 text-base" />
       </form>
-      {q.length < 2 ? <p className="text-sm text-muted-foreground">Tapez au moins deux lettres.</p>
-        : loading && !data ? <Spinner label="Recherche…" />
+      {q.length < 2 ? <p className="text-sm text-muted-foreground">{t('home.search.minChars')}</p>
+        : loading && !data ? <Spinner label={t('home.search.searching')} />
         : error ? <ErrorNote error={error} />
-        : count === 0 ? <Empty title={`Aucun résultat pour « ${q} »`}>Essayez un autre mot, un code de projet ou le nom d'un client.</Empty>
+        : count === 0 ? <Empty title={t('home.search.noResults', { q })}>{t('home.search.noResultsBody')}</Empty>
         : data && (
           <div className="grid gap-5 lg:grid-cols-2">
             {data.projects.length > 0 && (
-              <Card title={`Projets · ${data.projects.length}`}>
+              <Card title={t('home.search.projects', { n: data.projects.length })}>
                 <ul className="divide-y divide-border">
                   {data.projects.map((p) => (
                     <li key={p.id}>
@@ -52,7 +54,7 @@ export default function Search() {
               </Card>
             )}
             {data.clients.length > 0 && (
-              <Card title={`Clients · ${data.clients.length}`}>
+              <Card title={t('home.search.clients', { n: data.clients.length })}>
                 <ul className="divide-y divide-border">
                   {data.clients.map((c) => (
                     <li key={c.id}>
@@ -66,7 +68,7 @@ export default function Search() {
               </Card>
             )}
             {data.tasks.length > 0 && (
-              <Card title={`Tâches · ${data.tasks.length}`} className="lg:col-span-2">
+              <Card title={t('home.search.tasks', { n: data.tasks.length })} className="lg:col-span-2">
                 <ul className="divide-y divide-border">
                   {data.tasks.map((t) => (
                     <li key={t.id}>

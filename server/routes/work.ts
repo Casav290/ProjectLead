@@ -5,6 +5,8 @@ import { anonTx } from '../db.js'
 import { createDefaultColumns } from '../lib/defaults.js'
 import { body, email, HttpError, requireRole, router, setClause, tx, uuid } from '../lib/http.js'
 import { EMAIL_VISIBLE } from './mail.js'
+import { isLocale, tr } from '../lib/i18n.js'
+import { userLocale } from '../lib/locales.js'
 
 /** Accueil, notifications, recherche, automatisations, formulaires de demande, clés d'API. */
 const app = router()
@@ -187,9 +189,13 @@ publicForms.post('/:slug', async (c) => {
     name: z.string().trim().min(1).max(120), email, company: z.string().trim().max(200).optional(), phone: z.string().trim().max(50).optional(),
     subject: z.string().trim().min(1).max(200), message: z.string().trim().max(10000).default(''),
     website: z.string().max(0).optional(), // piège à robots : un humain ne voit pas ce champ
+    // La langue de la page du formulaire : celle des documents du projet qui en naît.
+    locale: z.string().max(10).optional(),
   }))
+  const chosen = isLocale(b.locale) ? b.locale : null
   const out = await anonTx(async (db) => {
-    const f = (await db.query(`select * from intake_forms where slug = $1 and active`, [c.req.param('slug')])).rows[0]
+    const f = (await db.query(`select f.*, a.locale as account_locale, a.currency as account_currency from intake_forms f
+                                 join accounts a on a.id = f.account_id where f.slug = $1 and f.active`, [c.req.param('slug')])).rows[0]
     if (!f) throw new HttpError(404, 'not_found')
     const recent = (await db.query(`select count(*)::int as n from projects where account_id = $1 and source = 'form' and created_at > now() - interval '10 minutes'`, [f.account_id])).rows[0].n
     if (recent > 20) throw new HttpError(429, 'too_many')
@@ -197,10 +203,11 @@ publicForms.post('/:slug', async (c) => {
     if (!client) client = (await db.query(`insert into clients (account_id, kind, name, contact_person, email, phone) values ($1,$2,$3,$4,$5,$6) returning id`,
       [f.account_id, b.company ? 'company' : 'person', b.company || b.name, b.company ? b.name : null, b.email, b.phone ?? null])).rows[0]
     const p = (await db.query(
-      `insert into projects (account_id, name, description, client_id, owner_id, status, source, source_ref, created_by)
-       values ($1,$2,$3,$4,$5,'lead','form',$6,$5) returning id`,
-      [f.account_id, b.subject, `Demande de ${b.name} <${b.email}>${b.phone ? `, ${b.phone}` : ''} :\n\n${b.message}`, client.id, f.owner_id,
-       `${f.id}:${randomBytes(6).toString('hex')}`])).rows[0]
+      `insert into projects (account_id, name, description, client_id, owner_id, status, source, source_ref, created_by, currency, doc_locale)
+       values ($1,$2,$3,$4,$5,'lead','form',$6,$5,$7,$8) returning id`,
+      [f.account_id, b.subject,
+       `${tr(f.account_locale, 'form.description', { name: b.name, email: b.email, phone: b.phone ? `, ${b.phone}` : '' })}\n\n${b.message}`,
+       client.id, f.owner_id, `${f.id}:${randomBytes(6).toString('hex')}`, f.account_currency ?? 'CHF', chosen])).rows[0]
     if (f.template_id) {
       // Les étapes du modèle, sans dates : le projet n'est pas encore lancé.
       for (const s of (await db.query('select name, description, position, visible_to_client from stages where project_id = $1', [f.template_id])).rows)
@@ -211,7 +218,7 @@ publicForms.post('/:slug', async (c) => {
     if (f.owner_id) {
       await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead')`, [p.id, f.owner_id, f.account_id])
       await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'form',$3,$4)`,
-        [f.account_id, f.owner_id, `Nouvelle demande : ${b.subject}`, `/projets/${p.id}`])
+        [f.account_id, f.owner_id, tr(await userLocale(db, f.owner_id), 'notif.formRequest', { subject: b.subject }), `/projets/${p.id}`])
     }
     return p.id
   })

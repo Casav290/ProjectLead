@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { intlLocale, t, useT } from '../i18n'
 import { api } from '../lib/api'
 import { addDays, fmtMinutes, fmtRelative, fmtShortDate, fmtTime, hours, mondayOf, STATUS_LABEL, today, weekdayShort } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
@@ -16,37 +17,38 @@ type Dashboard = {
   counts: { active: number; at_risk: number; late: number; inbox: number; leads: number }; activity: DashActivity[]
 }
 
-const longDate = (d: Date) => new Intl.DateTimeFormat('fr-CH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(d)
-const dayLabel = (iso: string) => new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(iso))
+const longDate = (d: Date) => new Intl.DateTimeFormat(intlLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(d)
+const dayLabel = (iso: string) => new Intl.DateTimeFormat(intlLocale(), { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(iso))
 
 /** Une ligne d'activité, dite en clair. */
 function activityText(a: DashActivity) {
   const d = a.data ?? {}
   switch (a.kind) {
-    case 'task_created': return `a créé la tâche « ${d.title} »`
-    case 'task_completed': return `a terminé « ${d.title} »`
-    case 'task_reopened': return `a rouvert « ${d.title} »`
-    case 'task_deleted': return `a supprimé « ${d.title} »`
-    case 'task_moved': return `a déplacé « ${d.title} » vers ${d.column}`
-    case 'task_due': return `a changé l'échéance de « ${d.title} »`
-    case 'time_logged': return `a saisi ${fmtMinutes(d.minutes)}`
-    case 'email_in': return `Email reçu de ${d.from} : ${d.subject}`
-    case 'email_out': return `Email envoyé : ${d.subject}`
-    case 'event_created': return `a planifié « ${d.title} »`
-    case 'file_added': return `a ajouté le fichier ${d.filename}`
-    case 'member_added': return 'a ajouté un intervenant'
-    case 'project_created': return 'a créé le projet'
-    case 'project_status': return `a passé le projet en « ${STATUS_LABEL[d.to] ?? d.to} »`
-    case 'project_update': return 'a publié un point de situation'
-    case 'stage_created': return `a ajouté l'étape « ${d.name} »`
-    case 'stage_done': return `Étape terminée : ${d.name}`
-    case 'stage_status': return `a changé l'étape « ${d.name} »`
-    case 'booking': return `Rendez-vous pris par ${d.name}`
+    case 'task_created': return t('home.activity.taskCreated', { title: d.title })
+    case 'task_completed': return t('home.activity.taskCompleted', { title: d.title })
+    case 'task_reopened': return t('home.activity.taskReopened', { title: d.title })
+    case 'task_deleted': return t('home.activity.taskDeleted', { title: d.title })
+    case 'task_moved': return t('home.activity.taskMoved', { title: d.title, column: d.column })
+    case 'task_due': return t('home.activity.taskDue', { title: d.title })
+    case 'time_logged': return t('home.activity.timeLogged', { duration: fmtMinutes(d.minutes) })
+    case 'email_in': return t('home.activity.emailIn', { from: d.from, subject: d.subject })
+    case 'email_out': return t('home.activity.emailOut', { subject: d.subject })
+    case 'event_created': return t('home.activity.eventCreated', { title: d.title })
+    case 'file_added': return t('home.activity.fileAdded', { name: d.filename })
+    case 'member_added': return t('home.activity.memberAdded')
+    case 'project_created': return t('home.activity.projectCreated')
+    case 'project_status': return t('home.activity.projectStatus', { status: STATUS_LABEL[d.to] ?? d.to })
+    case 'project_update': return t('home.activity.projectUpdate')
+    case 'stage_created': return t('home.activity.stageCreated', { name: d.name })
+    case 'stage_done': return t('home.activity.stageDone', { name: d.name })
+    case 'stage_status': return t('home.activity.stageStatus', { name: d.name })
+    case 'booking': return t('home.activity.booking', { name: d.name })
     default: return a.kind
   }
 }
 
 export default function Dashboard() {
+  const t = useT()
   const { me } = useApp()
   const { data, error, loading, setData } = useLoad<Dashboard>('/dashboard')
   const [done, setDone] = useState<Set<string>>(new Set())
@@ -54,71 +56,71 @@ export default function Dashboard() {
   if (loading && !data) return <Spinner />
   if (error || !data || !me) return <ErrorNote error={error ?? 'not_found'} />
 
-  const complete = async (t: DashTask) => {
-    setDone((s) => new Set(s).add(t.id))
+  const complete = async (task: DashTask) => {
+    setDone((s) => new Set(s).add(task.id))
     try {
-      await api.patch(`/tasks/${t.id}`, { completed: true })
-      toast(`« ${t.title} » terminée`)
-      setTimeout(() => setData((d) => d && { ...d, myTasks: d.myTasks.filter((x) => x.id !== t.id) }), 600)
+      await api.patch(`/tasks/${task.id}`, { completed: true })
+      toast(t('home.dash.taskDone', { title: task.title }))
+      setTimeout(() => setData((d) => d && { ...d, myTasks: d.myTasks.filter((x) => x.id !== task.id) }), 600)
     } catch (e) {
-      setDone((s) => { const n = new Set(s); n.delete(t.id); return n })
-      toast('La tâche n\'a pas pu être terminée.')
+      setDone((s) => { const n = new Set(s); n.delete(task.id); return n })
+      toast(t('home.dash.taskFailed'))
     }
   }
 
   const t0 = today()
   const groups = [
-    { id: 'late', label: 'En retard', tasks: data.myTasks.filter((t) => t.due_date && t.due_date.slice(0, 10) < t0) },
-    { id: 'today', label: "Aujourd'hui", tasks: data.myTasks.filter((t) => t.due_date?.slice(0, 10) === t0) },
-    { id: 'next', label: 'À venir', tasks: data.myTasks.filter((t) => !t.due_date || t.due_date.slice(0, 10) > t0).slice(0, 12) },
+    { id: 'late', label: t('home.dash.late'), tasks: data.myTasks.filter((t) => t.due_date && t.due_date.slice(0, 10) < t0) },
+    { id: 'today', label: t('home.dash.today'), tasks: data.myTasks.filter((t) => t.due_date?.slice(0, 10) === t0) },
+    { id: 'next', label: t('home.dash.upcoming'), tasks: data.myTasks.filter((t) => !t.due_date || t.due_date.slice(0, 10) > t0).slice(0, 12) },
   ]
   const c = data.counts
   const tiles = [
-    { label: 'Projets actifs', value: c.active, to: '/projets?statut=active' },
-    { label: 'À surveiller', value: c.at_risk, to: '/projets', tone: c.at_risk ? 'warn' : '' },
-    { label: 'En retard', value: c.late, to: '/projets', tone: c.late ? 'late' : '' },
-    { label: 'Emails à trier', value: c.inbox, to: '/emails', tone: c.inbox ? 'accent' : '' },
-    { label: 'Demandes à qualifier', value: c.leads, to: '/projets?statut=lead', tone: c.leads ? 'accent' : '' },
+    { label: t('home.dash.activeProjects'), value: c.active, to: '/projets?statut=active' },
+    { label: t('home.dash.atRisk'), value: c.at_risk, to: '/projets', tone: c.at_risk ? 'warn' : '' },
+    { label: t('home.dash.late'), value: c.late, to: '/projets', tone: c.late ? 'late' : '' },
+    { label: t('home.dash.inbox'), value: c.inbox, to: '/emails', tone: c.inbox ? 'accent' : '' },
+    { label: t('home.dash.leads'), value: c.leads, to: '/projets?statut=lead', tone: c.leads ? 'accent' : '' },
   ]
 
   return (
     <div>
-      <PageHeader title={`Bonjour ${me.user.name.split(' ')[0]}`} subtitle={<span className="first-letter:uppercase inline-block">{longDate(new Date())}</span>} />
+      <PageHeader title={t('home.dash.hello', { name: me.user.name.split(' ')[0] })} subtitle={<span className="first-letter:uppercase inline-block">{longDate(new Date())}</span>} />
 
       <div className="mb-5 grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3 lg:grid-cols-5">
-        {tiles.map((t, i) => (
-          <Link key={t.label} to={t.to} className={clsx('group bg-card px-4 py-3 hover:bg-head', i === 4 && 'col-span-2 lg:col-span-1')}>
+        {tiles.map((tile, i) => (
+          <Link key={tile.label} to={tile.to} className={clsx('group bg-card px-4 py-3 hover:bg-head', i === 4 && 'col-span-2 lg:col-span-1')}>
             <div className={clsx('font-display text-3xl font-extrabold tabular-nums',
-              t.tone === 'warn' && 'text-soon', t.tone === 'late' && 'text-late', t.tone === 'accent' && 'text-accent')}>{t.value}</div>
-            <div className="text-xs font-semibold text-muted-foreground group-hover:text-foreground">{t.label}</div>
+              tile.tone === 'warn' && 'text-soon', tile.tone === 'late' && 'text-late', tile.tone === 'accent' && 'text-accent')}>{tile.value}</div>
+            <div className="text-xs font-semibold text-muted-foreground group-hover:text-foreground">{tile.label}</div>
           </Link>
         ))}
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
-          <Card title="Mes tâches" action={<Link to="/taches" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Toutes mes tâches</Link>}>
+          <Card title={t('home.dash.myTasks')} action={<Link to="/taches" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">{t('home.dash.allMyTasks')}</Link>}>
             {data.myTasks.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">Rien d'ouvert à votre nom. Belle journée.</p>
+              <p className="px-4 py-6 text-sm text-muted-foreground">{t('home.dash.noTasks')}</p>
             ) : groups.filter((g) => g.tasks.length).map((g) => (
               <div key={g.id}>
                 <h3 className={clsx('border-b border-border bg-head px-4 py-1.5 text-[11px] font-extrabold uppercase tracking-[.06em]',
                   g.id === 'late' ? 'text-late' : 'text-muted-foreground')}>{g.label} · {g.tasks.length}</h3>
                 <ul>
-                  {g.tasks.map((t) => (
-                    <li key={t.id} className="flex items-center gap-3 border-b border-border px-4 py-2 last:border-b-0">
-                      <input type="checkbox" aria-label={`Terminer ${t.title}`} className="h-4 w-4 shrink-0 accent-[hsl(var(--accent))]"
-                        checked={done.has(t.id)} disabled={done.has(t.id)} onChange={() => complete(t)} />
+                  {g.tasks.map((task) => (
+                    <li key={task.id} className="flex items-center gap-3 border-b border-border px-4 py-2 last:border-b-0">
+                      <input type="checkbox" aria-label={t('home.dash.completeTask', { title: task.title })} className="h-4 w-4 shrink-0 accent-[hsl(var(--accent))]"
+                        checked={done.has(task.id)} disabled={done.has(task.id)} onChange={() => complete(task)} />
                       <div className="min-w-0 flex-1">
-                        <Link to={`/projets/${t.project_id}?tache=${t.id}`}
-                          className={clsx('block truncate text-sm font-semibold hover:text-accent', done.has(t.id) && 'text-muted-foreground line-through')}>{t.title}</Link>
+                        <Link to={`/projets/${task.project_id}?tache=${task.id}`}
+                          className={clsx('block truncate text-sm font-semibold hover:text-accent', done.has(task.id) && 'text-muted-foreground line-through')}>{task.title}</Link>
                         <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <ColorDot color={t.project_color} /><span className="truncate">{t.project_name}</span>
+                          <ColorDot color={task.project_color} /><span className="truncate">{task.project_name}</span>
                         </span>
                       </div>
-                      <PriorityBadge priority={t.priority} />
-                      {t.due_date && <span className={clsx('shrink-0 text-xs tabular-nums', g.id === 'late' ? 'font-bold text-late' : 'text-muted-foreground')}>
-                        {fmtShortDate(t.due_date)}</span>}
+                      <PriorityBadge priority={task.priority} />
+                      {task.due_date && <span className={clsx('shrink-0 text-xs tabular-nums', g.id === 'late' ? 'font-bold text-late' : 'text-muted-foreground')}>
+                        {fmtShortDate(task.due_date)}</span>}
                     </li>
                   ))}
                 </ul>
@@ -126,8 +128,8 @@ export default function Dashboard() {
             ))}
           </Card>
 
-          <Card title="Projets suivis" action={<Link to="/projets" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Tous les projets</Link>}>
-            {data.projects.length === 0 ? <p className="px-4 py-6 text-sm text-muted-foreground">Aucun projet en cours.</p> : (
+          <Card title={t('home.dash.followed')} action={<Link to="/projets" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">{t('home.dash.allProjects')}</Link>}>
+            {data.projects.length === 0 ? <p className="px-4 py-6 text-sm text-muted-foreground">{t('home.dash.noProjects')}</p> : (
               <ul>
                 {data.projects.map((p) => {
                   const pct = p.tasks_total ? (p.tasks_done / p.tasks_total) * 100 : 0
@@ -143,22 +145,22 @@ export default function Dashboard() {
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                             <HealthBadge health={p.health} />
                             {p.client_name && <span className="truncate">{p.client_name}</span>}
-                            {p.due_date && <span>· fin {fmtShortDate(p.due_date)}</span>}
-                            {p.tasks_late > 0 && <span className="font-bold text-late">· {p.tasks_late} en retard</span>}
+                            {p.due_date && <span>{t('home.dash.ends', { date: fmtShortDate(p.due_date) })}</span>}
+                            {p.tasks_late > 0 && <span className="font-bold text-late">{t('home.dash.lateCount', { n: p.tasks_late })}</span>}
                           </div>
                         </div>
                         <div className="text-xs">
-                          <div className="mb-1 flex justify-between text-muted-foreground"><span>Avancement</span><span className="tabular-nums">{p.tasks_done}/{p.tasks_total}</span></div>
+                          <div className="mb-1 flex justify-between text-muted-foreground"><span>{t('home.dash.progress')}</span><span className="tabular-nums">{p.tasks_done}/{p.tasks_total}</span></div>
                           <Progress value={pct} tone={pct >= 100 ? 'ok' : 'accent'} />
                         </div>
                         <div className="text-xs">
                           <div className="mb-1 flex justify-between gap-2 text-muted-foreground">
-                            <span>Temps</span>
+                            <span>{t('home.dash.time')}</span>
                             <span className={clsx('tabular-nums', used !== null && used > 100 && 'font-bold text-late')}>
                               {hours(p.minutes_spent)} h{p.budget_minutes ? ` / ${hours(p.budget_minutes)} h` : ''}</span>
                           </div>
-                          {used !== null ? <Progress label="Budget d'heures consommé" value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
-                            : <div className="text-[11px] text-muted-foreground">Sans budget d'heures</div>}
+                          {used !== null ? <Progress label={t('home.dash.budgetUsed')} value={used} tone={used > 100 ? 'late' : used > 85 ? 'warn' : 'accent'} />
+                            : <div className="text-[11px] text-muted-foreground">{t('home.dash.noBudget')}</div>}
                         </div>
                       </Link>
                     </li>
@@ -172,8 +174,8 @@ export default function Dashboard() {
         <div className="min-w-0 space-y-5">
           <WeekCard week={data.week} capacity={me.user.capacity_minutes} />
 
-          <Card title="Rendez-vous" action={<Link to="/agenda" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Agenda</Link>}>
-            {data.events.length === 0 ? <p className="px-4 py-5 text-sm text-muted-foreground">Rien de prévu ces sept prochains jours.</p> : (
+          <Card title={t('home.dash.events')} action={<Link to="/agenda" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">{t('home.dash.agenda')}</Link>}>
+            {data.events.length === 0 ? <p className="px-4 py-5 text-sm text-muted-foreground">{t('home.dash.noEvents')}</p> : (
               <ul>
                 {data.events.map((e) => (
                   <li key={e.id} className="flex gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
@@ -191,8 +193,8 @@ export default function Dashboard() {
             )}
           </Card>
 
-          <Card title="Activité récente">
-            {data.activity.length === 0 ? <div className="p-4"><Empty title="Pas encore d'activité" /></div> : (
+          <Card title={t('home.dash.activity')}>
+            {data.activity.length === 0 ? <div className="p-4"><Empty title={t('home.dash.noActivity')} /></div> : (
               <ul>
                 {data.activity.slice(0, 8).map((a, i) => (
                   <li key={i} className="border-b border-border px-4 py-2 text-sm last:border-b-0">
@@ -217,6 +219,7 @@ export default function Dashboard() {
 
 /** Mon temps de la semaine : un petit histogramme par jour, face à la capacité. */
 function WeekCard({ week, capacity }: { week: Dashboard['week']; capacity: number }) {
+  const t = useT()
   const start = mondayOf(today())
   const perDay = capacity / 5
   const days = Array.from({ length: 7 }, (_, i) => {
@@ -226,14 +229,14 @@ function WeekCard({ week, capacity }: { week: Dashboard['week']; capacity: numbe
   const total = days.reduce((s, x) => s + x.minutes, 0)
   const max = Math.max(perDay, ...days.map((x) => x.minutes)) || 1
   return (
-    <Card title="Ma semaine" action={<Link to="/temps" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Feuille de temps</Link>}>
+    <Card title={t('home.dash.myWeek')} action={<Link to="/temps" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">{t('home.dash.timesheet')}</Link>}>
       <div className="px-4 py-3">
         <p className="text-sm"><span className="font-display text-2xl font-extrabold tabular-nums">{hours(total)} h</span>
-          <span className="text-muted-foreground"> sur {hours(capacity)} h</span></p>
-        <Progress label="Heures de la semaine sur la capacité" className="mt-2" value={capacity ? (total / capacity) * 100 : 0} tone={total > capacity ? 'warn' : 'accent'} />
+          <span className="text-muted-foreground"> {t('home.dash.ofCapacity', { hours: hours(capacity) })}</span></p>
+        <Progress label={t('home.dash.weekProgress')} className="mt-2" value={capacity ? (total / capacity) * 100 : 0} tone={total > capacity ? 'warn' : 'accent'} />
         <div className="relative mt-4 flex h-24 items-end gap-1.5">
           <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-input" style={{ bottom: `${(perDay / max) * 100}%` }}
-               title={`Capacité : ${fmtMinutes(perDay)} par jour`} />
+               title={t('home.dash.capacityPerDay', { duration: fmtMinutes(perDay) })} />
           {days.map((x) => (
             <div key={x.d} className="flex h-full flex-1 flex-col justify-end" title={`${weekdayShort(x.d)} : ${fmtMinutes(x.minutes)}`}>
               <div className={clsx('w-full', x.minutes > perDay ? 'bg-soon' : x.d === today() ? 'bg-accent' : 'bg-accent-light')}

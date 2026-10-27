@@ -1,4 +1,5 @@
 import { sharedTransaction, type Ctx, type Db } from '../../db.js'
+import { tr } from '../i18n.js'
 import { callApi } from './internal.js'
 import { opAllowed, opLabel, REF, REF_FIELDS, type Mode, type WriteOp } from './token.js'
 
@@ -68,23 +69,24 @@ export async function runOps(cookie: string, ctx: Ctx, ops: WriteOp[], mode: Mod
 
 // ------------------------------------------------------------------ ce qui a été fait, en une ligne
 
-const NOUNS: [RegExp, string, string][] = [
-  [/^POST \/api\/projects$/, 'projet', 'projets'],
-  [/^POST \/api\/projects\/:id\/duplicate$/, 'copie de projet', 'copies de projet'],
-  [/^POST \/api\/projects\/:id\/stages$/, 'étape', 'étapes'],
-  [/^POST \/api\/tasks$/, 'tâche', 'tâches'],
-  [/^POST \/api\/tasks\/:id\/dependencies$/, 'dépendance', 'dépendances'],
-  [/^POST \/api\/tasks\/:id\/checklist$/, 'point de contrôle', 'points de contrôle'],
-  [/^POST \/api\/(tasks|projects)\/:id\/comments$/, 'commentaire', 'commentaires'],
-  [/^POST \/api\/projects\/:id\/columns$/, 'colonne', 'colonnes'],
-  [/^POST \/api\/time\/entries$/, 'saisie de temps', 'saisies de temps'],
-  [/^POST \/api\/clients$/, 'client', 'clients'],
-  [/^POST \/api\/clients\/:id\/contacts$/, 'contact', 'contacts'],
-  [/^POST \/api\/calendar\/events$/, 'rendez-vous', 'rendez-vous'],
+// Les écritures qui créent quelque chose, et le nom de ce qu'elles créent (server/i18n, `assistant.noun.*`).
+const NOUNS: [RegExp, string][] = [
+  [/^POST \/api\/projects$/, 'assistant.noun.project'],
+  [/^POST \/api\/projects\/:id\/duplicate$/, 'assistant.noun.copy'],
+  [/^POST \/api\/projects\/:id\/stages$/, 'assistant.noun.stage'],
+  [/^POST \/api\/tasks$/, 'assistant.noun.task'],
+  [/^POST \/api\/tasks\/:id\/dependencies$/, 'assistant.noun.dependency'],
+  [/^POST \/api\/tasks\/:id\/checklist$/, 'assistant.noun.checklist'],
+  [/^POST \/api\/(tasks|projects)\/:id\/comments$/, 'assistant.noun.comment'],
+  [/^POST \/api\/projects\/:id\/columns$/, 'assistant.noun.column'],
+  [/^POST \/api\/time\/entries$/, 'assistant.noun.time'],
+  [/^POST \/api\/clients$/, 'assistant.noun.client'],
+  [/^POST \/api\/clients\/:id\/contacts$/, 'assistant.noun.contact'],
+  [/^POST \/api\/calendar\/events$/, 'assistant.noun.event'],
 ]
 
-/** « Créé : 7 étapes, 24 tâches (dont 2 jalons), 18 dépendances ; 1 modification enregistrée. » */
-export function doneLine(ops: WriteOp[]): string {
+/** « Créé : 7 étapes, 24 tâches (dont 2 jalons), 18 dépendances ; dates du projet posées. », dans la langue `l`. */
+export function doneLine(ops: WriteOp[], l: string = 'fr'): string {
   const counts = new Map<string, number>()
   let changes = 0, milestones = 0, projectDates = false
   for (const op of ops) {
@@ -96,13 +98,12 @@ export function doneLine(ops: WriteOp[]): string {
     counts.set(n[1], (counts.get(n[1]) ?? 0) + 1)
     if (label === 'POST /api/tasks' && op.body.is_milestone === true) milestones++
   }
-  const parts = NOUNS.filter(([, one]) => counts.has(one)).map(([, one, many]) => {
-    const c = counts.get(one)!
-    return `${c} ${c > 1 ? many : one}${one === 'tâche' && milestones ? ` (dont ${milestones} jalon${milestones > 1 ? 's' : ''})` : ''}`
-  })
+  const parts = NOUNS.filter(([, key]) => counts.has(key)).map(([, key]) =>
+    `${tr(l, key, { n: counts.get(key) })}${key === 'assistant.noun.task' && milestones ? ` ${tr(l, 'assistant.ofWhichMilestones', { n: milestones })}` : ''}`)
   const out: string[] = []
-  if (parts.length) out.push(`Créé : ${parts.join(', ')}`)
-  if (projectDates) out.push('dates du projet posées')
-  if (changes) out.push(`${changes} modification${changes > 1 ? 's' : ''} enregistrée${changes > 1 ? 's' : ''}`)
-  return `${out.join(' ; ')}.`
+  if (parts.length) out.push(tr(l, 'assistant.created', { list: parts.join(', ') }))
+  if (projectDates) out.push(tr(l, 'assistant.projectDatesSet'))
+  if (changes) out.push(tr(l, 'assistant.changesSaved', { n: changes }))
+  // Le point-virgule suit la typographie de la langue (espace avant en français seulement).
+  return `${out.join(l === 'fr' ? ' ; ' : '; ')}.`
 }

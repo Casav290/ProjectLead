@@ -1,6 +1,7 @@
 import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod'
 import * as z from 'zod/v4'
 import type { Ctx } from '../../db.js'
+import { tr, type Locale } from '../i18n.js'
 import { callApi } from './internal.js'
 import { OpFailure, runOps } from './run.js'
 import { schedulePlan, workdayFrom, workdaysBetween } from './schedule.js'
@@ -19,13 +20,17 @@ import { MAX_OPS, opAllowed, signConfirm, type Mode, type Summary, type SummaryG
  * Aucun outil ne supprime ni n'archive, ne gère l'équipe, les membres ou le responsable d'un projet, la visibilité,
  * l'abonnement, les clés d'API, les branchements (boîtes mail, agendas extérieurs), ni n'envoie quoi que ce soit à
  * l'extérieur (liste fermée de token.ts, docs/ASSISTANT-ACTIONS.md).
+ *
+ * Langues : ce que voit la personne (titre et lignes des cartes) vient des dictionnaires du serveur, clés
+ * `assistant.card.*` (server/i18n/<langue>.ts, cinq langues), dans la langue de l'interface. Ce que lit le modèle
+ * (descriptions, résultats, indices) reste en français : il répond dans la langue de la personne.
  */
 
 export type ConfirmAction = { type: 'confirm'; token: string; summary: Summary }
 export type NavigateAction = { type: 'navigate'; path: string }
 export type AssistantAction = ConfirmAction | NavigateAction
 
-export type ToolScope = { cookie: string; ctx: Ctx; actions: AssistantAction[]; used: string[]; today: string }
+export type ToolScope = { cookie: string; ctx: Ctx; actions: AssistantAction[]; used: string[]; today: string; locale?: Locale }
 
 const MAX_ROWS = 50
 const UUID = z.string().uuid()
@@ -36,12 +41,31 @@ const PRIORITY = z.enum(['low', 'normal', 'high', 'urgent'])
 const COLOR = z.string().regex(/^#[0-9a-fA-F]{6}$/)
 const MINUTES = z.number().int().min(0).max(100_000)
 const CENTS = z.number().int().min(0).max(1e12)
-const PRIORITY_FR: Record<string, string> = { low: 'basse', normal: 'normale', high: 'haute', urgent: 'urgente' }
-const STATUS_FR: Record<string, string> = { lead: 'à qualifier', planned: 'planifié', active: 'en cours', on_hold: 'en pause', done: 'terminé', cancelled: 'annulé' }
-const HEALTH_FR: Record<string, string> = { on_track: 'dans les temps', at_risk: 'à risque', off_track: 'en retard' }
-const STAGE_FR: Record<string, string> = { todo: 'à venir', in_progress: 'en cours', done: 'terminée', blocked: 'en attente' }
-const BILLING_FR: Record<string, string> = { none: 'non facturable', hourly: 'à l’heure', retainer: 'forfait mensuel', fixed: 'forfait global', milestone: 'par étape' }
-const RECURRENCE_FR: Record<string, string> = { none: 'aucune', daily: 'chaque jour', weekly: 'chaque semaine', monthly: 'chaque mois' }
+const LOCALE = z.enum(['fr', 'de', 'en', 'it', 'es'])
+// Les libellés des valeurs, clés des dictionnaires (écrites en entier : le contrôle des clés les retrouve).
+const PRIORITY_K: Record<string, string> = { low: 'assistant.card.prio.low', normal: 'assistant.card.prio.normal', high: 'assistant.card.prio.high', urgent: 'assistant.card.prio.urgent' }
+const STATUS_K: Record<string, string> = { lead: 'assistant.card.status.lead', planned: 'assistant.card.status.planned', active: 'assistant.card.status.active',
+  on_hold: 'assistant.card.status.on_hold', done: 'assistant.card.status.done', cancelled: 'assistant.card.status.cancelled' }
+const HEALTH_K: Record<string, string> = { on_track: 'assistant.card.health.on_track', at_risk: 'assistant.card.health.at_risk', off_track: 'assistant.card.health.off_track' }
+const STAGE_K: Record<string, string> = { todo: 'assistant.card.stageStatus.todo', in_progress: 'assistant.card.stageStatus.in_progress',
+  done: 'assistant.card.stageStatus.done', blocked: 'assistant.card.stageStatus.blocked' }
+const BILLING_K: Record<string, string> = { none: 'assistant.card.billing.none', hourly: 'assistant.card.billing.hourly', retainer: 'assistant.card.billing.retainer',
+  fixed: 'assistant.card.billing.fixed', milestone: 'assistant.card.billing.milestone' }
+const RECURRENCE_K: Record<string, string> = { none: 'assistant.card.recurrence.none', daily: 'assistant.card.recurrence.daily',
+  weekly: 'assistant.card.recurrence.weekly', monthly: 'assistant.card.recurrence.monthly' }
+const LANG_K: Record<string, string> = { fr: 'assistant.card.lang.fr', de: 'assistant.card.lang.de', en: 'assistant.card.lang.en', it: 'assistant.card.lang.it', es: 'assistant.card.lang.es' }
+const TRIGGER_K: Record<string, string> = { task_completed: 'assistant.card.trigger.task_completed', task_moved: 'assistant.card.trigger.task_moved',
+  stage_completed: 'assistant.card.trigger.stage_completed', task_created: 'assistant.card.trigger.task_created', project_completed: 'assistant.card.trigger.project_completed' }
+const ACTION_K: Record<string, string> = { notify: 'assistant.card.action.notify', assign: 'assistant.card.action.assign', set_priority: 'assistant.card.action.set_priority',
+  move_column: 'assistant.card.action.move_column', complete_stage: 'assistant.card.action.complete_stage', create_task: 'assistant.card.action.create_task' }
+const DAY_K = ['assistant.card.day.1', 'assistant.card.day.2', 'assistant.card.day.3', 'assistant.card.day.4', 'assistant.card.day.5', 'assistant.card.day.6', 'assistant.card.day.7']
+const CLIENT_FIELD_K: Record<string, string> = { name: 'assistant.card.clientField.name', kind: 'assistant.card.clientField.kind',
+  contact_person: 'assistant.card.clientField.contact_person', email: 'assistant.card.clientField.email', phone: 'assistant.card.clientField.phone',
+  street: 'assistant.card.clientField.street', building_number: 'assistant.card.clientField.building_number', postal_code: 'assistant.card.clientField.postal_code',
+  town: 'assistant.card.clientField.town', vat_number: 'assistant.card.clientField.vat_number', notes: 'assistant.card.clientField.notes',
+  country: 'assistant.card.clientField.country', language: 'assistant.card.clientField.language' }
+/** Les formats de date et de nombre de chaque langue (comme l'interface : src/i18n, intlLocale). */
+const INTL: Record<Locale, string> = { fr: 'fr-CH', de: 'de-CH', en: 'en-GB', it: 'it-CH', es: 'es-ES' }
 
 const clip = (v: unknown, n = 300) => {
   if (typeof v !== 'string') return v
@@ -49,9 +73,7 @@ const clip = (v: unknown, n = 300) => {
 }
 const hours = (m: number | null | undefined) => (m == null ? null : Math.round((m / 60) * 100) / 100)
 const hm = (m: number) => `${Math.floor(m / 60)} h${m % 60 ? ` ${String(m % 60).padStart(2, '0')}` : ''}`
-const money = (cents: number | null | undefined, cur = 'CHF') => (cents == null ? 'aucun' : `${cur} ${(cents / 100).toLocaleString('fr-CH', { minimumFractionDigits: cents % 100 ? 2 : 0 })}`)
 const pick = <T extends Record<string, any>>(o: T, keys: string[]) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
-const yesNo = (b: boolean) => (b ? 'oui' : 'non')
 
 /** Le texte rendu au modèle : JSON compact, au plus ~14 000 caractères. */
 const out = (v: unknown) => {
@@ -66,7 +88,7 @@ const rows = (list: any[], map: (r: any) => unknown) => ({
 const refusal = (status: number, body: any) => out({ error: body?.error ?? `http_${status}`, status,
   hint: status === 404 ? 'introuvable ou pas accessible à cette personne' : status === 403 ? 'le rôle de la personne ne le permet pas' : undefined })
 
-/** Les refus des routes, dits en clair (carte et modèle). */
+/** Les refus des routes, expliqués au MODÈLE (en français : il répond dans la langue de la personne). */
 export const ROUTE_ERRORS: Record<string, string> = {
   forbidden: 'Votre rôle ne permet pas cette action.',
   not_found: 'Introuvable, ou vous n’y avez pas accès.',
@@ -90,7 +112,6 @@ export const ROUTE_ERRORS: Record<string, string> = {
   not_opened: 'Ouvrez d’abord l’autre application une fois avec votre Compte Lead.',
   no_seat: 'Pas de place pour vous dans l’autre application.',
   not_linked: 'Les deux applications ne sont pas encore reliées.',
-  token_used: 'Cette carte a déjà été confirmée.',
 }
 
 /** Les pages de l'application vers lesquelles l'assistant peut ouvrir (open_page, liens des cartes). */
@@ -111,13 +132,13 @@ type Built = {
   short?: string            // une ligne, pour un lot
   groups?: SummaryGroup[]
   open?: string | null      // la page à ouvrir après « Confirmer » (« @ref » permis)
-  links?: { label: string; path: string }[]
+  links?: { label: string; path: string }[]   // label : clé d'onglet du projet (stages, list, gantt), traduite à l'écran
   mode?: Mode
   info?: Record<string, unknown>   // rendu au modèle, pour qu'il décrive juste
 }
 type Refused = { error: string; [k: string]: unknown }
 type WriteDef = {
-  name: string; title: string; description: string; schema: z.ZodObject<any>; batch: boolean
+  name: string; description: string; schema: z.ZodObject<any>; batch: boolean
   build: (a: any) => Promise<Built | Refused>
 }
 
@@ -135,18 +156,27 @@ export const BATCHABLE = [
 export function buildTools(s: ToolScope) {
   const get = (path: string) => callApi(s.cookie, 'GET', path)
   const mark = (name: string) => { s.used.push(name) }
+  const l: Locale = s.locale ?? 'fr'
+  /** Un texte de la carte, dans la langue de la personne (clé entière : le contrôle des clés la retrouve). */
+  const L = (key: string, vars?: Record<string, unknown>) => tr(l, key, vars)
+  const yesNo = (b: boolean) => L(b ? 'assistant.card.yes' : 'assistant.card.no')
+  const q = (x: unknown) => L('assistant.card.quoted', { text: x })
+  const before = (value: unknown, old: unknown) => L('assistant.card.before', { value, old })
 
-  // ------------------------------------------------------------------ dates lisibles
+  // ------------------------------------------------------------------ dates, montants lisibles (langue de la personne)
   const year = s.today.slice(0, 4)
-  const fmtShort = new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
-  const fmtYear = new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+  const fmtShort = new Intl.DateTimeFormat(INTL[l], { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+  const fmtYear = new Intl.DateTimeFormat(INTL[l], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
   const D = (iso: string | null | undefined) => {
-    if (!iso) return 'aucune'
+    if (!iso) return L('assistant.card.noDate')
     const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`)
     return (iso.slice(0, 4) === year ? fmtShort : fmtYear).format(d)
   }
   const span = (a: string, b: string) => (a === b ? D(a) : `${D(a)} → ${D(b)}`)
-  const when = (iso: string) => new Intl.DateTimeFormat('fr-CH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Zurich' }).format(new Date(iso))
+  const when = (iso: string) => new Intl.DateTimeFormat(INTL[l], { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Zurich' }).format(new Date(iso))
+  const money = (cents: number | null | undefined, cur = 'CHF') => (cents == null ? L('assistant.card.none')
+    : `${cur} ${(cents / 100).toLocaleString(INTL[l], { minimumFractionDigits: cents % 100 ? 2 : 0 })}`)
+  const noun = (key: string, n: number) => L(key, { n })
 
   // ------------------------------------------------------------------ lectures communes
   let teamCache: any[] | null = null
@@ -157,7 +187,7 @@ export function buildTools(s: ToolScope) {
   const peopleNames = async (ids: string[] | undefined) => {
     if (!ids?.length) return ''
     const t = await team()
-    return ids.map((id) => t.find((m) => m.id === id)?.name ?? 'personne inconnue').join(', ')
+    return ids.map((id) => t.find((m) => m.id === id)?.name ?? L('assistant.card.unknownPerson')).join(', ')
   }
   const unknownPeople = async (ids: string[] | undefined) => {
     if (!ids?.length) return []
@@ -196,11 +226,11 @@ export function buildTools(s: ToolScope) {
     if (mode === 'tx') {
       try { await runOps(s.cookie, s.ctx, b.ops, 'tx', { dryRun: true }) } catch (e) { return out(failureForModel(e, b.ops.length)) }
     }
-    const summary: Summary = { title: b.title, lines: b.lines.filter((l): l is string => Boolean(l)) }
+    const summary: Summary = { title: b.title, lines: b.lines.filter((x): x is string => Boolean(x)) }
     if (b.groups?.length) summary.groups = b.groups
     const page = (x: string) => pageAllowed(x.replace(/@[A-Za-z0-9_:.-]+/g, '00000000-0000-4000-8000-000000000000'))
     const token = signConfirm({ u: s.ctx.userId, a: s.ctx.accountId, mode, tool, ops: b.ops, summary,
-      open: b.open && page(b.open) ? b.open : null, ...(b.links?.length ? { links: b.links.filter((l) => page(l.path)) } : {}) })
+      open: b.open && page(b.open) ? b.open : null, ...(b.links?.length ? { links: b.links.filter((x) => page(x.path)) } : {}) })
     s.actions.push({ type: 'confirm', token, summary })
     return out({ proposed: true, status: 'waiting_for_user_confirmation', card: b.title, operations: b.ops.length,
       checked: mode === 'tx' ? 'essai réussi : la confirmation écrira exactement ce que montre la carte' : undefined, ...b.info,
@@ -218,7 +248,7 @@ export function buildTools(s: ToolScope) {
   }
 
   write({
-    name: 'propose_create_task', title: 'Créer une tâche', batch: true,
+    name: 'propose_create_task', batch: true,
     description: 'Prépare la création d’une tâche (ou d’une sous-tâche avec parent_id) dans un projet : dates, priorité, personnes, étape, colonne, estimation (minutes), jalon.',
     schema: z.object({ project_id: UUID, title: z.string().trim().min(1).max(500), parent_id: UUID.optional(), ...taskFields }),
     build: async (a) => {
@@ -231,25 +261,28 @@ export function buildTools(s: ToolScope) {
       if (a.parent_id) { parent = await task(a.parent_id); if (!parent || parent.project_id !== a.project_id) return { error: 'parent_not_in_project' } }
       if ((await unknownPeople(a.assignee_ids)).length) return { error: 'unknown_person', hint: 'ids de list_team, personnes actives' }
       const col = a.column_id ? p.columns.find((x: any) => x.id === a.column_id) : null
+      const people = await peopleNames(a.assignee_ids)
       return {
-        title: parent ? 'Créer une sous-tâche' : 'Créer une tâche',
+        title: L(parent ? 'assistant.card.title.createSubtask' : 'assistant.card.title.createTask'),
         ops: [{ method: 'POST', path: '/api/tasks', body: { ...a }, ref: 'task' }],
-        lines: [`Tâche : « ${a.title} »`, `Projet : ${p.name}`, parent && `Sous-tâche de : « ${parent.title} »`,
-          a.description && `Description : ${clip(a.description, 200)}`,
-          a.start_date && `Début : ${D(a.start_date)}`, a.due_date && `Échéance : ${D(a.due_date)}`,
-          a.priority && `Priorité : ${PRIORITY_FR[a.priority]}`, stage && `Étape : ${stage.name}`, col && `Colonne : ${col.name}`,
-          a.assignee_ids?.length && `Assignée à : ${await peopleNames(a.assignee_ids)}`,
-          a.estimate_minutes != null && `Estimation : ${hm(a.estimate_minutes)}`, a.is_milestone && 'Jalon',
-          a.visible_to_client !== undefined && `Visible par le client : ${yesNo(a.visible_to_client)}`,
-          a.recurrence && a.recurrence !== 'none' && `Récurrence : ${RECURRENCE_FR[a.recurrence]}`, a.tags?.length && `Étiquettes : ${a.tags.join(', ')}`],
-        short: `« ${a.title} » (${p.name})${a.due_date ? `, échéance ${D(a.due_date)}` : ''}${a.assignee_ids?.length ? `, ${await peopleNames(a.assignee_ids)}` : ''}`,
+        lines: [L('assistant.card.task', { title: a.title }), L('assistant.card.project', { name: p.name }),
+          parent && L('assistant.card.subtaskOf', { title: parent.title }),
+          a.description && L('assistant.card.description', { text: clip(a.description, 200) }),
+          a.start_date && L('assistant.card.start', { date: D(a.start_date) }), a.due_date && L('assistant.card.due', { date: D(a.due_date) }),
+          a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }), stage && L('assistant.card.stage', { name: stage.name }),
+          col && L('assistant.card.column', { name: col.name }), people && L('assistant.card.assignees', { names: people }),
+          a.estimate_minutes != null && L('assistant.card.estimate', { value: hm(a.estimate_minutes) }), a.is_milestone && L('assistant.card.milestone'),
+          a.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client) }),
+          a.recurrence && a.recurrence !== 'none' && L('assistant.card.recurrenceLine', { value: L(RECURRENCE_K[a.recurrence]) }),
+          a.tags?.length && L('assistant.card.tags', { value: a.tags.join(', ') })],
+        short: [`${q(a.title)} (${p.name})`, a.due_date && L('assistant.card.dueShort', { date: D(a.due_date) }), people].filter(Boolean).join(', '),
         open: `/projets/${a.project_id}?tache=@task`,
       }
     },
   })
 
   write({
-    name: 'propose_update_task', title: 'Modifier une tâche', batch: true,
+    name: 'propose_update_task', batch: true,
     description: 'Prépare la modification d’une tâche : titre, description, dates (null = retirer), priorité, personnes assignées (liste complète qui remplace l’actuelle), terminée ou rouverte, estimation, étape (null = sans étape), colonne du tableau, jalon, visible par le client, récurrence, étiquettes.',
     schema: z.object({
       task_id: UUID, title: z.string().trim().min(1).max(500).optional(), description: z.string().max(5000).optional(),
@@ -269,30 +302,35 @@ export function buildTools(s: ToolScope) {
         if (patch.column_id) { colName = p?.columns.find((x: any) => x.id === patch.column_id)?.name ?? null; if (!colName) return { error: 'column_not_in_project' } }
       }
       if ((await unknownPeople(patch.assignee_ids)).length) return { error: 'unknown_person' }
+      const nobody = L('assistant.card.nobody'), noStage = L('assistant.card.noStage')
+      const changes: Line[] = [
+        patch.title && L('assistant.card.newTitle', { title: patch.title }),
+        patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') }),
+        patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(t.start_date) }),
+        patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(t.due_date) }),
+        patch.priority && L('assistant.card.priorityChanged', { value: L(PRIORITY_K[patch.priority]), old: PRIORITY_K[t.priority] ? L(PRIORITY_K[t.priority]) : t.priority }),
+        patch.assignee_ids && L('assistant.card.assigneesChanged', { value: (await peopleNames(patch.assignee_ids)) || nobody,
+          old: t.assignees.map((x: any) => x.name).join(', ') || nobody }),
+        patch.completed !== undefined && L(patch.completed ? 'assistant.card.complete' : 'assistant.card.reopen'),
+        patch.estimate_minutes !== undefined && L('assistant.card.estimate', { value: patch.estimate_minutes == null ? L('assistant.card.noneF') : hm(patch.estimate_minutes) }),
+        patch.stage_id !== undefined && L('assistant.card.stageChanged', { value: stageName ?? noStage, old: t.stage_name ?? noStage }),
+        colName && L('assistant.card.columnChanged', { value: colName, old: t.column_name ?? '—' }),
+        patch.is_milestone !== undefined && L(patch.is_milestone ? 'assistant.card.becomesMilestone' : 'assistant.card.notMilestone'),
+        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(patch.visible_to_client) }),
+        patch.recurrence && L('assistant.card.recurrenceLine', { value: L(RECURRENCE_K[patch.recurrence]) }),
+        patch.tags && L('assistant.card.tags', { value: patch.tags.join(', ') || L('assistant.card.noneF') })]
       return {
-        title: 'Modifier une tâche',
+        title: L('assistant.card.title.updateTask'),
         ops: [{ method: 'PATCH', path: `/api/tasks/${task_id}`, body: patch }],
-        lines: [`Tâche : « ${t.title} » (${t.project_name})`,
-          patch.title && `Nouveau titre : « ${patch.title} »`, patch.description !== undefined && `Description : ${clip(patch.description, 200) || '(vide)'}`,
-          patch.start_date !== undefined && `Début : ${D(patch.start_date)} (avant : ${D(t.start_date)})`,
-          patch.due_date !== undefined && `Échéance : ${D(patch.due_date)} (avant : ${D(t.due_date)})`,
-          patch.priority && `Priorité : ${PRIORITY_FR[patch.priority]} (avant : ${PRIORITY_FR[t.priority] ?? t.priority})`,
-          patch.assignee_ids && `Assignée à : ${(await peopleNames(patch.assignee_ids)) || 'personne'} (avant : ${t.assignees.map((x: any) => x.name).join(', ') || 'personne'})`,
-          patch.completed !== undefined && (patch.completed ? 'Marquer comme terminée' : 'Rouvrir la tâche'),
-          patch.estimate_minutes !== undefined && `Estimation : ${patch.estimate_minutes == null ? 'aucune' : hm(patch.estimate_minutes)}`,
-          patch.stage_id !== undefined && `Étape : ${stageName ?? 'sans étape'} (avant : ${t.stage_name ?? 'sans étape'})`,
-          colName && `Colonne : ${colName} (avant : ${t.column_name ?? '—'})`,
-          patch.is_milestone !== undefined && (patch.is_milestone ? 'Devient un jalon' : 'N’est plus un jalon'),
-          patch.visible_to_client !== undefined && `Visible par le client : ${yesNo(patch.visible_to_client)}`,
-          patch.recurrence && `Récurrence : ${RECURRENCE_FR[patch.recurrence]}`, patch.tags && `Étiquettes : ${patch.tags.join(', ') || 'aucune'}`],
-        short: `« ${t.title} » : ${Object.keys(patch).map((k) => ({ title: 'titre', description: 'description', due_date: 'échéance', start_date: 'début', priority: 'priorité', assignee_ids: 'personnes', completed: patch.completed ? 'terminée' : 'rouverte', estimate_minutes: 'estimation', stage_id: 'étape', column_id: 'colonne', is_milestone: 'jalon', visible_to_client: 'visibilité client', recurrence: 'récurrence', tags: 'étiquettes' } as Record<string, string>)[k] ?? k).join(', ')}${patch.due_date ? ` → ${D(patch.due_date)}` : ''}`,
+        lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), ...changes],
+        short: L('assistant.card.itemChange', { item: t.title, change: changes.find(Boolean) }),
         open: `/projets/${t.project_id}?tache=${task_id}`,
       }
     },
   })
 
   write({
-    name: 'propose_update_tasks', title: 'Modifier plusieurs tâches', batch: true,
+    name: 'propose_update_tasks', batch: true,
     description: 'Prépare la même modification sur plusieurs tâches (comme la sélection multiple de la liste) : terminer ou rouvrir, priorité, échéance (null = retirer), étape (null = sans étape), ajouter une personne. Pas de suppression.',
     schema: z.object({
       task_ids: z.array(UUID).min(1).max(100), completed: z.boolean().optional(), priority: PRIORITY.optional(),
@@ -311,21 +349,24 @@ export function buildTools(s: ToolScope) {
         const p = await project(found[0].project_id)
         if (!p?.stages.some((x: any) => x.id === patch.stage_id)) return { error: 'stage_not_in_project' }
       }
-      const what = [patch.completed !== undefined && (patch.completed ? 'terminer' : 'rouvrir'), patch.priority && `priorité ${PRIORITY_FR[patch.priority]}`,
-        patch.due_date !== undefined && `échéance ${D(patch.due_date)}`, patch.stage_id !== undefined && (patch.stage_id ? 'changer d’étape' : 'retirer l’étape'),
-        patch.add_assignee && `ajouter ${await peopleNames([patch.add_assignee])}`].filter(Boolean).join(', ')
+      const what = [patch.completed !== undefined && L(patch.completed ? 'assistant.card.bulk.complete' : 'assistant.card.bulk.reopen'),
+        patch.priority && L('assistant.card.bulk.priority', { value: L(PRIORITY_K[patch.priority]) }),
+        patch.due_date !== undefined && L('assistant.card.bulk.due', { date: D(patch.due_date) }),
+        patch.stage_id !== undefined && L(patch.stage_id ? 'assistant.card.bulk.stage' : 'assistant.card.bulk.noStage'),
+        patch.add_assignee && L('assistant.card.bulk.add', { name: await peopleNames([patch.add_assignee]) })].filter(Boolean).join(', ')
       return {
-        title: `Modifier ${ids.length} tâche${ids.length > 1 ? 's' : ''}`,
+        title: L('assistant.card.title.updateTasks', { n: ids.length }),
         ops: [{ method: 'POST', path: '/api/tasks/bulk', body: { ids, patch } }],
-        lines: [`Changement : ${what}`, ...found.slice(0, 12).map((t) => `« ${t.title} » (${t.project_name})`), found.length > 12 && `+ ${found.length - 12} autres`],
-        short: `${ids.length} tâches : ${what}`,
+        lines: [L('assistant.card.change', { what }), ...found.slice(0, 12).map((t) => `${q(t.title)} (${t.project_name})`),
+          found.length > 12 && L('assistant.card.more', { n: found.length - 12 })],
+        short: L('assistant.card.bulk.short', { n: ids.length, what }),
         open: new Set(found.map((t) => t.project_id)).size === 1 ? `/projets/${found[0].project_id}/liste` : '/taches',
       }
     },
   })
 
   write({
-    name: 'propose_add_dependency', title: 'Ajouter une dépendance', batch: true,
+    name: 'propose_add_dependency', batch: true,
     description: 'Prépare une dépendance entre deux tâches du même projet : task_id attendra que depends_on_id soit terminée.',
     schema: z.object({ task_id: UUID, depends_on_id: UUID }),
     build: async ({ task_id, depends_on_id }) => {
@@ -334,42 +375,42 @@ export function buildTools(s: ToolScope) {
       if (!t || !d) return { error: 'task_not_found' }
       if (t.project_id !== d.project_id) return { error: 'dependency_other_project' }
       return {
-        title: 'Ajouter une dépendance',
+        title: L('assistant.card.title.addDependency'),
         ops: [{ method: 'POST', path: `/api/tasks/${task_id}/dependencies`, body: { depends_on_id } }],
-        lines: [`« ${t.title} » attendra « ${d.title} »`, `Projet : ${t.project_name}`],
-        short: `« ${t.title} » après « ${d.title} »`, open: `/projets/${t.project_id}/gantt`,
+        lines: [L('assistant.card.waits', { task: t.title, dep: d.title }), L('assistant.card.project', { name: t.project_name })],
+        short: L('assistant.card.after', { task: t.title, dep: d.title }), open: `/projets/${t.project_id}/gantt`,
       }
     },
   })
 
   write({
-    name: 'propose_add_task_comment', title: 'Commenter une tâche', batch: true,
+    name: 'propose_add_task_comment', batch: true,
     description: 'Prépare un commentaire sur une tâche (les @Prénom Nom cités sont notifiés dans ProjectLead).',
     schema: z.object({ task_id: UUID, body: z.string().trim().min(1).max(5000) }),
     build: async ({ task_id, body }) => {
       const t = await task(task_id)
       if (!t) return { error: 'task_not_found' }
-      return { title: 'Commenter une tâche', ops: [{ method: 'POST', path: `/api/tasks/${task_id}/comments`, body: { body } }],
-        lines: [`Tâche : « ${t.title} » (${t.project_name})`, `Commentaire : ${clip(body, 400)}`], short: `« ${t.title} » : ${clip(body, 80)}`,
-        open: `/projets/${t.project_id}?tache=${task_id}` }
+      return { title: L('assistant.card.title.commentTask'), ops: [{ method: 'POST', path: `/api/tasks/${task_id}/comments`, body: { body } }],
+        lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), L('assistant.card.comment', { text: clip(body, 400) })],
+        short: `${q(t.title)} : ${clip(body, 80)}`, open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
   write({
-    name: 'propose_add_project_comment', title: 'Commenter un projet', batch: true,
+    name: 'propose_add_project_comment', batch: true,
     description: 'Prépare un commentaire dans le fil d’activité d’un projet (interne à l’équipe ; les @Prénom Nom cités sont notifiés).',
     schema: z.object({ project_id: UUID, body: z.string().trim().min(1).max(5000) }),
     build: async ({ project_id, body }) => {
       const p = await project(project_id)
       if (!p) return { error: 'project_not_found' }
-      return { title: 'Commenter un projet', ops: [{ method: 'POST', path: `/api/projects/${project_id}/comments`, body: { body } }],
-        lines: [`Projet : ${p.name}`, `Commentaire : ${clip(body, 400)}`, 'Interne à l’équipe'], short: `${p.name} : ${clip(body, 80)}`,
-        open: `/projets/${project_id}/activite` }
+      return { title: L('assistant.card.title.commentProject'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/comments`, body: { body } }],
+        lines: [L('assistant.card.project', { name: p.name }), L('assistant.card.comment', { text: clip(body, 400) }), L('assistant.card.internal')],
+        short: `${p.name} : ${clip(body, 80)}`, open: `/projets/${project_id}/activite` }
     },
   })
 
   write({
-    name: 'propose_update_comment', title: 'Modifier un commentaire', batch: true,
+    name: 'propose_update_comment', batch: true,
     description: 'Prépare la modification d’un de SES commentaires sur une tâche (comment_id et task_id lus avec get_task).',
     schema: z.object({ task_id: UUID, comment_id: UUID, body: z.string().trim().min(1).max(5000) }),
     build: async ({ task_id, comment_id, body }) => {
@@ -378,26 +419,27 @@ export function buildTools(s: ToolScope) {
       const cm = t.comment_list.find((x: any) => x.id === comment_id)
       if (!cm) return { error: 'comment_not_found' }
       if (cm.author_id !== s.ctx.userId) return { error: 'not_author', hint: 'seul l’auteur modifie son commentaire' }
-      return { title: 'Modifier un commentaire', ops: [{ method: 'PATCH', path: `/api/tasks/comments/${comment_id}`, body: { body } }],
-        lines: [`Tâche : « ${t.title} »`, `Avant : ${clip(cm.body, 200)}`, `Après : ${clip(body, 400)}`], short: `« ${t.title} » : ${clip(body, 80)}`,
-        open: `/projets/${t.project_id}?tache=${task_id}` }
+      return { title: L('assistant.card.title.updateComment'), ops: [{ method: 'PATCH', path: `/api/tasks/comments/${comment_id}`, body: { body } }],
+        lines: [L('assistant.card.task', { title: t.title }), L('assistant.card.beforeText', { text: clip(cm.body, 200) }), L('assistant.card.afterText', { text: clip(body, 400) })],
+        short: `${q(t.title)} : ${clip(body, 80)}`, open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
   write({
-    name: 'propose_add_checklist_item', title: 'Ajouter un point de contrôle', batch: true,
+    name: 'propose_add_checklist_item', batch: true,
     description: 'Prépare l’ajout d’un point à la liste de contrôle d’une tâche.',
     schema: z.object({ task_id: UUID, label: z.string().trim().min(1).max(300) }),
     build: async ({ task_id, label }) => {
       const t = await task(task_id)
       if (!t) return { error: 'task_not_found' }
-      return { title: 'Ajouter un point de contrôle', ops: [{ method: 'POST', path: `/api/tasks/${task_id}/checklist`, body: { label } }],
-        lines: [`Tâche : « ${t.title} » (${t.project_name})`, `Point : ${label}`], short: `« ${t.title} » : ${label}`, open: `/projets/${t.project_id}?tache=${task_id}` }
+      return { title: L('assistant.card.title.addChecklist'), ops: [{ method: 'POST', path: `/api/tasks/${task_id}/checklist`, body: { label } }],
+        lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), L('assistant.card.checkItem', { label })],
+        short: `${q(t.title)} : ${label}`, open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
   write({
-    name: 'propose_update_checklist_item', title: 'Modifier un point de contrôle', batch: true,
+    name: 'propose_update_checklist_item', batch: true,
     description: 'Prépare le cochage, le décochage ou le renommage d’un point de la liste de contrôle d’une tâche (item_id lu avec get_task).',
     schema: z.object({ task_id: UUID, item_id: UUID, label: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional() }),
     build: async ({ task_id, item_id, ...patch }) => {
@@ -406,9 +448,11 @@ export function buildTools(s: ToolScope) {
       if (!t) return { error: 'task_not_found' }
       const it = t.checklist.find((x: any) => x.id === item_id)
       if (!it) return { error: 'item_not_found' }
-      return { title: 'Modifier un point de contrôle', ops: [{ method: 'PATCH', path: `/api/tasks/checklist/${item_id}`, body: patch }],
-        lines: [`Tâche : « ${t.title} »`, `Point : ${it.label}`, patch.label && `Nouveau libellé : ${patch.label}`, patch.done !== undefined && (patch.done ? 'Cocher' : 'Décocher')],
-        short: `« ${it.label} » : ${patch.done === undefined ? 'renommé' : patch.done ? 'coché' : 'décoché'}`, open: `/projets/${t.project_id}?tache=${task_id}` }
+      return { title: L('assistant.card.title.updateChecklist'), ops: [{ method: 'PATCH', path: `/api/tasks/checklist/${item_id}`, body: patch }],
+        lines: [L('assistant.card.task', { title: t.title }), L('assistant.card.checkItem', { label: it.label }), patch.label && L('assistant.card.newLabel', { label: patch.label }),
+          patch.done !== undefined && L(patch.done ? 'assistant.card.check' : 'assistant.card.uncheck')],
+        short: `${q(it.label)} : ${L(patch.done === undefined ? 'assistant.card.renamed' : patch.done ? 'assistant.card.checked' : 'assistant.card.unchecked')}`,
+        open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
@@ -416,14 +460,19 @@ export function buildTools(s: ToolScope) {
     billing_mode: z.enum(['none', 'hourly', 'retainer', 'fixed', 'milestone']).optional(), hourly_rate_cents: z.number().int().min(0).max(1_000_000).nullable().optional(),
     retainer_cents: CENTS.nullable().optional(), fixed_cents: CENTS.nullable().optional(), budget_cents: CENTS.nullable().optional(),
     currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), vat_code: z.enum(['normal', 'reduced', 'lodging', 'exempt', 'export']).optional(),
+    doc_locale: LOCALE.nullable().optional().describe('langue des documents du client de ce projet (suivi, factures) ; null = celle de l’entreprise'),
   }
-  const billingLines = (a: any, cur: string) => [
-    a.billing_mode && `Facturation : ${BILLING_FR[a.billing_mode]}`, a.hourly_rate_cents !== undefined && `Taux horaire : ${money(a.hourly_rate_cents, cur)}`,
-    a.retainer_cents !== undefined && `Forfait mensuel : ${money(a.retainer_cents, cur)}`, a.fixed_cents !== undefined && `Forfait global : ${money(a.fixed_cents, cur)}`,
-    a.budget_cents !== undefined && `Budget : ${money(a.budget_cents, cur)}`, a.currency && `Devise : ${a.currency}`, a.vat_code && `TVA : ${a.vat_code}`]
+  const billingLines = (a: any, cur: string): Line[] => [
+    a.billing_mode && L('assistant.card.billingMode', { value: L(BILLING_K[a.billing_mode]) }),
+    a.hourly_rate_cents !== undefined && L('assistant.card.hourlyRate', { value: money(a.hourly_rate_cents, cur) }),
+    a.retainer_cents !== undefined && L('assistant.card.retainer', { value: money(a.retainer_cents, cur) }),
+    a.fixed_cents !== undefined && L('assistant.card.fixed', { value: money(a.fixed_cents, cur) }),
+    a.budget_cents !== undefined && L('assistant.card.budgetAmount', { value: money(a.budget_cents, cur) }),
+    a.currency && L('assistant.card.currency', { value: a.currency }), a.vat_code && L('assistant.card.vat', { value: a.vat_code }),
+    a.doc_locale !== undefined && L('assistant.card.docLocale', { value: a.doc_locale ? L(LANG_K[a.doc_locale]) : L('assistant.card.companyLanguage') })]
 
   write({
-    name: 'propose_create_project', title: 'Créer un projet', batch: true,
+    name: 'propose_create_project', batch: true,
     description: 'Prépare la création d’un projet (ou d’un modèle avec is_template, ou depuis un modèle avec template_id). La personne connectée en est la responsable. Pour créer un projet ET planifier ses étapes en une carte : propose_project_plan avec new_project.',
     schema: z.object({
       name: z.string().trim().min(1).max(200), description: z.string().max(5000).optional(), client_id: UUID.optional(), code: z.string().trim().max(30).optional(),
@@ -438,20 +487,23 @@ export function buildTools(s: ToolScope) {
       if (a.template_id) { const t = await project(a.template_id); if (!t || !t.is_template) return { error: 'template_not_found' }; template = t.name }
       const body = { ...a, ...(a.is_template ? { status: 'planned' } : {}) }
       return {
-        title: a.is_template ? 'Créer un modèle de projet' : 'Créer un projet',
+        title: L(a.is_template ? 'assistant.card.title.createTemplate' : 'assistant.card.title.createProject'),
         ops: [{ method: 'POST', path: '/api/projects', body, ref: 'project' }],
-        lines: [`${a.is_template ? 'Modèle' : 'Projet'} : « ${a.name} »`, cl && `Client : ${cl}`, template && `Depuis le modèle : ${template} (étapes, colonnes et tâches recopiées, dates recalées)`,
-          !a.is_template && `Statut : ${STATUS_FR[a.status ?? 'planned'] ?? a.status}`, a.code && `Code : ${a.code}`, a.priority && `Priorité : ${PRIORITY_FR[a.priority]}`,
-          a.start_date && `Début : ${D(a.start_date)}`, a.due_date && `Échéance : ${D(a.due_date)}`,
-          a.budget_minutes != null && `Budget : ${hm(a.budget_minutes)}`, ...billingLines(a, a.currency ?? 'CHF'), a.description && `Description : ${clip(a.description, 200)}`],
-        short: `« ${a.name} »${cl ? ` (${cl})` : ''}`, open: '/projets/@project',
+        lines: [L(a.is_template ? 'assistant.card.templateName' : 'assistant.card.projectName', { name: a.name }), cl && L('assistant.card.client', { name: cl }),
+          template && L('assistant.card.fromTemplate', { name: template }),
+          !a.is_template && L('assistant.card.status', { value: L(STATUS_K[a.status ?? 'planned']) }), a.code && L('assistant.card.code', { value: a.code }),
+          a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }),
+          a.start_date && L('assistant.card.start', { date: D(a.start_date) }), a.due_date && L('assistant.card.due', { date: D(a.due_date) }),
+          a.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(a.budget_minutes) }), ...billingLines(a, a.currency ?? 'CHF'),
+          a.description && L('assistant.card.description', { text: clip(a.description, 200) })],
+        short: `${q(a.name)}${cl ? ` (${cl})` : ''}`, open: '/projets/@project',
       }
     },
   })
 
   write({
-    name: 'propose_update_project', title: 'Modifier un projet', batch: true,
-    description: 'Prépare la modification d’un projet : nom, code, couleur, description, client (null = aucun), statut, santé, priorité, dates (null = retirer), budget (heures en minutes, montant en centimes), facturation (mode, taux, forfaits, devise, TVA), ce que la page de suivi montre (tâches, temps). Pas la visibilité, le responsable, les intervenants, l’ouverture de la page de suivi ni l’envoi automatique : écran du projet.',
+    name: 'propose_update_project', batch: true,
+    description: 'Prépare la modification d’un projet : nom, code, couleur, description, client (null = aucun), statut, santé, priorité, dates (null = retirer), budget (heures en minutes, montant en centimes), facturation (mode, taux, forfaits, devise, TVA), langue des documents du client, ce que la page de suivi montre (tâches, temps). Pas la visibilité, le responsable, les intervenants, l’ouverture de la page de suivi ni l’envoi automatique : écran du projet.',
     schema: z.object({
       project_id: UUID, name: z.string().trim().min(1).max(200).optional(), code: z.string().trim().max(30).nullable().optional(), color: COLOR.optional(),
       description: z.string().max(5000).optional(), client_id: UUID.nullable().optional(),
@@ -467,29 +519,31 @@ export function buildTools(s: ToolScope) {
       if (!Object.keys(patch).length) return { error: 'nothing_to_change' }
       let cl: string | null = null
       if (patch.client_id) { const c = await client(patch.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
+      const n = Object.keys(patch).length
       return {
-        title: p.is_template ? 'Modifier un modèle' : 'Modifier un projet',
+        title: L(p.is_template ? 'assistant.card.title.updateTemplate' : 'assistant.card.title.updateProject'),
         ops: [{ method: 'PATCH', path: `/api/projects/${project_id}`, body: patch }],
-        lines: [`Projet : ${p.name}`, patch.name && `Nouveau nom : « ${patch.name} »`, patch.code !== undefined && `Code : ${patch.code ?? 'aucun'}`,
-          patch.color && `Couleur : ${patch.color}`, patch.client_id !== undefined && `Client : ${cl ?? 'aucun'} (avant : ${p.client?.name ?? 'aucun'})`,
-          patch.status && `Statut : ${STATUS_FR[patch.status]} (avant : ${STATUS_FR[p.status] ?? p.status})`,
-          patch.health && `Santé : ${HEALTH_FR[patch.health]} (avant : ${HEALTH_FR[p.health] ?? p.health})`,
-          patch.priority && `Priorité : ${PRIORITY_FR[patch.priority]}`,
-          patch.start_date !== undefined && `Début : ${D(patch.start_date)} (avant : ${D(p.start_date)})`,
-          patch.due_date !== undefined && `Échéance : ${D(patch.due_date)} (avant : ${D(p.due_date)})`,
-          patch.budget_minutes !== undefined && `Budget en heures : ${patch.budget_minutes == null ? 'aucun' : hm(patch.budget_minutes)}`,
+        lines: [L('assistant.card.project', { name: p.name }), patch.name && L('assistant.card.newName', { name: patch.name }),
+          patch.code !== undefined && L('assistant.card.code', { value: patch.code ?? L('assistant.card.none') }),
+          patch.color && L('assistant.card.color', { value: patch.color }),
+          patch.client_id !== undefined && L('assistant.card.clientChanged', { value: cl ?? L('assistant.card.none'), old: p.client?.name ?? L('assistant.card.none') }),
+          patch.status && L('assistant.card.statusChanged', { value: L(STATUS_K[patch.status]), old: STATUS_K[p.status] ? L(STATUS_K[p.status]) : p.status }),
+          patch.health && L('assistant.card.healthChanged', { value: L(HEALTH_K[patch.health]), old: HEALTH_K[p.health] ? L(HEALTH_K[p.health]) : p.health }),
+          patch.priority && L('assistant.card.priority', { value: L(PRIORITY_K[patch.priority]) }),
+          patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(p.start_date) }),
+          patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(p.due_date) }),
+          patch.budget_minutes !== undefined && L('assistant.card.budgetHoursSet', { value: patch.budget_minutes == null ? L('assistant.card.none') : hm(patch.budget_minutes) }),
           ...billingLines(patch, patch.currency ?? p.currency ?? 'CHF'),
-          patch.portal_show_tasks !== undefined && `Page de suivi : tâches visibles ${yesNo(patch.portal_show_tasks)}`,
-          patch.portal_show_time !== undefined && `Page de suivi : temps visible ${yesNo(patch.portal_show_time)}`,
-          patch.description !== undefined && `Description : ${clip(patch.description, 200) || '(vide)'}`],
-        short: `${p.name} : ${Object.keys(patch).length} changement${Object.keys(patch).length > 1 ? 's' : ''}`,
-        open: `/projets/${project_id}`,
+          patch.portal_show_tasks !== undefined && L('assistant.card.portalTasks', { value: yesNo(patch.portal_show_tasks) }),
+          patch.portal_show_time !== undefined && L('assistant.card.portalTime', { value: yesNo(patch.portal_show_time) }),
+          patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') })],
+        short: L('assistant.card.changes', { name: p.name, n }), open: `/projets/${project_id}`,
       }
     },
   })
 
   write({
-    name: 'propose_duplicate_project', title: 'Dupliquer un projet', batch: true,
+    name: 'propose_duplicate_project', batch: true,
     description: 'Prépare la copie d’un projet (étapes, colonnes, tâches, dépendances, dates recalées sur start_date) en nouveau projet, ou son enregistrement comme MODÈLE réutilisable (as_template: true, sans client).',
     schema: z.object({ project_id: UUID, name: z.string().trim().min(1).max(200), as_template: z.boolean().default(false), start_date: DATE.optional(), client_id: UUID.optional() }),
     build: async (a) => {
@@ -499,33 +553,34 @@ export function buildTools(s: ToolScope) {
       if (a.client_id && !a.as_template) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
       const body: Record<string, unknown> = { name: a.name, as_template: a.as_template, ...(a.as_template ? {} : { start_date: a.start_date ?? s.today, ...(a.client_id ? { client_id: a.client_id } : {}) }) }
       return {
-        title: a.as_template ? 'Enregistrer comme modèle' : 'Dupliquer un projet',
+        title: L(a.as_template ? 'assistant.card.title.saveTemplate' : 'assistant.card.title.duplicate'),
         ops: [{ method: 'POST', path: `/api/projects/${a.project_id}/duplicate`, body, ref: 'copy' }],
-        lines: [a.as_template ? `Modèle « ${a.name} » à partir de « ${p.name} »` : `Nouveau projet « ${a.name} », copie de « ${p.name} »`,
-          `Recopie : ${p.stages.length} étape${p.stages.length > 1 ? 's' : ''}, ${p.tasks_total} tâche${p.tasks_total > 1 ? 's' : ''}, colonnes et dépendances`,
-          !a.as_template && `Début du nouveau projet : ${D(String(body.start_date))} (dates recalées)`, cl && `Client : ${cl}`,
-          a.as_template && 'Sans client ; réutilisable depuis Modèles'],
-        short: `${a.as_template ? 'modèle' : 'copie'} « ${a.name} »`, open: '/projets/@copy',
+        lines: [L(a.as_template ? 'assistant.card.copyAsTemplate' : 'assistant.card.copyAsProject', { name: a.name, from: p.name }),
+          L('assistant.card.copies', { stages: noun('assistant.noun.stage', p.stages.length), tasks: noun('assistant.noun.task', p.tasks_total) }),
+          !a.as_template && L('assistant.card.newStart', { date: D(String(body.start_date)) }), cl && L('assistant.card.client', { name: cl }),
+          a.as_template && L('assistant.card.templateNoClient')],
+        short: L(a.as_template ? 'assistant.card.shortTemplate' : 'assistant.card.shortCopy', { name: a.name }), open: '/projets/@copy',
       }
     },
   })
 
   write({
-    name: 'propose_project_update', title: "Publier un point d'avancement", batch: true,
+    name: 'propose_project_update', batch: true,
     description: "Prépare un point d'avancement interne sur un projet (santé + texte). Il n'est PAS partagé avec le client.",
     schema: z.object({ project_id: UUID, health: z.enum(['on_track', 'at_risk', 'off_track']), body: z.string().trim().max(5000).default('') }),
     build: async (a) => {
       const p = await project(a.project_id)
       if (!p) return { error: 'project_not_found' }
-      return { title: "Publier un point d'avancement",
+      return { title: L('assistant.card.title.projectUpdate'),
         ops: [{ method: 'POST', path: `/api/projects/${a.project_id}/updates`, body: { health: a.health, body: a.body, share_with_client: false } }],
-        lines: [`Projet : ${p.name}`, `Santé : ${HEALTH_FR[a.health]}`, a.body && `Texte : ${clip(a.body, 400)}`, 'Interne : non partagé avec le client'],
-        short: `${p.name} : ${HEALTH_FR[a.health]}`, open: `/projets/${a.project_id}` }
+        lines: [L('assistant.card.project', { name: p.name }), L('assistant.card.health', { value: L(HEALTH_K[a.health]) }),
+          a.body && L('assistant.card.text', { text: clip(a.body, 400) }), L('assistant.card.notShared')],
+        short: `${p.name} : ${L(HEALTH_K[a.health])}`, open: `/projets/${a.project_id}` }
     },
   })
 
   write({
-    name: 'propose_create_stage', title: 'Créer une étape', batch: true,
+    name: 'propose_create_stage', batch: true,
     description: 'Prépare une étape (grande phase) à la fin d’un projet : nom, description, note pour le client, statut, dates, visible par le client, montant si le projet est facturé par étape (centimes). Pour plusieurs étapes avec leurs tâches et dates enchaînées : propose_project_plan.',
     schema: z.object({
       project_id: UUID, name: z.string().trim().min(1).max(200), description: z.string().max(5000).optional(), client_note: z.string().max(2000).optional(),
@@ -536,17 +591,19 @@ export function buildTools(s: ToolScope) {
       const p = await project(project_id)
       if (!p) return { error: 'project_not_found' }
       if (a.start_date && a.due_date && a.start_date > a.due_date) return { error: 'end_before_start' }
-      return { title: 'Créer une étape', ops: [{ method: 'POST', path: `/api/projects/${project_id}/stages`, body: a }],
-        lines: [`Étape : « ${a.name} » (n° ${p.stages.length + 1})`, `Projet : ${p.name}`, a.description && `Description : ${clip(a.description, 200)}`,
-          a.client_note && `Note pour le client : ${clip(a.client_note, 200)}`, a.status && `Statut : ${STAGE_FR[a.status]}`,
-          (a.start_date || a.due_date) && `Dates : ${D(a.start_date)} → ${D(a.due_date)}`,
-          a.visible_to_client !== undefined && `Visible par le client : ${yesNo(a.visible_to_client)}`, a.billing_cents != null && `Montant : ${money(a.billing_cents, p.currency)}`],
-        short: `« ${a.name} » (${p.name})`, open: `/projets/${project_id}/etapes` }
+      return { title: L('assistant.card.title.createStage'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/stages`, body: a }],
+        lines: [L('assistant.card.stageNumbered', { name: a.name, n: p.stages.length + 1 }), L('assistant.card.project', { name: p.name }),
+          a.description && L('assistant.card.description', { text: clip(a.description, 200) }),
+          a.client_note && L('assistant.card.clientNote', { text: clip(a.client_note, 200) }), a.status && L('assistant.card.status', { value: L(STAGE_K[a.status]) }),
+          (a.start_date || a.due_date) && L('assistant.card.dates', { start: D(a.start_date), due: D(a.due_date) }),
+          a.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client) }),
+          a.billing_cents != null && L('assistant.card.amount', { value: money(a.billing_cents, p.currency) })],
+        short: `${q(a.name)} (${p.name})`, open: `/projets/${project_id}/etapes` }
     },
   })
 
   write({
-    name: 'propose_update_stage', title: 'Modifier une étape', batch: true,
+    name: 'propose_update_stage', batch: true,
     description: 'Prépare la modification d’une étape (stage_id lu avec get_project) : nom, description, note pour le client, statut (sans prévenir le client), dates (null = retirer), visible par le client, montant (centimes).',
     schema: z.object({
       project_id: UUID, stage_id: UUID, name: z.string().trim().min(1).max(200).optional(), description: z.string().max(5000).optional(),
@@ -558,21 +615,22 @@ export function buildTools(s: ToolScope) {
       const p = await project(project_id)
       const st = p?.stages.find((x: any) => x.id === stage_id)
       if (!st) return { error: 'stage_not_found' }
-      return { title: 'Modifier une étape', ops: [{ method: 'PATCH', path: `/api/projects/stages/${stage_id}`, body: patch }],
-        lines: [`Étape : « ${st.name} » (${p.name})`, patch.name && `Nouveau nom : « ${patch.name} »`,
-          patch.status && `Statut : ${STAGE_FR[patch.status]} (avant : ${STAGE_FR[st.status] ?? st.status}) — le client n’est pas prévenu`,
-          patch.start_date !== undefined && `Début : ${D(patch.start_date)} (avant : ${D(st.start_date)})`,
-          patch.due_date !== undefined && `Échéance : ${D(patch.due_date)} (avant : ${D(st.due_date)})`,
-          patch.description !== undefined && `Description : ${clip(patch.description, 200) || '(vide)'}`,
-          patch.client_note !== undefined && `Note pour le client : ${clip(patch.client_note, 200) || '(vide)'}`,
-          patch.visible_to_client !== undefined && `Visible par le client : ${yesNo(patch.visible_to_client)}`,
-          patch.billing_cents !== undefined && `Montant : ${money(patch.billing_cents, p.currency)}`],
-        short: `« ${st.name} » : ${Object.keys(patch).join(', ')}`, open: `/projets/${project_id}/etapes` }
+      const changes: Line[] = [patch.name && L('assistant.card.newName', { name: patch.name }),
+        patch.status && L('assistant.card.stageStatusChanged', { value: L(STAGE_K[patch.status]), old: STAGE_K[st.status] ? L(STAGE_K[st.status]) : st.status }),
+        patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(st.start_date) }),
+        patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(st.due_date) }),
+        patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') }),
+        patch.client_note !== undefined && L('assistant.card.clientNote', { text: clip(patch.client_note, 200) || L('assistant.card.empty') }),
+        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(patch.visible_to_client) }),
+        patch.billing_cents !== undefined && L('assistant.card.amount', { value: money(patch.billing_cents, p.currency) })]
+      return { title: L('assistant.card.title.updateStage'), ops: [{ method: 'PATCH', path: `/api/projects/stages/${stage_id}`, body: patch }],
+        lines: [L('assistant.card.stageOf', { name: st.name, project: p.name }), ...changes],
+        short: L('assistant.card.itemChange', { item: st.name, change: changes.find(Boolean) }), open: `/projets/${project_id}/etapes` }
     },
   })
 
   write({
-    name: 'propose_reorder', title: 'Réordonner', batch: true,
+    name: 'propose_reorder', batch: true,
     description: 'Prépare le nouvel ordre des étapes (kind: stages) ou des colonnes du tableau (kind: columns) d’un projet : ids = TOUS les identifiants, dans le nouvel ordre.',
     schema: z.object({ project_id: UUID, kind: z.enum(['stages', 'columns']), ids: z.array(UUID).min(1).max(100) }),
     build: async ({ project_id, kind, ids }) => {
@@ -582,15 +640,15 @@ export function buildTools(s: ToolScope) {
       if (ids.length !== list.length || new Set(ids).size !== ids.length || !ids.every((id: string) => list.some((x) => x.id === id)))
         return { error: 'ids_must_list_all', expected: list.map((x) => ({ id: x.id, name: x.name })) }
       const names = ids.map((id: string) => list.find((x) => x.id === id).name)
-      return { title: kind === 'stages' ? 'Réordonner les étapes' : 'Réordonner les colonnes',
+      return { title: L(kind === 'stages' ? 'assistant.card.title.reorderStages' : 'assistant.card.title.reorderColumns'),
         ops: [{ method: 'POST', path: `/api/projects/${project_id}/${kind}/order`, body: { ids } }],
-        lines: [`Projet : ${p.name}`, ...names.map((n: string, i: number) => `${i + 1}. ${n}`)],
+        lines: [L('assistant.card.project', { name: p.name }), ...names.map((x: string, i: number) => `${i + 1}. ${x}`)],
         short: `${p.name} : ${names.join(' → ')}`, open: `/projets/${project_id}/${kind === 'stages' ? 'etapes' : 'tableau'}` }
     },
   })
 
   write({
-    name: 'propose_board_column', title: 'Colonne du tableau', batch: true,
+    name: 'propose_board_column', batch: true,
     description: 'Prépare une colonne du tableau (kanban) d’un projet : création (sans column_id, name obligatoire) ou modification (column_id) du nom, de « colonne des tâches terminées » (is_done) et de la limite de cartes (wip_limit, null = aucune).',
     schema: z.object({ project_id: UUID, column_id: UUID.optional(), name: z.string().trim().min(1).max(60).optional(), is_done: z.boolean().optional(),
       wip_limit: z.number().int().min(1).max(999).nullable().optional() }),
@@ -599,22 +657,24 @@ export function buildTools(s: ToolScope) {
       if (!p) return { error: 'project_not_found' }
       if (!column_id) {
         if (!a.name) return { error: 'name_required' }
-        return { title: 'Ajouter une colonne', ops: [{ method: 'POST', path: `/api/projects/${project_id}/columns`, body: a }],
-          lines: [`Colonne : « ${a.name} »`, `Projet : ${p.name}`, a.is_done && 'Colonne des tâches terminées', a.wip_limit && `Limite : ${a.wip_limit} cartes`],
-          short: `« ${a.name} » (${p.name})`, open: `/projets/${project_id}/tableau` }
+        return { title: L('assistant.card.title.addColumn'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/columns`, body: a }],
+          lines: [L('assistant.card.columnName', { name: a.name }), L('assistant.card.project', { name: p.name }), a.is_done && L('assistant.card.doneColumn'),
+            a.wip_limit && L('assistant.card.wip', { n: a.wip_limit })],
+          short: `${q(a.name)} (${p.name})`, open: `/projets/${project_id}/tableau` }
       }
       const col = p.columns.find((x: any) => x.id === column_id)
       if (!col) return { error: 'column_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier une colonne', ops: [{ method: 'PATCH', path: `/api/projects/columns/${column_id}`, body: a }],
-        lines: [`Colonne : « ${col.name} » (${p.name})`, a.name && `Nouveau nom : « ${a.name} »`, a.is_done !== undefined && `Tâches terminées : ${yesNo(a.is_done)}`,
-          a.wip_limit !== undefined && `Limite : ${a.wip_limit ?? 'aucune'}`],
-        short: `« ${col.name} »`, open: `/projets/${project_id}/tableau` }
+      return { title: L('assistant.card.title.updateColumn'), ops: [{ method: 'PATCH', path: `/api/projects/columns/${column_id}`, body: a }],
+        lines: [L('assistant.card.columnOf', { name: col.name, project: p.name }), a.name && L('assistant.card.newName', { name: a.name }),
+          a.is_done !== undefined && L('assistant.card.doneTasks', { value: yesNo(a.is_done) }),
+          a.wip_limit !== undefined && L('assistant.card.wipChanged', { value: a.wip_limit ?? L('assistant.card.noneF') })],
+        short: q(col.name), open: `/projets/${project_id}/tableau` }
     },
   })
 
   write({
-    name: 'propose_set_file_visibility', title: 'Visibilité d’un fichier', batch: true,
+    name: 'propose_set_file_visibility', batch: true,
     description: 'Prépare le choix « visible par le client » d’un fichier du projet (sur la page de suivi, si elle est ouverte). file_id lu avec list_files.',
     schema: z.object({ project_id: UUID, file_id: UUID, visible_to_client: z.boolean() }),
     build: async ({ project_id, file_id, visible_to_client }) => {
@@ -623,14 +683,15 @@ export function buildTools(s: ToolScope) {
       const f = r.body.find((x: any) => x.id === file_id)
       if (!f) return { error: 'file_not_found' }
       const p = await project(project_id)
-      return { title: 'Visibilité d’un fichier', ops: [{ method: 'PATCH', path: `/api/projects/files/${file_id}`, body: { visible_to_client } }],
-        lines: [`Fichier : ${f.filename} (${p?.name ?? ''})`, visible_to_client ? `Visible par le client sur sa page de suivi${p?.portal_enabled ? '' : ' (page fermée pour l’instant)'}` : 'Caché au client'],
-        short: `${f.filename} : ${visible_to_client ? 'visible' : 'caché'}`, open: `/projets/${project_id}/fichiers` }
+      return { title: L('assistant.card.title.fileVisibility'), ops: [{ method: 'PATCH', path: `/api/projects/files/${file_id}`, body: { visible_to_client } }],
+        lines: [L('assistant.card.file', { name: f.filename, project: p?.name ?? '' }),
+          L(!visible_to_client ? 'assistant.card.fileHidden' : p?.portal_enabled ? 'assistant.card.fileVisible' : 'assistant.card.fileVisibleClosed')],
+        short: `${f.filename} : ${L(visible_to_client ? 'assistant.card.visible' : 'assistant.card.hidden')}`, open: `/projets/${project_id}/fichiers` }
     },
   })
 
   write({
-    name: 'propose_log_time', title: 'Saisir du temps', batch: true,
+    name: 'propose_log_time', batch: true,
     description: 'Prépare une saisie de temps (minutes entières, 1 à 1440) sur un projet, et éventuellement une tâche de ce projet ; pour la personne connectée, ou pour un collègue (user_id : responsables et administrateurs seulement).',
     schema: z.object({
       project_id: UUID, task_id: UUID.optional(), entry_date: DATE, minutes: z.number().int().min(1).max(1440),
@@ -644,11 +705,13 @@ export function buildTools(s: ToolScope) {
       if (a.user_id && a.user_id !== s.ctx.userId && s.ctx.role === 'member') return { error: 'forbidden', hint: 'un membre ne saisit que son propre temps' }
       const body = { project_id: a.project_id, task_id: a.task_id ?? null, entry_date: a.entry_date, minutes: a.minutes, note: a.note ?? '',
         billable: a.billable ?? true, ...(a.user_id && a.user_id !== s.ctx.userId ? { user_id: a.user_id } : {}) }
-      return { title: 'Saisir du temps', ops: [{ method: 'POST', path: '/api/time/entries', body }],
-        lines: [`Projet : ${p.name}`, t && `Tâche : « ${t.title} »`, `Date : ${D(a.entry_date)}`, `Durée : ${hm(a.minutes)}`,
-          a.user_id && a.user_id !== s.ctx.userId && `Pour : ${await peopleNames([a.user_id])}`,
-          a.note && `Note : ${clip(a.note, 200)}`, p.billing_mode === 'none' ? 'Non facturable (projet non facturable)' : `Facturable : ${yesNo(body.billable)}`],
-        short: `${hm(a.minutes)} le ${D(a.entry_date)} (${p.name})`, open: '/temps' }
+      return { title: L('assistant.card.title.logTime'), ops: [{ method: 'POST', path: '/api/time/entries', body }],
+        lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.date', { date: D(a.entry_date) }),
+          L('assistant.card.duration', { value: hm(a.minutes) }),
+          a.user_id && a.user_id !== s.ctx.userId && L('assistant.card.for', { names: await peopleNames([a.user_id]) }),
+          a.note && L('assistant.card.note', { text: clip(a.note, 200) }),
+          p.billing_mode === 'none' ? L('assistant.card.nonBillable') : L('assistant.card.billable', { value: yesNo(body.billable) })],
+        short: L('assistant.card.timeShort', { duration: hm(a.minutes), date: D(a.entry_date), project: p.name }), open: '/temps' }
     },
   })
 
@@ -658,7 +721,7 @@ export function buildTools(s: ToolScope) {
     return r.status === 200 ? r.body.find((e: any) => e.id === id) ?? null : null
   }
   write({
-    name: 'propose_update_time_entry', title: 'Modifier une saisie de temps', batch: true,
+    name: 'propose_update_time_entry', batch: true,
     description: 'Prépare la modification d’une saisie de temps (entry_id lu avec list_time_entries) : projet, tâche (null = aucune), date, minutes, facturable, note. Le temps déjà facturé ne se modifie plus.',
     schema: z.object({ entry_id: UUID, project_id: UUID.optional(), task_id: UUID.nullable().optional(), entry_date: DATE.optional(),
       minutes: z.number().int().min(1).max(1440).optional(), billable: z.boolean().optional(), note: z.string().max(2000).optional() }),
@@ -670,17 +733,19 @@ export function buildTools(s: ToolScope) {
       let pName = e.project_name, tTitle: string | null = e.task_title
       if (patch.project_id) { const p = await project(patch.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
       if (patch.task_id) { const t = await task(patch.task_id); if (!t || t.project_id !== (patch.project_id ?? e.project_id)) return { error: 'task_not_in_project' }; tTitle = t.title }
-      return { title: 'Modifier une saisie de temps', ops: [{ method: 'PATCH', path: `/api/time/entries/${entry_id}`, body: patch }],
-        lines: [`Saisie du ${D(e.entry_date)} : ${hm(e.minutes ?? 0)} sur ${e.project_name}${e.task_title ? ` (« ${e.task_title} »)` : ''}, ${e.user_name}`,
-          patch.project_id && `Projet : ${pName}`, patch.task_id !== undefined && `Tâche : ${patch.task_id ? `« ${tTitle} »` : 'aucune'}`,
-          patch.entry_date && `Date : ${D(patch.entry_date)}`, patch.minutes && `Durée : ${hm(patch.minutes)}`,
-          patch.billable !== undefined && `Facturable : ${yesNo(patch.billable)}`, patch.note !== undefined && `Note : ${clip(patch.note, 200) || '(vide)'}`],
-        short: `saisie du ${D(e.entry_date)} (${e.project_name})`, open: '/temps' }
+      return { title: L('assistant.card.title.updateTime'), ops: [{ method: 'PATCH', path: `/api/time/entries/${entry_id}`, body: patch }],
+        lines: [L('assistant.card.entry', { date: D(e.entry_date), duration: hm(e.minutes ?? 0), project: e.project_name, task: e.task_title ? ` (${q(e.task_title)})` : '', person: e.user_name }),
+          patch.project_id && L('assistant.card.project', { name: pName }),
+          patch.task_id !== undefined && (patch.task_id ? L('assistant.card.task', { title: tTitle }) : L('assistant.card.taskNone')),
+          patch.entry_date && L('assistant.card.date', { date: D(patch.entry_date) }), patch.minutes && L('assistant.card.duration', { value: hm(patch.minutes) }),
+          patch.billable !== undefined && L('assistant.card.billable', { value: yesNo(patch.billable) }),
+          patch.note !== undefined && L('assistant.card.note', { text: clip(patch.note, 200) || L('assistant.card.empty') })],
+        short: L('assistant.card.entryShort', { date: D(e.entry_date), project: e.project_name }), open: '/temps' }
     },
   })
 
   write({
-    name: 'propose_set_timesheet_day', title: 'Feuille de temps', batch: true,
+    name: 'propose_set_timesheet_day', batch: true,
     description: 'Prépare une case de SA feuille de temps : le total du jour pour un projet (et une tâche) devient `minutes` (1 à 1440) ; les saisies de ce jour-là sur ce projet/tâche sont remplacées par une seule. Pour ajouter du temps sans remplacer : propose_log_time.',
     schema: z.object({ project_id: UUID, task_id: UUID.optional(), entry_date: DATE, minutes: z.number().int().min(1).max(1440) }),
     build: async (a) => {
@@ -690,29 +755,32 @@ export function buildTools(s: ToolScope) {
       if (a.task_id) { t = await task(a.task_id); if (!t || t.project_id !== a.project_id) return { error: 'task_not_in_project' } }
       const monday = (() => { const d = new Date(`${a.entry_date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10) })()
       const w = await get(`/api/time/week?start=${monday}`)
-      const before = w.status === 200 ? w.body.rows.filter((x: any) => x.project_id === a.project_id && (x.task_id ?? null) === (a.task_id ?? null)
+      const prev = w.status === 200 ? w.body.rows.filter((x: any) => x.project_id === a.project_id && (x.task_id ?? null) === (a.task_id ?? null)
         && String(x.entry_date).slice(0, 10) === a.entry_date).reduce((n: number, x: any) => n + x.minutes, 0) : 0
-      return { title: 'Feuille de temps', ops: [{ method: 'PUT', path: '/api/time/week/cell', body: { project_id: a.project_id, task_id: a.task_id ?? null, entry_date: a.entry_date, minutes: a.minutes } }],
-        lines: [`Projet : ${p.name}`, t && `Tâche : « ${t.title} »`, `Jour : ${D(a.entry_date)}`, `Total du jour : ${hm(a.minutes)} (avant : ${before ? hm(before) : 'rien'})`,
-          before > 0 && 'Les saisies de ce jour sur cette ligne sont remplacées par ce total'],
-        short: `${D(a.entry_date)} : ${hm(a.minutes)} (${p.name})`, open: '/temps' }
+      return { title: L('assistant.card.title.timesheet'),
+        ops: [{ method: 'PUT', path: '/api/time/week/cell', body: { project_id: a.project_id, task_id: a.task_id ?? null, entry_date: a.entry_date, minutes: a.minutes } }],
+        lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.day', { date: D(a.entry_date) }),
+          L('assistant.card.dayTotal', { value: hm(a.minutes), old: prev ? hm(prev) : L('assistant.card.nothing') }), prev > 0 && L('assistant.card.replaced')],
+        short: L('assistant.card.timesheetShort', { date: D(a.entry_date), duration: hm(a.minutes), project: p.name }), open: '/temps' }
     },
   })
 
   write({
-    name: 'propose_timer', title: 'Chronomètre', batch: true,
+    name: 'propose_timer', batch: true,
     description: 'Prépare le démarrage du chronomètre de la personne sur un projet (et une tâche), ou son arrêt (action stop).',
     schema: z.object({ action: z.enum(['start', 'stop']), project_id: UUID.optional(), task_id: UUID.optional(), note: z.string().max(2000).optional() }),
     build: async (a) => {
-      if (a.action === 'stop') return { title: 'Arrêter le chronomètre', ops: [{ method: 'POST', path: '/api/time/timer/stop', body: {} }],
-        lines: ['Le temps écoulé est enregistré.'], short: 'arrêter le chronomètre', open: '/temps' }
+      if (a.action === 'stop') return { title: L('assistant.card.title.timerStop'), ops: [{ method: 'POST', path: '/api/time/timer/stop', body: {} }],
+        lines: [L('assistant.card.timerSaved')], short: L('assistant.card.title.timerStop'), open: '/temps' }
       if (!a.project_id) return { error: 'project_id_required' }
       const p = await project(a.project_id)
       if (!p) return { error: 'project_not_found' }
       let t: any = null
       if (a.task_id) { t = await task(a.task_id); if (!t || t.project_id !== a.project_id) return { error: 'task_not_in_project' } }
-      return { title: 'Démarrer le chronomètre', ops: [{ method: 'POST', path: '/api/time/timer/start', body: { project_id: a.project_id, task_id: a.task_id ?? null, note: a.note ?? '' } }],
-        lines: [`Projet : ${p.name}`, t && `Tâche : « ${t.title} »`, 'Un chronomètre déjà lancé est arrêté et enregistré.'], short: `chronomètre sur ${p.name}`, open: '/temps' }
+      return { title: L('assistant.card.title.timerStart'),
+        ops: [{ method: 'POST', path: '/api/time/timer/start', body: { project_id: a.project_id, task_id: a.task_id ?? null, note: a.note ?? '' } }],
+        lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.timerReplaces')],
+        short: L('assistant.card.timerShort', { project: p.name }), open: '/temps' }
     },
   })
 
@@ -723,65 +791,69 @@ export function buildTools(s: ToolScope) {
     notes: z.string().max(5000).optional(),
   }
   const addressLine = (a: any) => (a.street || a.town || a.postal_code)
-    && `Adresse : ${[a.street && `${a.street} ${a.building_number ?? ''}`.trim(), [a.postal_code, a.town].filter(Boolean).join(' ')].filter(Boolean).join(', ')}`
+    && L('assistant.card.address', { value: [a.street && `${a.street} ${a.building_number ?? ''}`.trim(), [a.postal_code, a.town].filter(Boolean).join(' ')].filter(Boolean).join(', ') })
 
   write({
-    name: 'propose_create_client', title: 'Créer un client', batch: true,
+    name: 'propose_create_client', batch: true,
     description: 'Prépare la création d’une fiche client (entreprise ou personne).',
     schema: z.object({
       name: z.string().trim().min(1).max(200), kind: z.enum(['company', 'person']).default('company'), ...clientFields,
-      country: z.string().regex(/^[A-Z]{2}$/).default('CH'), language: z.enum(['fr', 'de', 'it', 'en']).default('fr'),
+      country: z.string().regex(/^[A-Z]{2}$/).default('CH'), language: z.enum(['fr', 'de', 'it', 'en', 'es']).default('fr'),
     }),
     build: async (a) => ({
-      title: 'Créer un client', ops: [{ method: 'POST', path: '/api/clients', body: { ...a }, ref: 'client' }],
-      lines: [`Client : ${a.name} (${a.kind === 'person' ? 'personne' : 'entreprise'})`, a.contact_person && `Contact : ${a.contact_person}`,
-        a.email && `Email : ${a.email}`, a.phone && `Téléphone : ${a.phone}`, addressLine(a), `Pays : ${a.country}`, a.vat_number && `TVA : ${a.vat_number}`],
+      title: L('assistant.card.title.createClient'), ops: [{ method: 'POST', path: '/api/clients', body: { ...a }, ref: 'client' }],
+      lines: [L('assistant.card.clientKind', { name: a.name, kind: L(a.kind === 'person' ? 'assistant.card.kind.person' : 'assistant.card.kind.company') }),
+        a.contact_person && L('assistant.card.contactPerson', { name: a.contact_person }),
+        a.email && L('assistant.card.email', { value: a.email }), a.phone && L('assistant.card.phone', { value: a.phone }), addressLine(a),
+        L('assistant.card.country', { value: a.country }), a.vat_number && L('assistant.card.vatNumber', { value: a.vat_number })],
       short: a.name, open: '/clients/@client',
     }),
   })
 
   write({
-    name: 'propose_update_client', title: 'Modifier un client', batch: true,
+    name: 'propose_update_client', batch: true,
     description: 'Prépare la modification d’une fiche client : nom, genre, contact, email, téléphone, adresse, pays, langue, TVA, notes. (Archiver un client : écran du client.)',
     schema: z.object({ client_id: UUID, name: z.string().trim().min(1).max(200).optional(), kind: z.enum(['company', 'person']).optional(), ...clientFields,
-      country: z.string().regex(/^[A-Z]{2}$/).optional(), language: z.enum(['fr', 'de', 'it', 'en']).optional() }),
+      country: z.string().regex(/^[A-Z]{2}$/).optional(), language: z.enum(['fr', 'de', 'it', 'en', 'es']).optional() }),
     build: async ({ client_id, ...patch }) => {
       if (!Object.keys(patch).length) return { error: 'nothing_to_change' }
       const c = await client(client_id)
       if (!c) return { error: 'client_not_found' }
-      return { title: 'Modifier un client', ops: [{ method: 'PATCH', path: `/api/clients/${client_id}`, body: patch }],
-        lines: [`Client : ${c.name}`, ...Object.entries(patch).map(([k, v]) => `${({ name: 'Nom', kind: 'Genre', contact_person: 'Contact', email: 'Email', phone: 'Téléphone',
-          street: 'Rue', building_number: 'N°', postal_code: 'NPA', town: 'Localité', vat_number: 'TVA', notes: 'Notes', country: 'Pays', language: 'Langue' } as Record<string, string>)[k] ?? k} : ${clip(String(v), 120)} (avant : ${clip(String(c[k] ?? '—'), 60)})`)],
-        short: `${c.name} : ${Object.keys(patch).join(', ')}`, open: `/clients/${client_id}` }
+      return { title: L('assistant.card.title.updateClient'), ops: [{ method: 'PATCH', path: `/api/clients/${client_id}`, body: patch }],
+        lines: [L('assistant.card.clientName', { name: c.name }), ...Object.entries(patch).map(([k, v]) => L('assistant.card.fieldChanged', {
+          field: CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k, value: clip(String(v), 120), old: clip(String(c[k] ?? '—'), 60) }))],
+        short: `${c.name} : ${Object.keys(patch).map((k) => (CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k)).join(', ')}`, open: `/clients/${client_id}` }
     },
   })
 
   write({
-    name: 'propose_client_contact', title: 'Contact d’un client', batch: true,
+    name: 'propose_client_contact', batch: true,
     description: 'Prépare un contact d’un client : ajout (sans contact_id) ou modification (contact_id lu avec get_client) : nom, email, téléphone, fonction, reçoit le suivi des projets (receives_updates).',
     schema: z.object({ client_id: UUID, contact_id: UUID.optional(), name: z.string().trim().max(200).optional(), email: z.string().trim().email().max(254).optional(),
       phone: z.string().trim().max(50).optional(), job_title: z.string().trim().max(120).optional(), receives_updates: z.boolean().optional() }),
     build: async ({ client_id, contact_id, ...a }) => {
       const c = await client(client_id)
       if (!c) return { error: 'client_not_found' }
+      const detail: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.email && L('assistant.card.email', { value: a.email }),
+        a.phone && L('assistant.card.phone', { value: a.phone }), a.job_title && L('assistant.card.jobTitle', { value: a.job_title })]
       if (!contact_id) {
         if (!a.name && !a.email) return { error: 'name_or_email_required' }
-        return { title: 'Ajouter un contact', ops: [{ method: 'POST', path: `/api/clients/${client_id}/contacts`, body: a }],
-          lines: [`Client : ${c.name}`, a.name && `Nom : ${a.name}`, a.email && `Email : ${a.email}`, a.phone && `Téléphone : ${a.phone}`, a.job_title && `Fonction : ${a.job_title}`,
-            `Reçoit le suivi des projets : ${yesNo(a.receives_updates ?? true)}`], short: `${a.name || a.email} (${c.name})`, open: `/clients/${client_id}` }
+        return { title: L('assistant.card.title.addContact'), ops: [{ method: 'POST', path: `/api/clients/${client_id}/contacts`, body: a }],
+          lines: [L('assistant.card.clientName', { name: c.name }), ...detail, L('assistant.card.receives', { value: yesNo(a.receives_updates ?? true) })],
+          short: `${a.name || a.email} (${c.name})`, open: `/clients/${client_id}` }
       }
       const k = c.contacts.find((x: any) => x.id === contact_id)
       if (!k) return { error: 'contact_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier un contact', ops: [{ method: 'PATCH', path: `/api/clients/contacts/${contact_id}`, body: a }],
-        lines: [`Contact : ${k.name || k.email} (${c.name})`, a.name && `Nom : ${a.name}`, a.email && `Email : ${a.email}`, a.phone && `Téléphone : ${a.phone}`,
-          a.job_title && `Fonction : ${a.job_title}`, a.receives_updates !== undefined && `Reçoit le suivi : ${yesNo(a.receives_updates)}`],
+      return { title: L('assistant.card.title.updateContact'), ops: [{ method: 'PATCH', path: `/api/clients/contacts/${contact_id}`, body: a }],
+        lines: [L('assistant.card.contactOf', { name: k.name || k.email, client: c.name }), ...detail,
+          a.receives_updates !== undefined && L('assistant.card.receives', { value: yesNo(a.receives_updates) })],
         short: `${k.name || k.email}`, open: `/clients/${client_id}` }
     },
   })
 
   write({
-    name: 'propose_event', title: 'Rendez-vous', batch: true,
+    name: 'propose_event', batch: true,
     description: 'Prépare un rendez-vous de l’agenda : création (sans event_id : titre, début, fin obligatoires) ou modification (event_id lu avec list_events). Dates avec heure et décalage (2026-11-03T14:00:00+01:00). Les personnes de l’équipe sont prévenues dans ProjectLead ; AUCUNE invitation n’est envoyée par email aux adresses extérieures (cela se fait depuis l’agenda).',
     schema: z.object({
       event_id: UUID.optional(), title: z.string().trim().min(1).max(300).optional(), description: z.string().max(10000).optional(), location: z.string().max(500).optional(),
@@ -794,19 +866,20 @@ export function buildTools(s: ToolScope) {
       let pName: string | null = null
       if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
       if ((await unknownPeople(a.attendee_user_ids)).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.title && `Titre : ${a.title}`, a.starts_at && `Début : ${when(a.starts_at)}`, a.ends_at && `Fin : ${when(a.ends_at)}`,
-        a.all_day && 'Toute la journée', a.location && `Lieu : ${a.location}`, pName && `Projet : ${pName}`,
-        a.attendee_user_ids?.length && `Équipe : ${await peopleNames(a.attendee_user_ids)} (prévenue dans ProjectLead)`,
-        a.attendee_emails?.length && `Participants extérieurs : ${a.attendee_emails.join(', ')} — aucune invitation envoyée`,
-        a.description && `Description : ${clip(a.description, 200)}`]
+      const lines: Line[] = [a.title && L('assistant.card.eventTitle', { value: a.title }), a.starts_at && L('assistant.card.eventStart', { value: when(a.starts_at) }),
+        a.ends_at && L('assistant.card.eventEnd', { value: when(a.ends_at) }), a.all_day && L('assistant.card.allDay'),
+        a.location && L('assistant.card.location', { value: a.location }), pName && L('assistant.card.project', { name: pName }),
+        a.attendee_user_ids?.length && L('assistant.card.team', { names: await peopleNames(a.attendee_user_ids) }),
+        a.attendee_emails?.length && L('assistant.card.external', { emails: a.attendee_emails.join(', ') }),
+        a.description && L('assistant.card.description', { text: clip(a.description, 200) })]
       if (!event_id) {
         if (!a.title || !a.starts_at || !a.ends_at) return { error: 'title_start_end_required' }
-        return { title: 'Créer un rendez-vous', ops: [{ method: 'POST', path: '/api/calendar/events', body: { ...a, send_invites: false } }],
+        return { title: L('assistant.card.title.createEvent'), ops: [{ method: 'POST', path: '/api/calendar/events', body: { ...a, send_invites: false } }],
           lines, short: `${a.title}, ${when(a.starts_at)}`, open: '/agenda' }
       }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier un rendez-vous', ops: [{ method: 'PATCH', path: `/api/calendar/events/${event_id}`, body: { ...a, send_invites: false } }],
-        lines: ['Rendez-vous modifié :', ...lines], short: `rendez-vous ${a.title ?? ''}`.trim(), open: '/agenda' }
+      return { title: L('assistant.card.title.updateEvent'), ops: [{ method: 'PATCH', path: `/api/calendar/events/${event_id}`, body: { ...a, send_invites: false } }],
+        lines, short: a.title ?? L('assistant.card.title.updateEvent'), open: '/agenda' }
     },
   })
 
@@ -815,69 +888,91 @@ export function buildTools(s: ToolScope) {
     const r = await get('/api/mail/inbox?status=all')
     return r.status === 200 ? r.body.find((m: any) => m.id === id) ?? null : null
   }
+  const emailLine = (m: any) => L('assistant.card.emailFrom', { subject: m.subject || L('assistant.card.noSubject'), from: m.from_name ?? m.from_email })
   write({
-    name: 'propose_set_email_status', title: 'Classer un email', batch: true,
+    name: 'propose_set_email_status', batch: true,
     description: 'Prépare le classement d’un email reçu (message_id lu avec list_emails) : « ignored » (ignorer) ou « new » (remettre à trier, ce qui le détache de son projet).',
     schema: z.object({ message_id: UUID, status: z.enum(['new', 'ignored']) }),
     build: async ({ message_id, status }) => {
       const m = await inboxMessage(message_id)
       if (!m) return { error: 'message_not_found' }
-      return { title: status === 'ignored' ? 'Ignorer un email' : 'Remettre un email à trier',
+      return { title: L(status === 'ignored' ? 'assistant.card.title.ignoreEmail' : 'assistant.card.title.untriageEmail'),
         ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/status`, body: { status } }],
-        lines: [`Email : « ${m.subject || '(sans objet)'} » de ${m.from_name ?? m.from_email}`, status === 'new' && m.project_name && `Détaché du projet ${m.project_name}`],
-        short: `« ${m.subject || '(sans objet)'} » : ${status === 'ignored' ? 'ignoré' : 'à trier'}`, open: '/emails' }
+        lines: [emailLine(m), status === 'new' && m.project_name && L('assistant.card.detached', { name: m.project_name })],
+        short: `${q(m.subject || L('assistant.card.noSubject'))} : ${L(status === 'ignored' ? 'assistant.card.ignored' : 'assistant.card.toTriage')}`, open: '/emails' }
     },
   })
 
   write({
-    name: 'propose_mark_notifications_read', title: 'Notifications lues', batch: true,
+    name: 'propose_mark_notifications_read', batch: true,
     description: 'Prépare le marquage de SES notifications comme lues : toutes (sans ids) ou certaines (ids lus avec list_settings kind=notifications).',
     schema: z.object({ ids: z.array(UUID).max(200).optional() }),
     build: async ({ ids }) => {
       const r = await get('/api/notifications')
-      const unread = r.status === 200 ? r.body.filter((n: any) => !n.read_at && (!ids || ids.includes(n.id))) : []
+      const unread = r.status === 200 ? r.body.filter((x: any) => !x.read_at && (!ids || ids.includes(x.id))) : []
       if (!unread.length) return { error: 'nothing_to_change', hint: 'aucune notification non lue' }
-      return { title: 'Marquer les notifications comme lues', ops: [{ method: 'POST', path: '/api/notifications/read', body: ids ? { ids } : {} }],
-        lines: [`${unread.length} notification${unread.length > 1 ? 's' : ''} non lue${unread.length > 1 ? 's' : ''}`, ...unread.slice(0, 6).map((n: any) => clip(n.title, 90) as string),
-          unread.length > 6 && `+ ${unread.length - 6} autres`], short: `${unread.length} notifications lues`, open: null }
+      return { title: L('assistant.card.title.notifRead'), ops: [{ method: 'POST', path: '/api/notifications/read', body: ids ? { ids } : {} }],
+        lines: [L('assistant.card.unread', { n: unread.length }), ...unread.slice(0, 6).map((x: any) => clip(x.title, 90) as string),
+          unread.length > 6 && L('assistant.card.more', { n: unread.length - 6 })],
+        short: L('assistant.card.unread', { n: unread.length }), open: null }
     },
   })
 
   write({
-    name: 'propose_update_settings', title: 'Réglages', batch: true,
-    description: 'Prépare des réglages : profile (son nom, sa couleur), company (entreprise, administrateurs : nom, fuseau, devise, heures par semaine), billing (facturation mensuelle vers InvoiceLead : automatique, jour, langue, signature du suivi client ; responsables et administrateurs), mailbox (une boîte branchée : nom affiché, boîte par défaut). Ni mot de passe, ni partage d’une boîte, ni équipe, ni formule.',
+    name: 'propose_update_settings', batch: true,
+    description: 'Prépare des réglages : profile (son nom, sa couleur, sa langue d’interface), company (entreprise, administrateurs : nom, fuseau, devise, heures par semaine, langue des documents), billing (facturation mensuelle vers InvoiceLead : automatique, jour, langue, signature du suivi client ; responsables et administrateurs), mailbox (une boîte branchée : nom affiché, boîte par défaut). Ni mot de passe, ni partage d’une boîte, ni équipe, ni formule.',
     schema: z.object({
-      profile: z.object({ name: z.string().trim().min(1).max(120).optional(), color: COLOR.optional() }).optional(),
+      profile: z.object({ name: z.string().trim().min(1).max(120).optional(), color: COLOR.optional(), locale: LOCALE.optional() }).optional(),
       company: z.object({ name: z.string().trim().min(1).max(200).optional(), timezone: z.string().max(60).optional(),
-        currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), week_hours: z.number().min(1).max(80).optional() }).optional(),
+        currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), week_hours: z.number().min(1).max(80).optional(), locale: LOCALE.optional() }).optional(),
       billing: z.object({ monthly_billing_auto: z.boolean().optional(), monthly_billing_day: z.number().int().min(1).max(28).optional(),
-        invoice_language: z.enum(['fr', 'de', 'it', 'en']).optional(), client_update_signature: z.string().max(2000).optional() }).optional(),
+        invoice_language: LOCALE.optional(), client_update_signature: z.string().max(2000).optional() }).optional(),
       mailbox: z.object({ id: UUID, display_name: z.string().trim().max(120).optional(), is_default: z.boolean().optional() }).optional(),
     }),
     build: async (a) => {
       const ops: WriteOp[] = []
       const lines: Line[] = []
-      const nonEmpty = (o: any) => o && Object.values(o).some((v) => v !== undefined)
-      if (nonEmpty(a.profile)) { ops.push({ method: 'PATCH', path: '/api/me', body: a.profile }); lines.push(`Profil : ${Object.entries(a.profile).map(([k, v]) => `${k === 'name' ? 'nom' : 'couleur'} ${v}`).join(', ')}`) }
-      if (nonEmpty(a.company)) { ops.push({ method: 'PATCH', path: '/api/account', body: a.company }); lines.push(`Entreprise : ${Object.entries(a.company).map(([k, v]) => `${({ name: 'nom', timezone: 'fuseau', currency: 'devise', week_hours: 'heures par semaine' } as Record<string, string>)[k]} ${v}`).join(', ')}`) }
-      if (nonEmpty(a.billing)) { ops.push({ method: 'PATCH', path: '/api/integrations/settings', body: a.billing }); lines.push(`Facturation mensuelle : ${Object.entries(a.billing).map(([k, v]) => `${({ monthly_billing_auto: 'automatique', monthly_billing_day: 'jour', invoice_language: 'langue', client_update_signature: 'signature' } as Record<string, string>)[k]} ${typeof v === 'boolean' ? yesNo(v) : clip(String(v), 80)}`).join(', ')}`) }
+      const set = (k: string, v: unknown) => L(k, { value: typeof v === 'boolean' ? yesNo(v) : clip(String(v), 80) })
+      if (a.profile && (a.profile.name !== undefined || a.profile.color !== undefined)) {
+        const { locale: _l, ...rest } = a.profile
+        ops.push({ method: 'PATCH', path: '/api/me', body: rest })
+      }
+      if (a.profile?.locale) ops.push({ method: 'POST', path: '/api/me/locale', body: { locale: a.profile.locale } })
+      if (a.profile && Object.values(a.profile).some((v) => v !== undefined))
+        lines.push(L('assistant.card.profile', { value: [a.profile.name !== undefined && set('assistant.card.set.name', a.profile.name),
+          a.profile.color && set('assistant.card.set.color', a.profile.color), a.profile.locale && L('assistant.card.set.locale', { value: L(LANG_K[a.profile.locale]) })].filter(Boolean).join(', ') }))
+      if (a.company && Object.values(a.company).some((v) => v !== undefined)) {
+        ops.push({ method: 'PATCH', path: '/api/account', body: a.company })
+        lines.push(L('assistant.card.company', { value: [a.company.name !== undefined && set('assistant.card.set.name', a.company.name),
+          a.company.timezone && set('assistant.card.set.timezone', a.company.timezone), a.company.currency && set('assistant.card.set.currency', a.company.currency),
+          a.company.week_hours !== undefined && set('assistant.card.set.weekHours', a.company.week_hours),
+          a.company.locale && L('assistant.card.set.docLocale', { value: L(LANG_K[a.company.locale]) })].filter(Boolean).join(', ') }))
+      }
+      if (a.billing && Object.values(a.billing).some((v) => v !== undefined)) {
+        ops.push({ method: 'PATCH', path: '/api/integrations/settings', body: a.billing })
+        lines.push(L('assistant.card.billingSettings', { value: [a.billing.monthly_billing_auto !== undefined && set('assistant.card.set.auto', a.billing.monthly_billing_auto),
+          a.billing.monthly_billing_day !== undefined && set('assistant.card.set.day', a.billing.monthly_billing_day),
+          a.billing.invoice_language && L('assistant.card.set.invoiceLanguage', { value: L(LANG_K[a.billing.invoice_language]) }),
+          a.billing.client_update_signature !== undefined && set('assistant.card.set.signature', a.billing.client_update_signature)].filter(Boolean).join(', ') }))
+      }
       if (a.mailbox && (a.mailbox.display_name !== undefined || a.mailbox.is_default !== undefined)) {
         const r = await get('/api/mail/mailboxes')
         const mb = r.status === 200 ? r.body.mailboxes.find((m: any) => m.id === a.mailbox.id) : null
         if (!mb) return { error: 'mailbox_not_found' }
         const { id, ...rest } = a.mailbox
         ops.push({ method: 'PATCH', path: `/api/mail/mailboxes/${id}`, body: rest })
-        lines.push(`Boîte ${mb.email} : ${[rest.display_name !== undefined && `nom affiché « ${rest.display_name} »`, rest.is_default && 'boîte par défaut'].filter(Boolean).join(', ')}`)
+        lines.push(L('assistant.card.mailbox', { email: mb.email, value: [rest.display_name !== undefined && L('assistant.card.set.displayName', { value: rest.display_name }),
+          rest.is_default && L('assistant.card.set.default')].filter(Boolean).join(', ') }))
       }
       if (!ops.length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier des réglages', ops, lines, short: lines.filter(Boolean).join(' ; ') as string,
+      return { title: L('assistant.card.title.settings'), ops, lines, short: lines.filter(Boolean).join(' ; ') as string,
         open: a.company || a.billing ? '/reglages/entreprise' : a.mailbox ? '/reglages/emails' : '/reglages/profil' }
     },
   })
 
   const day = z.string().regex(/^[1-7]$/, 'jour 1 (lundi) à 7 (dimanche)')
   write({
-    name: 'propose_booking_page', title: 'Page de rendez-vous', batch: true,
+    name: 'propose_booking_page', batch: true,
     description: 'Prépare une page publique de prise de rendez-vous (responsables et administrateurs) : création (sans booking_page_id : slug et nom) ou modification. Disponibilités : jours 1 (lundi) à 7, plages ["09:00","12:00"].',
     schema: z.object({
       booking_page_id: UUID.optional(), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,60}$/).optional(), name: z.string().trim().min(1).max(120).optional(),
@@ -888,49 +983,54 @@ export function buildTools(s: ToolScope) {
     }),
     build: async ({ booking_page_id, ...a }) => {
       if ((await unknownPeople(a.host_ids)).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.name && `Nom : ${a.name}`, a.slug && `Adresse : /rdv/${a.slug}`, a.duration_minutes && `Durée : ${a.duration_minutes} min`,
-        a.location && `Lieu : ${a.location}`, a.host_ids?.length && `Hôtes : ${await peopleNames(a.host_ids)}`,
-        a.availability && `Disponibilités : ${Object.entries(a.availability).map(([d, r]: [string, any]) => `${['lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'][Number(d) - 1]} ${r.map((x: string[]) => x.join('-')).join(', ')}`).join(' ; ')}`,
-        a.create_project !== undefined && `Ouvre un projet à chaque rendez-vous : ${yesNo(a.create_project)}`, a.active !== undefined && `Active : ${yesNo(a.active)}`]
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.slug && L('assistant.card.url', { value: `/rdv/${a.slug}` }),
+        a.duration_minutes && L('assistant.card.durationMin', { n: a.duration_minutes }), a.location && L('assistant.card.location', { value: a.location }),
+        a.host_ids?.length && L('assistant.card.hosts', { names: await peopleNames(a.host_ids) }),
+        a.availability && L('assistant.card.availability', { value: Object.entries(a.availability).map(([d, r]: [string, any]) =>
+          `${L(DAY_K[Number(d) - 1])} ${r.map((x: string[]) => x.join('-')).join(', ')}`).join(' ; ') }),
+        a.create_project !== undefined && L('assistant.card.createsProject', { value: yesNo(a.create_project) }),
+        a.active !== undefined && L('assistant.card.active', { value: yesNo(a.active) })]
       if (!booking_page_id) {
         if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
-        return { title: 'Créer une page de rendez-vous', ops: [{ method: 'POST', path: '/api/booking', body: a }], lines: [...lines, 'Page publique : les visiteurs y réservent un créneau'],
-          short: `page « ${a.name} »`, open: '/reglages/rendez-vous' }
+        return { title: L('assistant.card.title.createBooking'), ops: [{ method: 'POST', path: '/api/booking', body: a }],
+          lines: [...lines, L('assistant.card.publicBooking')], short: L('assistant.card.pageShort', { name: a.name }), open: '/reglages/rendez-vous' }
       }
       const r = await get('/api/booking')
       const bt = r.status === 200 ? r.body.find((x: any) => x.id === booking_page_id) : null
       if (!bt) return { error: 'booking_page_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier une page de rendez-vous', ops: [{ method: 'PATCH', path: `/api/booking/${booking_page_id}`, body: a }],
-        lines: [`Page : ${bt.name}`, ...lines], short: `page « ${bt.name} »`, open: '/reglages/rendez-vous' }
+      return { title: L('assistant.card.title.updateBooking'), ops: [{ method: 'PATCH', path: `/api/booking/${booking_page_id}`, body: a }],
+        lines: [L('assistant.card.page', { name: bt.name }), ...lines], short: L('assistant.card.pageShort', { name: bt.name }), open: '/reglages/rendez-vous' }
     },
   })
 
   write({
-    name: 'propose_intake_form', title: 'Formulaire de demande', batch: true,
+    name: 'propose_intake_form', batch: true,
     description: 'Prépare un formulaire public de demande (responsables et administrateurs) : création (sans form_id : slug et nom) ou modification. Chaque demande reçue ouvre un projet « à qualifier » (depuis template_id s’il est donné) confié à owner_id.',
     schema: z.object({ form_id: UUID.optional(), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,60}$/).optional(), name: z.string().trim().min(1).max(120).optional(),
       intro: z.string().max(3000).optional(), template_id: UUID.nullable().optional(), owner_id: UUID.nullable().optional(), active: z.boolean().optional() }),
     build: async ({ form_id, ...a }) => {
       if (a.template_id) { const t = await project(a.template_id); if (!t?.is_template) return { error: 'template_not_found' } }
       if (a.owner_id && (await unknownPeople([a.owner_id])).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.name && `Nom : ${a.name}`, a.slug && `Adresse : /demande/${a.slug}`, a.intro && `Texte d’accueil : ${clip(a.intro, 160)}`,
-        a.owner_id && `Confié à : ${await peopleNames([a.owner_id])}`, a.active !== undefined && `Actif : ${yesNo(a.active)}`]
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.slug && L('assistant.card.url', { value: `/demande/${a.slug}` }),
+        a.intro && L('assistant.card.intro', { text: clip(a.intro, 160) }), a.owner_id && L('assistant.card.owner', { names: await peopleNames([a.owner_id]) }),
+        a.active !== undefined && L('assistant.card.formActive', { value: yesNo(a.active) })]
       if (!form_id) {
         if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
-        return { title: 'Créer un formulaire de demande', ops: [{ method: 'POST', path: '/api/forms', body: a }], lines: [...lines, 'Formulaire public'], short: `formulaire « ${a.name} »`, open: '/reglages/formulaires' }
+        return { title: L('assistant.card.title.createForm'), ops: [{ method: 'POST', path: '/api/forms', body: a }], lines: [...lines, L('assistant.card.publicForm')],
+          short: L('assistant.card.formShort', { name: a.name }), open: '/reglages/formulaires' }
       }
       const r = await get('/api/forms')
       const f = r.status === 200 ? r.body.find((x: any) => x.id === form_id) : null
       if (!f) return { error: 'form_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier un formulaire de demande', ops: [{ method: 'PATCH', path: `/api/forms/${form_id}`, body: a }], lines: [`Formulaire : ${f.name}`, ...lines],
-        short: `formulaire « ${f.name} »`, open: '/reglages/formulaires' }
+      return { title: L('assistant.card.title.updateForm'), ops: [{ method: 'PATCH', path: `/api/forms/${form_id}`, body: a }],
+        lines: [L('assistant.card.form', { name: f.name }), ...lines], short: L('assistant.card.formShort', { name: f.name }), open: '/reglages/formulaires' }
     },
   })
 
   write({
-    name: 'propose_automation', title: 'Automatisation', batch: true,
+    name: 'propose_automation', batch: true,
     description: 'Prépare une automatisation « quand … alors … » (responsables et administrateurs) : création (sans automation_id) ou modification. Déclencheurs : task_completed, task_moved, stage_completed, task_created, project_completed. Actions : notify (params.to: owner|members|assignees ou params.user_ids, params.message), assign (params.user_id), set_priority (params.priority), move_column (params.column_name), complete_stage, create_task (params.title, params.due_in_days). L’envoi automatique au client n’est pas permis à l’assistant.',
     schema: z.object({
       automation_id: UUID.optional(), name: z.string().trim().min(1).max(120).optional(), project_id: UUID.nullable().optional(),
@@ -942,59 +1042,59 @@ export function buildTools(s: ToolScope) {
     build: async ({ automation_id, ...a }) => {
       let pName: string | null = null
       if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
-      const TR: Record<string, string> = { task_completed: 'une tâche est terminée', task_moved: 'une tâche change de colonne', stage_completed: 'une étape est terminée',
-        task_created: 'une tâche est créée', project_completed: 'le projet est terminé' }
-      const AC: Record<string, string> = { notify: 'prévenir', assign: 'assigner', set_priority: 'changer la priorité', move_column: 'déplacer la tâche', complete_stage: 'terminer l’étape', create_task: 'créer une tâche' }
-      const lines: Line[] = [a.name && `Nom : ${a.name}`, a.trigger && `Quand : ${TR[a.trigger]}`, a.action && `Alors : ${AC[a.action]}`,
-        a.params && Object.keys(a.params).length && `Paramètres : ${clip(JSON.stringify(a.params), 160)}`, a.project_id !== undefined && `Projet : ${pName ?? 'tous les projets'}`,
-        a.active !== undefined && `Active : ${yesNo(a.active)}`]
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.trigger && L('assistant.card.when', { value: L(TRIGGER_K[a.trigger]) }),
+        a.action && L('assistant.card.then', { value: L(ACTION_K[a.action]) }),
+        a.params && Object.keys(a.params).length && L('assistant.card.params', { value: clip(JSON.stringify(a.params), 160) }),
+        a.project_id !== undefined && L('assistant.card.project', { name: pName ?? L('assistant.card.allProjects') }),
+        a.active !== undefined && L('assistant.card.active', { value: yesNo(a.active) })]
       if (!automation_id) {
         if (!a.name || !a.trigger || !a.action) return { error: 'name_trigger_action_required' }
-        return { title: 'Créer une automatisation', ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, short: `« ${a.name} »`, open: '/reglages/automatisations' }
+        return { title: L('assistant.card.title.createAutomation'), ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, short: q(a.name), open: '/reglages/automatisations' }
       }
       const r = await get('/api/automations')
       const au = r.status === 200 ? r.body.find((x: any) => x.id === automation_id) : null
       if (!au) return { error: 'automation_not_found' }
       if (au.action === 'send_client_update') return { error: 'forbidden_category', hint: 'automatisation qui écrit au client : à régler dans l’écran' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: 'Modifier une automatisation', ops: [{ method: 'PATCH', path: `/api/automations/${automation_id}`, body: a }], lines: [`Automatisation : ${au.name}`, ...lines],
-        short: `« ${au.name} »`, open: '/reglages/automatisations' }
+      return { title: L('assistant.card.title.updateAutomation'), ops: [{ method: 'PATCH', path: `/api/automations/${automation_id}`, body: a }],
+        lines: [L('assistant.card.automation', { name: au.name }), ...lines], short: q(au.name), open: '/reglages/automatisations' }
     },
   })
 
   // ---------------------------------------------------- seules sur leur carte (une autre application ou un fournisseur)
   write({
-    name: 'propose_email_to_project', title: 'Ouvrir un projet depuis un email', batch: false,
+    name: 'propose_email_to_project', batch: false,
     description: 'Prépare l’ouverture d’un projet à partir d’un email reçu (message_id lu avec list_emails) : client retrouvé ou créé, projet (depuis un modèle si template_id), première tâche « Répondre à … ».',
     schema: z.object({ message_id: UUID, name: z.string().trim().min(1).max(200).optional(), client_id: UUID.optional(), client_name: z.string().trim().max(200).optional(),
       template_id: UUID.optional(), status: z.enum(['lead', 'planned', 'active']).default('lead'), first_task: z.boolean().default(true) }),
     build: async ({ message_id, ...a }) => {
       const m = await inboxMessage(message_id)
       if (!m) return { error: 'message_not_found' }
-      return { title: 'Ouvrir un projet depuis un email', mode: 'route', ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/project`, body: a, ref: 'project' }],
-        lines: [`Email : « ${m.subject || '(sans objet)'} » de ${m.from_name ?? m.from_email}`, `Projet : « ${a.name || m.subject || 'Demande'} » (${STATUS_FR[a.status]})`,
-          a.client_id ? 'Client : celui choisi' : m.known_client ? `Client : ${m.known_client.name}` : `Client : créé depuis l’expéditeur${a.client_name ? ` (${a.client_name})` : ''}`,
-          a.first_task && 'Première tâche : répondre à l’expéditeur (demain, priorité haute)'],
+      return { title: L('assistant.card.title.emailToProject'), mode: 'route', ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/project`, body: a, ref: 'project' }],
+        lines: [emailLine(m), L('assistant.card.newProjectStatus', { name: a.name || m.subject || L('assistant.card.request'), status: L(STATUS_K[a.status]) }),
+          a.client_id ? L('assistant.card.clientChosen') : m.known_client ? L('assistant.card.client', { name: m.known_client.name })
+            : L('assistant.card.clientFromSender', { name: a.client_name ?? m.from_name ?? m.from_email }),
+          a.first_task && L('assistant.card.firstTask')],
         open: '/projets/@project' }
     },
   })
 
   write({
-    name: 'propose_link_email', title: 'Rattacher un email', batch: false,
+    name: 'propose_link_email', batch: false,
     description: 'Prépare le rattachement d’un email reçu (message_id) à un projet existant, éventuellement en créant une tâche avec son contenu (as_task).',
     schema: z.object({ message_id: UUID, project_id: UUID, as_task: z.boolean().default(false) }),
     build: async ({ message_id, project_id, as_task }) => {
       const [m, p] = await Promise.all([inboxMessage(message_id), project(project_id)])
       if (!m) return { error: 'message_not_found' }
       if (!p) return { error: 'project_not_found' }
-      return { title: 'Rattacher un email', mode: 'route', ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/link`, body: { project_id, as_task } }],
-        lines: [`Email : « ${m.subject || '(sans objet)'} » de ${m.from_name ?? m.from_email}`, `Projet : ${p.name}`, as_task && 'Et une tâche avec le contenu de l’email'],
+      return { title: L('assistant.card.title.linkEmail'), mode: 'route', ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/link`, body: { project_id, as_task } }],
+        lines: [emailLine(m), L('assistant.card.project', { name: p.name }), as_task && L('assistant.card.asTask')],
         open: `/projets/${project_id}/emails` }
     },
   })
 
   write({
-    name: 'propose_import_client', title: 'Reprendre un client', batch: false,
+    name: 'propose_import_client', batch: false,
     description: 'Prépare la reprise d’un client depuis une application Lead reliée : source crmlead + external_id (id d’un lead lu avec search_lead_apps) ; crmlead + client_id (mettre à jour un client déjà repris) ; invoicelead + external_id (id d’un contact InvoiceLead). Avec les droits de la personne dans l’autre application.',
     schema: z.object({ source: z.enum(['crmlead', 'invoicelead']), external_id: z.string().min(1).max(100).optional(), client_id: UUID.optional(), q: z.string().max(100).optional() }),
     build: async (a) => {
@@ -1002,21 +1102,21 @@ export function buildTools(s: ToolScope) {
         const c = await client(a.client_id)
         if (!c) return { error: 'client_not_found' }
         if (!String(c.external_ref ?? '').startsWith('crmlead:')) return { error: 'not_from_crmlead' }
-        return { title: 'Mettre à jour depuis CRMlead', mode: 'route', ops: [{ method: 'POST', path: `/api/clients/${a.client_id}/crmlead/refresh`, body: {} }],
-          lines: [`Client : ${c.name}`, 'Adresse et contacts relus dans CRMlead'], open: `/clients/${a.client_id}` }
+        return { title: L('assistant.card.title.refreshCrm'), mode: 'route', ops: [{ method: 'POST', path: `/api/clients/${a.client_id}/crmlead/refresh`, body: {} }],
+          lines: [L('assistant.card.clientName', { name: c.name }), L('assistant.card.crmReread')], open: `/clients/${a.client_id}` }
       }
       if (!a.external_id) return { error: 'external_id_required' }
-      if (a.source === 'crmlead') return { title: 'Reprendre un client de CRMlead', mode: 'route',
+      if (a.source === 'crmlead') return { title: L('assistant.card.title.importCrm'), mode: 'route',
         ops: [{ method: 'POST', path: '/api/clients/crmlead/import', body: { leadId: a.external_id }, ref: 'client' }],
-        lines: [`Lead CRMlead : ${a.external_id}`, 'Adresse et contacts repris ; CRMlead enverra ensuite leurs changements'], open: '/clients/@client' }
-      return { title: 'Reprendre un client d’InvoiceLead', mode: 'route',
+        lines: [L('assistant.card.crmLead', { id: a.external_id }), L('assistant.card.crmImport')], open: '/clients/@client' }
+      return { title: L('assistant.card.title.importInvoice'), mode: 'route',
         ops: [{ method: 'POST', path: '/api/clients/invoicelead/import', body: { contactId: a.external_id, ...(a.q ? { q: a.q } : {}) }, ref: 'client' }],
-        lines: [`Contact InvoiceLead : ${a.external_id}`, 'Nom, email et adresse repris'], open: '/clients/@client' }
+        lines: [L('assistant.card.ilContact', { id: a.external_id }), L('assistant.card.ilImport')], open: '/clients/@client' }
     },
   })
 
   write({
-    name: 'propose_monthly_billing', title: 'Brouillons de facture du mois', batch: false,
+    name: 'propose_monthly_billing', batch: false,
     description: 'Prépare la création des BROUILLONS de facture du mois dans InvoiceLead (responsables et administrateurs), pour la période AAAA-MM (en général le mois passé) et éventuellement certains projets. Rien n’est émis ni envoyé au client.',
     schema: z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), project_ids: z.array(UUID).max(500).optional() }),
     build: async ({ period, project_ids }) => {
@@ -1025,17 +1125,17 @@ export function buildTools(s: ToolScope) {
       if (r.status !== 200) return { error: r.body?.error ?? 'preview_unavailable' }
       const list = r.body.projects.filter((x: any) => !project_ids || project_ids.includes(x.project.id))
       const fresh = list.filter((x: any) => !x.existing)
-      return { title: `Brouillons de facture ${period}`, mode: 'route',
+      return { title: L('assistant.card.title.billing', { period }), mode: 'route',
         ops: [{ method: 'POST', path: '/api/integrations/billing/run', body: { period, ...(project_ids ? { project_ids } : {}) } }],
-        lines: [`${fresh.length} brouillon${fresh.length > 1 ? 's' : ''} à créer dans InvoiceLead (${list.length - fresh.length} déjà fait${list.length - fresh.length > 1 ? 's' : ''})`,
+        lines: [L('assistant.card.drafts', { n: fresh.length, done: list.length - fresh.length }),
           ...fresh.slice(0, 10).map((x: any) => `${x.project.name}${x.client ? ` (${x.client.name})` : ''} : ${money(x.total_cents, x.project.currency ?? 'CHF')}`),
-          fresh.length > 10 && `+ ${fresh.length - 10} autres`, 'Brouillons seulement : rien n’est émis ni envoyé au client'],
+          fresh.length > 10 && L('assistant.card.more', { n: fresh.length - 10 }), L('assistant.card.draftsOnly')],
         open: '/facturation' }
     },
   })
 
   write({
-    name: 'propose_sync_now', title: 'Synchroniser', batch: false,
+    name: 'propose_sync_now', batch: false,
     description: 'Prépare une synchronisation immédiate d’une boîte mail branchée (kind mailbox) ou d’un agenda extérieur (kind calendar_feed) ; id lu avec list_settings.',
     schema: z.object({ kind: z.enum(['mailbox', 'calendar_feed']), id: UUID }),
     build: async ({ kind, id }) => {
@@ -1043,14 +1143,14 @@ export function buildTools(s: ToolScope) {
         const r = await get('/api/mail/mailboxes')
         const mb = r.status === 200 ? r.body.mailboxes.find((m: any) => m.id === id) : null
         if (!mb) return { error: 'mailbox_not_found' }
-        return { title: 'Synchroniser une boîte mail', mode: 'route', ops: [{ method: 'POST', path: `/api/mail/mailboxes/${id}/sync`, body: {} }],
-          lines: [`Boîte : ${mb.email}`, 'Les nouveaux emails sont relevés'], open: '/emails' }
+        return { title: L('assistant.card.title.syncMailbox'), mode: 'route', ops: [{ method: 'POST', path: `/api/mail/mailboxes/${id}/sync`, body: {} }],
+          lines: [L('assistant.card.box', { email: mb.email }), L('assistant.card.newEmails')], open: '/emails' }
       }
       const r = await get('/api/calendar/feeds')
       const f = r.status === 200 ? r.body.find((x: any) => x.id === id) : null
       if (!f) return { error: 'feed_not_found' }
-      return { title: 'Synchroniser un agenda', mode: 'route', ops: [{ method: 'POST', path: `/api/calendar/feeds/${id}/sync`, body: {} }],
-        lines: [`Agenda : ${f.name}`, 'Les rendez-vous de l’agenda extérieur sont relus'], open: '/agenda' }
+      return { title: L('assistant.card.title.syncFeed'), mode: 'route', ops: [{ method: 'POST', path: `/api/calendar/feeds/${id}/sync`, body: {} }],
+        lines: [L('assistant.card.feed', { name: f.name }), L('assistant.card.feedReread')], open: '/agenda' }
     },
   })
 
@@ -1068,7 +1168,7 @@ export function buildTools(s: ToolScope) {
     checklist: z.array(z.string().trim().min(1).max(300)).max(15).optional(), visible_to_client: z.boolean().optional(),
   })
   write({
-    name: 'propose_project_plan', title: 'Planifier un projet', batch: false,
+    name: 'propose_project_plan', batch: false,
     description: 'Prépare en UNE carte tout le plan d’un projet : étapes datées, leurs tâches (durée en jours ouvrés, estimation), jalons (durée 0, par exemple la validation par le client) et dépendances simples (after). Les dates sont calculées par ProjectLead en jours ouvrés (lundi à vendredi) à partir de start_date (par défaut : le début du projet s’il est à venir, sinon aujourd’hui) : les étapes se suivent ; une tâche commence au début de son étape ou le jour ouvré après ses tâches préalables. Projet existant (project_id, le plan s’ajoute à ce qui existe) ou nouveau projet (new_project). Les dates de début et de fin du projet sont posées si elles manquent.',
     schema: z.object({
       project_id: UUID.optional(),
@@ -1123,9 +1223,10 @@ export function buildTools(s: ToolScope) {
       const estimate = ordered.reduce((n: number, t: any) => n + (t.estimate_minutes ?? 0), 0)
       const taskLine = async (t: any) => {
         const d = plan.tasks.get(t.key)!
-        return [`${d.milestone ? '◆ ' : ''}${t.title}`, d.milestone ? `${D(d.due)} (jalon)` : span(d.start, d.due),
-          t.estimate_minutes ? hm(t.estimate_minutes) : null, t.after?.length ? `après ${t.after.map((k: string) => `« ${titleOf.get(k)} »`).join(', ')}` : null,
-          t.checklist?.length ? `${t.checklist.length} point${t.checklist.length > 1 ? 's' : ''} de contrôle` : null,
+        return [`${d.milestone ? '◆ ' : ''}${t.title}`, d.milestone ? `${D(d.due)} ${L('assistant.card.plan.milestoneTag')}` : span(d.start, d.due),
+          t.estimate_minutes ? hm(t.estimate_minutes) : null,
+          t.after?.length ? L('assistant.card.plan.after', { list: t.after.map((k: string) => q(titleOf.get(k))).join(', ') }) : null,
+          t.checklist?.length ? noun('assistant.noun.checklist', t.checklist.length) : null,
           t.assignee_ids?.length ? await peopleNames(t.assignee_ids) : null].filter(Boolean).join(' · ')
       }
       const CAP = 10
@@ -1135,23 +1236,27 @@ export function buildTools(s: ToolScope) {
           const d = plan.stages.get(st.key)!
           const list = ordered.filter((t: any) => t.stage === st.key)
           groups.push({ title: `${(p?.stages.length ?? 0) + i + 1}. ${st.name} · ${span(d.start, d.due)}`,
-            lines: list.length ? await Promise.all(list.slice(0, CAP).map(taskLine)) : ['(étape sans tâche)'], ...(list.length > CAP ? { more: list.length - CAP } : {}) })
+            lines: list.length ? await Promise.all(list.slice(0, CAP).map(taskLine)) : [L('assistant.card.plan.emptyStage')], ...(list.length > CAP ? { more: list.length - CAP } : {}) })
         }
       } else {
-        groups.push({ title: 'Tâches', lines: await Promise.all(ordered.slice(0, 40).map(taskLine)), ...(ordered.length > 40 ? { more: ordered.length - 40 } : {}) })
+        groups.push({ title: L('assistant.card.plan.tasksGroup'), lines: await Promise.all(ordered.slice(0, 40).map(taskLine)), ...(ordered.length > 40 ? { more: ordered.length - 40 } : {}) })
       }
       const name = p ? p.name : a.new_project.name
       const late = p?.due_date && plan.end > p.due_date.slice(0, 10)
+      const counts = [a.stages.length && noun('assistant.noun.stage', a.stages.length),
+        milestones.length ? L('assistant.card.plan.tasksWithMilestones', { tasks: noun('assistant.noun.task', ordered.length), n: milestones.length })
+          : noun('assistant.noun.task', ordered.length),
+        deps && noun('assistant.noun.dependency', deps), estimate && L('assistant.card.plan.estimated', { value: hm(estimate) })].filter(Boolean).join(', ')
       return {
-        title: p ? `Planifier « ${name} »` : `Créer et planifier « ${name} »`,
-        lines: [p ? `Projet : ${name}` : `Nouveau projet : ${name}${cl ? ` (client ${cl})` : ''}`,
-          `Du ${D(plan.start)} au ${D(plan.end)} · ${workdaysBetween(plan.start, plan.end)} jours ouvrés (lundi à vendredi)`,
-          `${a.stages.length ? `${a.stages.length} étape${a.stages.length > 1 ? 's' : ''}, ` : ''}${ordered.length} tâche${ordered.length > 1 ? 's' : ''}${milestones.length ? ` dont ${milestones.length} jalon${milestones.length > 1 ? 's' : ''}` : ''}${deps ? `, ${deps} dépendance${deps > 1 ? 's' : ''}` : ''}${estimate ? `, ${hm(estimate)} estimées` : ''}`,
-          p && (p.stages.length || p.tasks_total) && `Déjà dans le projet : ${p.stages.length} étape(s) et ${p.tasks_total} tâche(s) ; elles restent, le plan s’ajoute après`,
-          Object.keys(dates).length && `Dates du projet : ${[dates.start_date && `début ${D(dates.start_date)}`, dates.due_date && `fin ${D(dates.due_date)}`].filter(Boolean).join(', ')}`,
-          late && `Attention : le plan finit après l’échéance du projet (${D(p.due_date)})`],
+        title: L(p ? 'assistant.card.title.plan' : 'assistant.card.title.createPlan', { name }),
+        lines: [p ? L('assistant.card.project', { name }) : cl ? L('assistant.card.plan.newProjectClient', { name, client: cl }) : L('assistant.card.plan.newProject', { name }),
+          L('assistant.card.plan.period', { start: D(plan.start), end: D(plan.end), n: workdaysBetween(plan.start, plan.end) }), counts,
+          p && (p.stages.length || p.tasks_total) && L('assistant.card.plan.existing', { stages: noun('assistant.noun.stage', p.stages.length), tasks: noun('assistant.noun.task', p.tasks_total) }),
+          Object.keys(dates).length && L('assistant.card.plan.projectDates', { value: [dates.start_date && L('assistant.card.plan.startPart', { date: D(dates.start_date) }),
+            dates.due_date && L('assistant.card.plan.endPart', { date: D(dates.due_date) })].filter(Boolean).join(', ') }),
+          late && L('assistant.card.plan.late', { date: D(p.due_date) })],
         groups, ops, open: `/projets/${pid}/gantt`,
-        links: [{ label: 'Étapes', path: `/projets/${pid}/etapes` }, { label: 'Liste', path: `/projets/${pid}/liste` }, { label: 'Gantt', path: `/projets/${pid}/gantt` }],
+        links: [{ label: 'stages', path: `/projets/${pid}/etapes` }, { label: 'list', path: `/projets/${pid}/liste` }, { label: 'gantt', path: `/projets/${pid}/gantt` }],
         info: { plan: { start: plan.start, end: plan.end, stages: a.stages.map((st: any) => ({ name: st.name, start: plan.stages.get(st.key)!.start, due: plan.stages.get(st.key)!.due })),
           milestones: milestones.map((t: any) => ({ title: t.title, date: plan.tasks.get(t.key)!.due })), tasks: ordered.length, dependencies: deps } },
       }
@@ -1164,7 +1269,7 @@ export function buildTools(s: ToolScope) {
     name: 'propose_batch',
     description: 'Regroupe PLUSIEURS changements en UNE carte « À confirmer » (un clic, une transaction : tout ou rien, 150 écritures au plus). Chaque opération = { tool, input } où tool est un des outils propose_* regroupables et input exactement ce que cet outil prend. Pour les étapes, tâches, jalons et dépendances d’un plan de projet : propose_project_plan.',
     inputSchema: z.object({
-      title: z.string().trim().min(1).max(120).optional().describe('titre court de la carte'),
+      title: z.string().trim().min(1).max(120).optional().describe('titre court de la carte, dans la langue de la personne'),
       operations: z.array(z.object({ tool: z.enum(BATCHABLE), input: z.record(z.string(), z.unknown()) })).min(1).max(MAX_OPS),
     }),
     run: async (a) => {
@@ -1192,8 +1297,8 @@ export function buildTools(s: ToolScope) {
       const n = a.operations.length
       const only = opens.size === 1 ? [...opens][0] : null
       return propose('propose_batch', {
-        title: a.title ?? `${n} changement${n > 1 ? 's' : ''}`,
-        lines: [`${n} changement${n > 1 ? 's' : ''} en une fois : tout est enregistré ensemble, ou rien`], groups, ops, open: only,
+        title: a.title ?? L('assistant.card.batch.title', { n }),
+        lines: [L('assistant.card.batch.line', { n })], groups, ops, open: only,
       })
     },
   })
@@ -1538,4 +1643,3 @@ export const TOOL_NAMES = ['search', 'dashboard', 'list_projects', 'get_project'
   'propose_update_client', 'propose_client_contact', 'propose_event', 'propose_set_email_status', 'propose_mark_notifications_read',
   'propose_update_settings', 'propose_booking_page', 'propose_intake_form', 'propose_automation', 'propose_email_to_project', 'propose_link_email',
   'propose_import_client', 'propose_monthly_billing', 'propose_sync_now', 'propose_project_plan', 'propose_batch'] as const
-

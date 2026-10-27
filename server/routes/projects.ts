@@ -9,6 +9,8 @@ import { newMessageId } from '../lib/mailbox/types.js'
 import { assertCanOpenProject, isOpenStatus } from '../lib/plans.js'
 import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
 import { body, cents, email, forbidden, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
+import { LOCALES, tr } from '../lib/i18n.js'
+import { docLocale } from '../lib/locales.js'
 
 /**
  * Les projets : portefeuille, fiche, intervenants, étapes, colonnes du tableau, points
@@ -46,6 +48,8 @@ const projectSchema = z.object({
   portal_show_time: z.boolean().optional(),
   update_frequency: z.enum(['none', 'weekly', 'biweekly', 'monthly']).optional(),
   is_template: z.boolean().optional(),
+  // Langue des documents du client (suivi, page de suivi, brouillons de facture) ; vide = celle de l'entreprise.
+  doc_locale: z.enum(LOCALES).nullish(),
 })
 const PROJECT_FIELDS = Object.keys(projectSchema.shape)
 
@@ -127,6 +131,11 @@ export async function createProject(db: Db, ctx: Ctx, b: z.infer<typeof projectS
 }) {
   // La formule compte les projets en cours (lib/plans.ts) ; un modèle ou une demande à qualifier ne comptent pas.
   if (!b.is_template && isOpenStatus(b.status)) await assertCanOpenProject(db, ctx.accountId)
+  // Sans devise ni langue choisies : celles du modèle, sinon la devise de l'entreprise (celle de son pays à sa création).
+  const tpl = b.template_id ? (await db.query('select currency, doc_locale from projects where id = $1', [b.template_id])).rows[0] : null
+  if (b.currency === undefined) b = { ...b, currency: tpl?.currency
+    ?? (await db.query('select currency from accounts where id = $1', [ctx.accountId])).rows[0]?.currency ?? 'CHF' }
+  if (b.doc_locale === undefined && tpl?.doc_locale) b = { ...b, doc_locale: tpl.doc_locale }
   const fields = PROJECT_FIELDS.filter((k) => (b as any)[k] !== undefined)
   const p = (await db.query(
     `insert into projects (account_id, created_by, owner_id, source, source_ref ${fields.filter((f) => f !== 'owner_id').map((f) => ', ' + f).join('')})
@@ -151,7 +160,7 @@ export async function createProject(db: Db, ctx: Ctx, b: z.infer<typeof projectS
         where id = $1 and not is_template`, [p.id, ctx.accountId])
   }
   await logActivity(db, ctx, p.id, 'project_created', { name: b.name })
-  await notify(db, ctx, [owner, ...(b.member_ids ?? [])], { kind: 'project_member', title: `Vous intervenez sur « ${b.name} »`, link: `/projets/${p.id}` })
+  await notify(db, ctx, [owner, ...(b.member_ids ?? [])], { kind: 'project_member', title: (l) => tr(l, 'notif.projectMember', { name: b.name }), link: `/projets/${p.id}` })
   return p.id as string
 }
 
@@ -241,7 +250,7 @@ app.post('/:id/duplicate', async (c) => {
       name: b.name, description: src.description, client_id: b.as_template ? null : b.client_id ?? src.client_id,
       billing_mode: src.billing_mode, hourly_rate_cents: src.hourly_rate_cents, retainer_cents: src.retainer_cents,
       fixed_cents: src.fixed_cents, budget_minutes: src.budget_minutes, budget_cents: src.budget_cents, color: src.color,
-      currency: src.currency, vat_code: src.vat_code, is_template: b.as_template, start_date: b.start_date ?? null,
+      currency: src.currency, vat_code: src.vat_code, doc_locale: src.doc_locale, is_template: b.as_template, start_date: b.start_date ?? null,
       status: b.as_template ? 'planned' : 'active', template_id: src.id, source: 'template',
     })
   })
@@ -260,7 +269,7 @@ app.post('/:id/members', async (c) => {
        on conflict (project_id, user_id) do update set role = excluded.role, hourly_rate_cents = excluded.hourly_rate_cents`,
       [c.req.param('id'), b.user_id, ctx.accountId, b.role, b.hourly_rate_cents ?? null])
     const p = (await db.query('select name from projects where id = $1', [c.req.param('id')])).rows[0]
-    await notify(db, ctx, [b.user_id], { kind: 'project_member', title: `Vous intervenez sur « ${p.name} »`, link: `/projets/${c.req.param('id')}` })
+    await notify(db, ctx, [b.user_id], { kind: 'project_member', title: (l) => tr(l, 'notif.projectMember', { name: p.name }), link: `/projets/${c.req.param('id')}` })
     await logActivity(db, ctx, c.req.param('id'), 'member_added', { user_id: b.user_id, role: b.role })
   })
   return c.json({ ok: true })
@@ -367,9 +376,14 @@ app.patch('/stages/:sid', async (c) => {
       await logActivity(db, ctx, st.project_id, 'stage_status', { name: st.name, from: st.status, to: b.status })
       if (b.status === 'done') await runAutomations(db, ctx, 'stage_completed', { projectId: st.project_id, stageId: c.req.param('sid') }, c.get('name'))
       // Le client peut être prévenu à chaque changement d'étape, d'un clic.
-      if (b.notify_client) report = await sendReport(db, { accountId: ctx.accountId, projectId: st.project_id, userId: ctx.userId,
-        userName: c.get('name'), message: `L'étape « ${st.name} » est maintenant : ${({ todo: 'à venir', in_progress: 'en cours', done: 'terminée', blocked: 'en attente' } as any)[b.status]}.` })
+      // Le message part dans le suivi du client : dans la langue des documents du projet.
+      // tr(l, 'report.stageStatus.todo') tr(l, 'report.stageStatus.in_progress') tr(l, 'report.stageStatus.done') tr(l, 'report.stageStatus.blocked')
+      if (b.notify_client) {
+        const l = await docLocale(db, st.project_id)
+        report = await sendReport(db, { accountId: ctx.accountId, projectId: st.project_id, userId: ctx.userId, userName: c.get('name'),
+          message: tr(l, 'report.stageChanged', { name: st.name, status: tr(l, `report.stageStatus.${b.status}`) }) })
           .catch((e) => ({ error: e.message }))
+      }
     }
     return { report }
   })
@@ -420,7 +434,7 @@ app.post('/:id/comments', async (c) => {
     const mentions = await mentionedUsers(db, b.body)
     const r = (await db.query('insert into comments (account_id, project_id, author_id, body, mentions) values ($1,$2,$3,$4,$5) returning id',
       [ctx.accountId, c.req.param('id'), ctx.userId, b.body, mentions])).rows[0]
-    await notify(db, ctx, mentions, { kind: 'mention', title: `${c.get('name')} vous cite dans « ${p.name} »`, body: b.body.slice(0, 300), link: `/projets/${c.req.param('id')}/activite` })
+    await notify(db, ctx, mentions, { kind: 'mention', title: (l) => tr(l, 'notif.mentionProject', { who: c.get('name'), name: p.name }), body: b.body.slice(0, 300), link: `/projets/${c.req.param('id')}/activite` })
     return r.id
   })
   return c.json({ id }, 201)
@@ -444,7 +458,7 @@ app.post('/:id/updates', async (c) => {
     await logActivity(db, ctx, c.req.param('id'), 'project_update', { health: b.health })
     const members = (await db.query('select user_id from project_members where project_id = $1', [c.req.param('id')])).rows.map((x) => x.user_id)
     const p = (await db.query('select name from projects where id = $1', [c.req.param('id')])).rows[0]
-    await notify(db, ctx, members, { kind: 'project_update', title: `Point d'avancement sur « ${p.name} »`, body: b.body.slice(0, 300), link: `/projets/${c.req.param('id')}` })
+    await notify(db, ctx, members, { kind: 'project_update', title: (l) => tr(l, 'notif.projectUpdate', { name: p.name }), body: b.body.slice(0, 300), link: `/projets/${c.req.param('id')}` })
     return r.id
   })
   return c.json({ id }, 201)

@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { getLocale, t, useT } from '../i18n'
 import { api, ApiError } from '../lib/api'
 import { useApp } from '../lib/store'
 
@@ -23,11 +24,8 @@ type Action = { type: 'navigate'; path: string } | { type: 'confirm'; token: str
 type Reply = { messages: unknown[]; reply: string; actions: Action[] }
 type Saved = { api: unknown[]; items: Item[]; notes: string[] }
 
-const SUGGESTIONS = [
-  'Quelles sont mes tâches en retard ?',
-  'Planifie toutes les étapes de ce projet pour un nouveau site Internet',
-  'Crée une tâche « Relancer le client » pour demain',
-]
+// Les clés des suggestions (shell.assistant.suggest.*), traduites au rendu ; « plan » : le scénario d'Ève (27.10.2026).
+const SUGGESTIONS = ['late', 'plan', 'task']
 
 const storeKey = (userId: string) => `projectlead.assistant.${userId}`
 const load = (userId: string): Saved => {
@@ -43,15 +41,13 @@ const save = (userId: string, s: Saved) => {
 
 const errorMessage = (e: unknown) => {
   if (e instanceof ApiError) {
-    if (e.code === 'assistant_quota') return e.body?.scope === 'account'
-      ? 'Votre entreprise a atteint la limite du jour de l’assistant (400 messages). Réessayez demain.'
-      : 'Vous avez atteint la limite de l’assistant (40 messages par heure). Réessayez un peu plus tard.'
-    if (e.code === 'conversation_too_long') return 'La conversation est devenue trop longue : commencez une nouvelle conversation.'
-    if (e.code === 'assistant_not_configured') return 'L’assistant n’est pas disponible pour le moment.'
-    if (e.status === 401) return 'Votre session a pris fin : reconnectez-vous.'
+    if (e.code === 'assistant_quota') return e.body?.scope === 'account' ? t('shell.assistant.err.quotaAccount') : t('shell.assistant.err.quotaUser')
+    if (e.code === 'conversation_too_long') return t('shell.assistant.err.tooLong')
+    if (e.code === 'assistant_not_configured') return t('shell.assistant.err.notConfigured')
+    if (e.status === 401) return t('shell.assistant.err.session')
   }
-  if (e instanceof TypeError) return 'Pas de connexion : vérifiez le réseau puis réessayez.'
-  return 'L’assistant ne répond pas pour le moment. Réessayez dans un instant.'
+  if (e instanceof TypeError) return t('shell.assistant.err.offline')
+  return t('shell.assistant.err.noAnswer')
 }
 
 /** Mise en forme légère de la réponse (paragraphes, listes, gras, liens internes) : jamais de HTML brut. */
@@ -106,6 +102,7 @@ const Sparkle = ({ className }: { className?: string }) => (
 
 export default function Assistant() {
   const { me, refresh } = useApp()
+  const tr = useT()
   const userId = me?.user.id ?? ''
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<Saved>(() => (userId ? load(userId) : { api: [], items: [], notes: [] }))
@@ -149,11 +146,12 @@ export default function Assistant() {
     setBusy(true)
     const notes = state.notes
     const content = notes.length
-      ? [{ type: 'text', text: `[Note de l’écran, pas une demande : ${notes.join(' ')}]` }, { type: 'text', text }]
+      // Une note pour le modèle (jamais affichée), qui répond dans la langue de l'interface (locale) :
+      ? [{ type: 'text', text: `[Note de l’écran, pas une demande : ${notes.join(' ')}]` }, { type: 'text', text }] // i18n-ok
       : text
     update((s) => ({ ...s, items: [...s.items, { kind: 'user', text }] }))
     try {
-      const r = await api.post<Reply>('/assistant', { messages: [...state.api, { role: 'user', content }], page: loc.pathname + loc.search, locale: 'fr' })
+      const r = await api.post<Reply>('/assistant', { messages: [...state.api, { role: 'user', content }], page: loc.pathname + loc.search, locale: getLocale() })
       const cards: Item[] = r.actions.filter((a): a is Extract<Action, { type: 'confirm' }> => a.type === 'confirm')
         .map((a) => ({ kind: 'confirm', token: a.token, summary: a.summary, state: 'pending' }))
       update((s) => ({ api: r.messages, notes: [], items: [...s.items, { kind: 'assistant', text: r.reply }, ...cards] }))
@@ -173,26 +171,27 @@ export default function Assistant() {
   const confirm = async (card: Extract<Item, { kind: 'confirm' }>) => {
     setCard(card.token, { state: 'busy' })
     try {
-      const r = await api.post<{ ok: boolean; message: string; path: string | null; links?: Link[] }>('/assistant/confirm', { token: card.token })
+      const r = await api.post<{ ok: boolean; message: string; path: string | null; links?: Link[] }>('/assistant/confirm', { token: card.token, locale: getLocale() })
       setCard(card.token, { state: 'done', result: r.message, path: r.path, links: r.links ?? [] })
       // Le résultat (et ses liens) en bas de la carte : à l'écran.
       setTimeout(() => thread.current?.querySelector(`[data-card="${card.token.slice(-16)}"]`)?.scrollIntoView({ block: 'end' }), 50)
-      update((s) => ({ ...s, notes: [...s.notes, `la personne a confirmé « ${card.summary.title} » : c’est enregistré (${r.message}).`] }))
+      // Notes pour le modèle, jamais affichées.
+      update((s) => ({ ...s, notes: [...s.notes, `la personne a confirmé « ${card.summary.title} » : c’est enregistré (${r.message}).`] })) // i18n-ok
       refresh()
       // La page ouverte relit ses données : on y retourne (ou on ouvre l'élément créé).
       window.dispatchEvent(new Event('pl:assistant-saved'))
       if (r.path && !small()) nav(r.path)
     } catch (e) {
       const msg = e instanceof ApiError
-        ? (e.body?.message ?? (e.status === 403 ? 'Cette proposition n’est plus valable (expirée ou déjà utilisée) : redemandez-la.' : errorMessage(e)))
+        ? (e.body?.message ?? (e.status === 403 ? t('shell.assistant.err.expired') : errorMessage(e)))
         : errorMessage(e)
       setCard(card.token, { state: 'failed', result: msg })
-      update((s) => ({ ...s, notes: [...s.notes, `l’action « ${card.summary.title} » a échoué : ${msg}`] }))
+      update((s) => ({ ...s, notes: [...s.notes, `l’action « ${card.summary.title} » a échoué : ${msg}`] })) // i18n-ok
     }
   }
   const cancel = (card: Extract<Item, { kind: 'confirm' }>) => {
     setCard(card.token, { state: 'cancelled' })
-    update((s) => ({ ...s, notes: [...s.notes, `la personne a annulé « ${card.summary.title} » : rien n’a été fait.`] }))
+    update((s) => ({ ...s, notes: [...s.notes, `la personne a annulé « ${card.summary.title} » : rien n’a été fait.`] })) // i18n-ok
   }
   const reset = () => { update(() => ({ api: [], items: [], notes: [] })); setInput(''); field.current?.focus() }
 
@@ -206,7 +205,7 @@ export default function Assistant() {
     <>
       {!(open && small()) && (
         <button ref={bubble} type="button" onClick={() => (open ? close() : setOpen(true))}
-          aria-label={open ? 'Fermer l’Assistant IA' : 'Ouvrir l’Assistant IA'} aria-expanded={open} aria-controls="assistant-ia"
+          aria-label={open ? tr('shell.assistant.close') : tr('shell.assistant.open')} aria-expanded={open} aria-controls="assistant-ia"
           data-assistant-bubble
           className="fixed bottom-4 right-4 z-30 grid h-14 w-14 place-items-center rounded-full bg-brand text-white shadow-[0_6px_20px_rgba(0,0,0,0.22)] transition-transform hover:scale-105 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/40 sm:bottom-6 sm:right-6">
           {open ? <span className="text-2xl leading-none" aria-hidden="true">×</span> : <Sparkle className="h-7 w-7" />}
@@ -219,16 +218,16 @@ export default function Assistant() {
           className="fixed inset-0 z-50 flex flex-col border border-input bg-card sm:inset-auto sm:bottom-24 sm:right-6 sm:h-[600px] sm:max-h-[calc(100dvh-8rem)] sm:w-[400px] sm:shadow-[0_12px_40px_rgba(0,0,0,0.18)]">
           <header className="flex items-center gap-2 border-b border-border bg-brand px-4 py-3 text-white">
             <Sparkle className="h-5 w-5 shrink-0" />
-            <h2 id="assistant-ia-title" className="flex-1 font-display text-base font-bold">Assistant IA</h2>
-            <button type="button" onClick={reset} disabled={busy} className="px-2 py-1 text-xs font-semibold text-white hover:bg-white/15 disabled:opacity-60">Nouvelle conversation</button>
-            <button type="button" onClick={close} aria-label="Fermer l’Assistant IA" className="grid h-8 w-8 place-items-center text-xl hover:bg-white/15">×</button>
+            <h2 id="assistant-ia-title" className="flex-1 font-display text-base font-bold">{tr('shell.assistant.title')}</h2>
+            <button type="button" onClick={reset} disabled={busy} className="px-2 py-1 text-xs font-semibold text-white hover:bg-white/15 disabled:opacity-60">{tr('shell.assistant.new')}</button>
+            <button type="button" onClick={close} aria-label={tr('shell.assistant.close')} className="grid h-8 w-8 place-items-center text-xl hover:bg-white/15">×</button>
           </header>
           <div ref={thread} className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm" aria-live="polite">
             {!state.items.length && (
               <div className="space-y-3 pt-2">
-                <p className="text-muted-foreground">Demandez ce que vous voulez à ProjectLead : retrouver une information, ouvrir un écran, planifier un projet, créer des tâches, saisir du temps… Rien n’est enregistré sans votre confirmation.</p>
+                <p className="text-muted-foreground">{tr('shell.assistant.intro')}</p>
                 <ul className="space-y-2">
-                  {SUGGESTIONS.map((s) => (
+                  {SUGGESTIONS.map((k) => tr(`shell.assistant.suggest.${k}`)).map((s) => (
                     <li key={s}><button type="button" onClick={() => send(s)} className="w-full border border-input bg-[#f7f5f3] px-3 py-2 text-left hover:border-accent">{s}</button></li>
                   ))}
                 </ul>
@@ -242,7 +241,8 @@ export default function Assistant() {
                 {it.kind === 'confirm' && (
                   <div className="border border-accent bg-card" data-assistant-confirm={it.state} data-card={it.token.slice(-16)}>
                     <p className="border-b border-border bg-accent-veil px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wide text-accent-dark">
-                      {it.state === 'done' ? 'Confirmé' : it.state === 'cancelled' ? 'Annulé' : it.state === 'failed' ? 'Non enregistré' : 'À confirmer'}</p>
+                      {it.state === 'done' ? tr('shell.assistant.card.done') : it.state === 'cancelled' ? tr('shell.assistant.card.cancelled')
+                        : it.state === 'failed' ? tr('shell.assistant.card.failed') : tr('shell.assistant.card.pending')}</p>
                     <div className="px-3 py-2">
                       <p className="font-bold">{it.summary.title}</p>
                       <ul className="mt-1 space-y-0.5 text-[13px]">{it.summary.lines.map((l, j) => <li key={j} className="[overflow-wrap:anywhere]">{l}</li>)}</ul>
@@ -255,23 +255,23 @@ export default function Assistant() {
                               const at = l.indexOf(' · ')
                               return <li key={k} className="[overflow-wrap:anywhere]">{at > 0 ? <><span className="font-semibold text-foreground">{l.slice(0, at)}</span>{l.slice(at)}</> : l}</li>
                             })}
-                            {Boolean(g.more) && <li className="text-muted-foreground">+ {g.more} autre{g.more! > 1 ? 's' : ''}</li>}
+                            {Boolean(g.more) && <li className="text-muted-foreground">{tr('shell.assistant.card.more', { n: g.more })}</li>}
                           </ul>
                         </div>
                       ))}
                       {it.result && <p className={clsx('mt-2 text-[13px] font-semibold', it.state === 'failed' ? 'text-late' : 'text-won')}>{it.result}</p>}
                       {it.state === 'done' && (it.links?.length ? (
                         <p className="mt-1 flex flex-wrap gap-x-3 text-[13px] font-semibold">
-                          <span className="text-muted-foreground">Voir :</span>
-                          {it.links.map((l) => <Link key={l.path} to={l.path} className="text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>{l.label}</Link>)}
+                          <span className="text-muted-foreground">{tr('shell.assistant.card.view')}</span>
+                          {it.links.map((l) => <Link key={l.path} to={l.path} className="text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>{tr(`project.tabs.${l.label}`)}</Link>)}
                         </p>
-                      ) : it.path && <Link to={it.path} className="mt-1 inline-block text-[13px] font-semibold text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>Ouvrir</Link>)}
+                      ) : it.path && <Link to={it.path} className="mt-1 inline-block text-[13px] font-semibold text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>{tr('shell.assistant.card.open')}</Link>)}
                       {(it.state === 'pending' || it.state === 'busy') && (
                         <div className="mt-3 flex gap-2">
                           <button type="button" disabled={it.state === 'busy'} onClick={() => confirm(it)}
-                            className="bg-brand px-3 py-1.5 font-bold text-white hover:bg-accent-dark disabled:opacity-60">{it.state === 'busy' ? 'Enregistrement…' : 'Confirmer'}</button>
+                            className="bg-brand px-3 py-1.5 font-bold text-white hover:bg-accent-dark disabled:opacity-60">{it.state === 'busy' ? tr('shell.assistant.card.saving') : tr('common.confirm')}</button>
                           <button type="button" disabled={it.state === 'busy'} onClick={() => cancel(it)}
-                            className="border border-input px-3 py-1.5 font-semibold hover:bg-muted disabled:opacity-60">Annuler</button>
+                            className="border border-input px-3 py-1.5 font-semibold hover:bg-muted disabled:opacity-60">{tr('common.cancel')}</button>
                         </div>
                       )}
                     </div>
@@ -279,13 +279,13 @@ export default function Assistant() {
                 )}
               </Fragment>
             ))}
-            {busy && <p className="flex items-center gap-2 text-muted-foreground" role="status"><span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />L’assistant travaille…</p>}
+            {busy && <p className="flex items-center gap-2 text-muted-foreground" role="status"><span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />{tr('shell.assistant.working')}</p>}
           </div>
           <form className="flex items-end gap-2 border-t border-border p-3" onSubmit={(e) => { e.preventDefault(); send(input) }}>
             <textarea ref={field} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={busy} rows={2} maxLength={4000}
-              aria-label="Votre demande à l’Assistant IA" placeholder="Votre demande… (Entrée pour envoyer)"
+              aria-label={tr('shell.assistant.inputLabel')} placeholder={tr('shell.assistant.placeholder')}
               className="max-h-40 min-h-[44px] flex-1 resize-none border border-input bg-[#f7f5f3] px-3 py-2 text-sm focus:border-accent focus:outline-none disabled:opacity-60" />
-            <button type="submit" disabled={busy || !input.trim()} className="h-[44px] bg-brand px-4 font-bold text-white hover:bg-accent-dark disabled:opacity-50">Envoyer</button>
+            <button type="submit" disabled={busy || !input.trim()} className="h-[44px] bg-brand px-4 font-bold text-white hover:bg-accent-dark disabled:opacity-50">{tr('shell.assistant.send')}</button>
           </form>
         </section>
       )}

@@ -2,10 +2,10 @@
 
 export type Me = {
   user: { id: string; email: string; name: string; color: string; role: 'admin' | 'manager' | 'member'; hourly_rate_cents: number
-          capacity_minutes: number; lead_linked: boolean }
+          capacity_minutes: number; lead_linked: boolean; locale?: string | null }
   /** `lead_org` : l'organisation ERPlead de l'entreprise (null pour une entreprise d'avant le Compte Lead). */
   account: { id: string; name: string; plan: string; timezone: string; currency: string; week_hours: number; inbound_token: string
-             lead_org: string | null }
+             lead_org: string | null; locale?: string }
   unread: number; inbox: number
   running: { id: string; started_at: string; project_id: string; project_name: string; task_id: string | null; task_title: string | null } | null
   features: { leadId: boolean; mailboxes: boolean; crmlead: boolean; invoicelead: boolean; assistant?: boolean }
@@ -56,7 +56,7 @@ export type ProjectSummary = {
   status: 'lead' | 'planned' | 'active' | 'on_hold' | 'done' | 'cancelled'; health: 'on_track' | 'at_risk' | 'off_track'
   priority: string; visibility: 'account' | 'members'; color: string; start_date: string | null; due_date: string | null
   budget_minutes: number | null; budget_cents: number | null; billing_mode: 'none' | 'hourly' | 'retainer' | 'fixed' | 'milestone'
-  hourly_rate_cents: number | null; retainer_cents: number | null; fixed_cents: number | null; currency: string; vat_code: string
+  hourly_rate_cents: number | null; retainer_cents: number | null; fixed_cents: number | null; currency: string; vat_code: string; doc_locale?: string | null
   is_template: boolean; source: string; portal_enabled: boolean; portal_show_tasks: boolean; portal_show_time: boolean
   update_frequency: 'none' | 'weekly' | 'biweekly' | 'monthly'; last_update_sent_at: string | null; archived_at: string | null
   tasks_total: number; tasks_done: number; tasks_late: number; minutes_spent: number; billable_cents: number

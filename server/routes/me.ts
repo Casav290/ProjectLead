@@ -8,11 +8,13 @@ import { planOf } from '../lib/plans.js'
 import { EMAIL_VISIBLE } from './mail.js'
 import { assistantConfigured } from './assistant.js'
 import { linkState } from '../lib/links.js'
+import { LOCALES } from '../lib/i18n.js'
 
 const app = router()
 
 app.get('/me', async (c) => tx(c, async (db, ctx) => {
   const me = (await db.query(
+    // i18n-ok
     `select u.id, u.email, u.name, u.color, u.locale, (u.lead_sub is not null) as lead_linked,
             au.role, au.hourly_rate_cents, au.capacity_minutes, au.ical_token
        from users u join account_users au on au.user_id = u.id and au.account_id = app_account()
@@ -47,6 +49,16 @@ app.patch('/me', async (c) => {
   return c.json({ ok: true })
 })
 
+/**
+ * La langue de la personne (sélecteur de langue de chaque page, 27.10.2026) : notifications, e-mails qu'elle reçoit,
+ * export, Stripe. Session requise (401 sans, par la garde de /api/*).
+ */
+app.post('/me/locale', async (c) => {
+  const b = await body(c, z.object({ locale: z.enum(LOCALES) }))
+  await tx(c, (db) => db.query('update users set locale = $1 where id = app_user()', [b.locale]))
+  return c.json({ ok: true, locale: b.locale })
+})
+
 app.post('/me/password', async (c) => {
   const b = await body(c, z.object({ current: z.string().max(200).optional(), next: z.string().min(10).max(200) }))
   const ctx = c.get('ctx')
@@ -63,12 +75,15 @@ app.patch('/account', async (c) => {
   const b = await body(c, z.object({
     name: z.string().trim().min(1).max(200).optional(), timezone: z.string().max(60).optional(),
     currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), week_hours: z.number().min(1).max(80).optional(),
+    // La langue par défaut des documents de l'entreprise (suivi client, page de suivi, factures) : un projet peut en
+    // choisir une autre (`projects.doc_locale`).
+    locale: z.enum(LOCALES).optional(),
   }))
   if (b.timezone) { try { new Intl.DateTimeFormat('en', { timeZone: b.timezone }) } catch { throw new HttpError(400, 'invalid_timezone') } }
   await tx(c, (db) => db.query(
     `update accounts set name = coalesce($1, name), timezone = coalesce($2, timezone), currency = coalesce($3, currency),
-            week_hours = coalesce($4, week_hours) where id = app_account()`,
-    [b.name ?? null, b.timezone ?? null, b.currency ?? null, b.week_hours ?? null]))
+            week_hours = coalesce($4, week_hours), locale = coalesce($5, locale) where id = app_account()`,
+    [b.name ?? null, b.timezone ?? null, b.currency ?? null, b.week_hours ?? null, b.locale ?? null]))
   return c.json({ ok: true })
 })
 

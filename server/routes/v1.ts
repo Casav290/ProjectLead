@@ -16,7 +16,7 @@ const app = new Hono<V1Env>()
 app.use('*', async (c, next) => {
   const m = c.req.header('authorization')?.match(/^Bearer\s+(pl_[\w-]+)$/)
   if (!m) return c.json({ error: 'unauthenticated' }, 401)
-  const k = await anon(async (db) => (await db.query(
+  const k = await anon(async (db) => (await db.query( // i18n-ok
     `update api_keys k set last_used_at = now() from account_users au
       where k.key_hash = $1 and k.revoked_at is null and au.account_id = k.account_id and au.user_id = k.user_id and au.active
       returning k.account_id, k.user_id, au.role`, [createHash('sha256').update(m[1]).digest('hex')])).rows[0])

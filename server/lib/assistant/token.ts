@@ -121,6 +121,7 @@ const RULES: Rule[] = [
   r('POST', '/api/notifications/read', 'tx'),
   // réglages
   r('PATCH', '/api/me', 'tx'),
+  r('POST', '/api/me/locale', 'tx'),
   r('PATCH', '/api/account', 'tx'),
   r('PATCH', '/api/integrations/settings', 'tx'),
   r('PATCH', '/api/mail/mailboxes/:id', 'tx', (b) => has(b, 'shared')),

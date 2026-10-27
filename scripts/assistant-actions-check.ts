@@ -92,10 +92,10 @@ class Client {
 const q = async (sql: string, args: unknown[] = []) => (await pool.query(sql, args)).rows
 const n = async (sql: string, args: unknown[] = []) => Number((await pool.query(sql, args)).rows[0].n)
 /** Une demande au faux modèle : un outil, une entrée. Rend la réponse et la carte éventuelle. */
-async function ask(cl: Client, tool: string, input: unknown) {
+async function ask(cl: Client, tool: string, input: unknown, locale = 'fr') {
   let arg = JSON.stringify(input)
   if (arg.length > 6000) { const k = `in${fakeInputs.size}`; fakeInputs.set(k, input); arg = `#${k}` }
-  const r = await cl.post('/api/assistant', { messages: [{ role: 'user', content: `FAKE:${tool}:${arg}` }], page: '/projets', locale: 'fr' })
+  const r = await cl.post('/api/assistant', { messages: [{ role: 'user', content: `FAKE:${tool}:${arg}` }], page: '/projets', locale })
   const card = r.body?.actions?.find((a: any) => a.type === 'confirm') ?? null
   return { r, card, reply: String(r.body?.reply ?? '') }
 }
@@ -227,7 +227,7 @@ r = await ann.post('/api/assistant/confirm', { token: plan.card.token })
 check('Ann confirme → 200, une ligne dit ce qui a été créé', r.status === 200 && r.body.ok
   && r.body.message === 'Planifier « Site Internet TEST » : fait. Créé : 6 étapes, 10 tâches (dont 2 jalons), 9 dépendances, 3 points de contrôle ; dates du projet posées.', r.body)
 check('après « Confirmer » : la page Gantt du projet s’ouvre, liens Étapes · Liste · Gantt', r.body.path === `/projets/${site}/gantt`
-  && JSON.stringify(r.body.links.map((l: any) => l.label)) === '["Étapes","Liste","Gantt"]' && r.body.links[1].path === `/projets/${site}/liste`, r.body)
+  && JSON.stringify(r.body.links.map((l: any) => l.label)) === '["stages","list","gantt"]' && r.body.links[1].path === `/projets/${site}/liste`, r.body)
 const stages = await q('select name, start_date, due_date, position from stages where project_id = $1 order by position', [site])
 check('en base : les 6 étapes, dans l’ordre, avec les dates attendues', JSON.stringify(stages.map((s) => [s.name, s.start_date, s.due_date]))
   === JSON.stringify(EXPECT_STAGES), stages)
@@ -272,6 +272,21 @@ check('nouveau projet + plan confirmé : projet planifié 02.11 → 17.11, étap
   && npRow.status === 'planned' && npRow.start_date === '2026-11-02' && npRow.due_date === '2026-11-17'
   && JSON.stringify((await q('select name, start_date, due_date from stages where project_id = $1 order by position', [npId])).map((x) => [x.name, x.start_date, x.due_date]))
     === '[["Cadrage","2026-11-02","2026-11-03"],["Réalisation","2026-11-04","2026-11-17"]]', { r: r.body, npRow })
+
+// Les cinq langues : la même carte dans la langue de l'interface (ici l'allemand), le résultat aussi.
+const siteDe = (await ann.post('/api/projects', { name: 'Website TEST', status: 'active' })).body.id
+const de = await ask(ann, 'propose_project_plan', { ...PLAN, project_id: siteDe }, 'de')
+check('langue de l’interface (de) : carte en allemand', de.card?.summary.title === '«Website TEST» planen'
+  && de.card.summary.lines.some((l: string) => l.includes('Arbeitstage (Montag bis Freitag)'))
+  && de.card.summary.lines.some((l: string) => l.startsWith('6 Phasen, 10 Aufgaben, davon 2 Meilensteine, 9 Abhängigkeiten'))
+  && de.card.summary.groups[2].lines[0].includes('(Meilenstein)') && de.card.summary.groups[1].lines.some((l: string) => l.includes('nach «Arborescence»')),
+  { t: de.card?.summary.title, l: de.card?.summary.lines, g: de.card?.summary.groups?.[1] })
+r = await ann.post('/api/assistant/confirm', { token: de.card.token, locale: 'de' })
+check('langue de l’interface (de) : la ligne « fait » en allemand', r.status === 200
+  && r.body.message === '«Website TEST» planen: erledigt. Erstellt: 6 Phasen, 10 Aufgaben (davon 2 Meilensteine), 9 Abhängigkeiten, 3 Checklistenpunkte; Projektdaten gesetzt.', r.body)
+const en = await ask(ann, 'propose_create_task', { project_id: siteDe, title: 'Call the client', due_date: '2026-11-03' }, 'en')
+check('langue de l’interface (en) : carte en anglais', en.card?.summary.title === 'Create a task' && en.card.summary.lines[0] === 'Task: “Call the client”'
+  && en.card.summary.lines.some((l: string) => l.startsWith('Due: Tue 3 Nov')), en.card?.summary)
 
 // Le plan d'un projet d'une autre entreprise ou d'un projet invisible : pas de carte.
 const outside = await ask(ann, 'propose_project_plan', { ...PLAN, project_id: eveProject })

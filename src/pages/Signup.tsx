@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useT } from '../i18n'
 import { api, errorText } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Button, Input, Spinner } from '../components/ui'
@@ -14,6 +15,7 @@ import { leadStart } from './Login'
  */
 export default function Signup() {
   const { refresh } = useApp()
+  const t = useT()
   const [f, setF] = useState({ name: '', email: '', password: '', company: '' })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -26,20 +28,20 @@ export default function Signup() {
     setBusy(true); setError(null)
     try { await api.post('/auth/signup', f); await refresh() } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
-  if (leadId !== false) return <AuthShell><Spinner label="Ouverture du Compte Lead…" /></AuthShell>
+  if (leadId !== false) return <AuthShell><Spinner label={t('shell.signup.opening')} /></AuthShell>
   return (
-    <AuthShell title="Créer un compte">
+    <AuthShell title={t('shell.signup.title')}>
       <form onSubmit={submit} className="space-y-4">
-        <AuthField id="name" label="Votre nom"><Input id="name" required autoComplete="name" value={f.name} onChange={set('name')} className="h-10" /></AuthField>
-        <AuthField id="company" label="Entreprise"><Input id="company" required autoComplete="organization" value={f.company} onChange={set('company')} className="h-10" /></AuthField>
-        <AuthField id="email" label="E-mail"><Input id="email" type="email" required autoComplete="email" value={f.email} onChange={set('email')} className="h-10" /></AuthField>
-        <AuthField id="password" label="Mot de passe" hint="10 caractères au moins.">
+        <AuthField id="name" label={t('shell.auth.yourName')}><Input id="name" required autoComplete="name" value={f.name} onChange={set('name')} className="h-10" /></AuthField>
+        <AuthField id="company" label={t('shell.signup.company')}><Input id="company" required autoComplete="organization" value={f.company} onChange={set('company')} className="h-10" /></AuthField>
+        <AuthField id="email" label={t('shell.auth.email')}><Input id="email" type="email" required autoComplete="email" value={f.email} onChange={set('email')} className="h-10" /></AuthField>
+        <AuthField id="password" label={t('shell.auth.password')} hint={t('shell.auth.passwordHint')}>
           <Input id="password" type="password" required minLength={10} autoComplete="new-password" value={f.password} onChange={set('password')} className="h-10" />
         </AuthField>
         {error && <p role="alert" className="text-sm text-late">{error}</p>}
-        <Button type="submit" variant="primary" className="h-10 w-full" disabled={busy}>{busy ? 'Création…' : 'Créer mon espace'}</Button>
+        <Button type="submit" variant="primary" className="h-10 w-full" disabled={busy}>{busy ? t('shell.signup.creating') : t('shell.signup.submit')}</Button>
       </form>
-      <AuthSwitch>Déjà un compte ? <Link to="/login" className={authLink}>Se connecter</Link></AuthSwitch>
+      <AuthSwitch>{t('shell.signup.haveAccount')} <Link to="/login" className={authLink}>{t('shell.login.submit')}</Link></AuthSwitch>
     </AuthShell>
   )
 }

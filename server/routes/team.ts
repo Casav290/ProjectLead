@@ -5,6 +5,7 @@ import { body, email, HttpError, notFound, requireRole, router, tx, uuid } from 
 import { htmlParagraphs, layout, sendMail } from '../lib/email.js'
 import { assertStillAdmin, lockAdmins } from '../lib/admins.js'
 import { assertSeatFree } from '../lib/plans.js'
+import { asLocale, LOCALES, tr } from '../lib/i18n.js'
 
 /**
  * L'équipe : les personnes de l'entreprise, leurs rôles, leurs taux, leurs équipes, et les places de la formule
@@ -17,6 +18,7 @@ app.get('/', async (c) => tx(c, async (db) => {
   // `lead_disabled` : partie de l'entreprise dans le Compte Lead (back-channel « disabled »), pas retirée ici. La dernière
   // venue des autres n'est donnée qu'à l'administrateur (comme le coût horaire) : chacun voit la sienne.
   const members = (await db.query(
+    // i18n-ok
     `select u.id, u.name, u.email, u.color, au.role, au.active, au.lead_disabled,
             case when app_role() = 'admin' or u.id = app_user() then au.last_seen_at end as last_seen_at,
             au.hourly_rate_cents, au.cost_rate_cents, au.capacity_minutes,
@@ -32,13 +34,19 @@ app.get('/', async (c) => tx(c, async (db) => {
   return c.json({ members, teams, invitations })
 }))
 
-app.post('/invite', async (c) => {
+/**
+ * Inviter une personne. `locale` : la langue de l'e-mail d'invitation (défaut : celle de l'interface de qui invite) ; le
+ * lien ouvre la page d'invitation dans cette langue (`?lang=`). `/invitations` : même route, sous le nom de l'API.
+ */
+const inviteRoute = async (c: any) => {
   requireRole(c, 'admin', 'manager')
-  const b = await body(c, z.object({ email, role: z.enum(['admin', 'manager', 'member']).default('member') }))
+  const b = await body(c, z.object({ email, role: z.enum(['admin', 'manager', 'member']).default('member'), locale: z.enum(LOCALES).optional() }))
+  const l = b.locale ?? asLocale(c.get('locale'))
   if (b.role === 'admin') requireRole(c, 'admin')
   const token = newToken()
   const account = await tx(c, async (db, ctx) => {
     const already = (await db.query(
+      // i18n-ok
       `select 1 from account_users au join users u on u.id = au.user_id where lower(u.email) = $1 and au.active`, [b.email])).rowCount
     if (already) throw new HttpError(409, 'already_member')
     // Une place de la formule par personne (invitations en attente comprises).
@@ -48,12 +56,16 @@ app.post('/invite', async (c) => {
     return (await db.query('select name from accounts where id = app_account()')).rows[0].name as string
   })
   const link = `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/invitation/${token}`
-  const text = `${c.get('name')} vous invite à rejoindre ${account} sur ProjectLead.\n\nAcceptez l'invitation (valable 14 jours) :\n${link}`
-  await sendMail({ accountId: c.get('ctx').accountId, to: [b.email], subject: `Invitation à rejoindre ${account} sur ProjectLead`,
-    text, html: layout(`Rejoindre ${account}`, htmlParagraphs(`${c.get('name')} vous invite à rejoindre ${account} sur ProjectLead.`),
-      { label: "Accepter l'invitation", url: link }), fromUserId: c.get('ctx').userId, fromName: c.get('name') })
+  const linkLang = `${link}?lang=${l}`
+  const intro = tr(l, 'invite.text', { who: c.get('name'), account })
+  const text = `${intro}\n\n${tr(l, 'invite.accept', { url: linkLang })}`
+  await sendMail({ accountId: c.get('ctx').accountId, to: [b.email], subject: tr(l, 'invite.subject', { account }),
+    text, html: layout(tr(l, 'invite.title', { account }), htmlParagraphs(intro),
+      { label: tr(l, 'invite.button'), url: linkLang }, l), fromUserId: c.get('ctx').userId, fromName: c.get('name') })
   return c.json({ ok: true, link }, 201)
-})
+}
+app.post('/invite', inviteRoute)
+app.post('/invitations', inviteRoute)
 
 app.delete('/invitations/:id', async (c) => {
   requireRole(c, 'admin', 'manager')

@@ -1,6 +1,8 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Avatar, Button, Empty, ErrorNote, Spinner, Textarea, toast } from '../../components/ui'
+import { rich } from '../../components/project/shared'
+import { getLocale, t, useT } from '../../i18n'
 import { api, errorText } from '../../lib/api'
 import { fmtDate, fmtDateTime, fmtMinutes, fmtRelative, HEALTH_LABEL, money, PROJECT_ROLE_LABEL, STAGE_LABEL, STATUS_LABEL } from '../../lib/format'
 import { useApp, useLoad } from '../../lib/store'
@@ -10,37 +12,48 @@ type Props = { project: ProjectDetail; onChanged: () => void }
 type Item = { type: 'activity' | 'comment'; id: string; kind: string; data: any; body: string | null; task_id: string | null
   created_at: string; actor_name: string | null; actor_color: string | null; task_title: string | null }
 
-const q = (s?: string) => (s ? `« ${s} »` : '')
+const q = (s?: string) => (s ? t('ptabs.activity.quoted', { s }) : '')
+/** Un libellé en minuscule au milieu d'une phrase (sauf en allemand, où les noms gardent leur majuscule). */
+const lower = (s?: string) => (s && getLocale() !== 'de' ? s.toLowerCase() : s)
 
-/** Une phrase lisible pour chaque genre d'événement du fil. */
+/** Une phrase lisible pour chaque genre d'événement du fil (appelée au rendu : suit la langue). */
 function describe(it: Item, people: Map<string, string>): ReactNode {
   const d = it.data ?? {}
-  const task = (t?: string) => it.task_id
-    ? <Link to={`?tache=${it.task_id}`} className="font-semibold text-accent hover:underline">{q(t)}</Link> : <b>{q(t)}</b>
+  const task = (title?: string) => it.task_id
+    ? <Link to={`?tache=${it.task_id}`} className="font-semibold text-accent hover:underline">{q(title)}</Link> : <b>{q(title)}</b>
+  const tk = () => task(d.title ?? it.task_title)
+  const at = (iso?: string) => (iso ? t('ptabs.activity.onDate', { date: fmtDateTime(iso) }) : '')
   switch (it.kind) {
-    case 'project_created': return 'a créé le projet'
-    case 'project_status': return <>a passé le projet de {STATUS_LABEL[d.from] ?? d.from} à <b>{STATUS_LABEL[d.to] ?? d.to}</b></>
-    case 'project_update': return <>a publié un point d’avancement : <b>{HEALTH_LABEL[d.health] ?? d.health}</b></>
-    case 'task_created': return <>a créé la tâche {task(d.title ?? it.task_title)}</>
-    case 'task_completed': return <>a terminé la tâche {task(d.title ?? it.task_title)}</>
-    case 'task_reopened': return <>a rouvert la tâche {task(d.title ?? it.task_title)}</>
-    case 'task_moved': return <>a déplacé {task(d.title ?? it.task_title)} dans la colonne {q(d.column)}</>
-    case 'task_due': return <>a fixé l’échéance de {task(d.title ?? it.task_title)} {d.due_date ? `au ${fmtDate(d.due_date)}` : '(retirée)'}</>
-    case 'task_deleted': return <>a supprimé la tâche {q(d.title)}</>
-    case 'stage_created': return <>a ajouté l’étape <b>{q(d.name)}</b></>
-    case 'stage_status': return <>a passé l’étape <b>{q(d.name)}</b> à <b>{(STAGE_LABEL[d.to] ?? d.to)?.toLowerCase()}</b></>
-    case 'stage_done': return <>Étape <b>{q(d.name)}</b> terminée{d.automatic ? ' automatiquement (toutes ses tâches sont faites)' : ''}</>
-    case 'member_added': return <>a ajouté {people.get(d.user_id) ?? 'une personne'} comme {(PROJECT_ROLE_LABEL[d.role] ?? 'intervenant').toLowerCase()}</>
-    case 'file_added': return <>a déposé le fichier <b>{d.filename}</b></>
-    case 'time_logged': return <>a chronométré {fmtMinutes(d.minutes)}</>
-    case 'email_in': return <>Email reçu{d.from ? ` de ${d.from}` : ''} : <b>{d.subject || '(sans objet)'}</b></>
-    case 'email_out': return <>a écrit au client : <b>{d.subject}</b></>
-    case 'client_report': return <>{d.automatic ? 'Suivi envoyé automatiquement' : 'a envoyé le suivi'} au client ({(d.recipients ?? []).join(', ')})</>
-    case 'client_message': return <>Message du client {d.name}{d.email ? ` (${d.email})` : ''} depuis sa page de suivi</>
-    case 'invoice_created': return <>Facture créée dans InvoiceLead{d.period ? ` pour ${d.period}` : ''}{d.amount_cents != null ? ` : ${money(d.amount_cents)}` : ''}</>
-    case 'event_created': return <>a planifié <b>{q(d.title)}</b>{d.starts_at ? ` le ${fmtDateTime(d.starts_at)}` : ''}</>
-    case 'booking': return <>{d.name} a réservé un rendez-vous{d.starts_at ? ` le ${fmtDateTime(d.starts_at)}` : ''}</>
-    case 'from_crmlead': return 'Projet créé depuis une affaire gagnée dans CRMlead'
+    case 'project_created': return t('ptabs.activity.projectCreated')
+    case 'project_status': return rich(t('ptabs.activity.projectStatus', { from: STATUS_LABEL[d.from] ?? d.from }), { to: <b>{STATUS_LABEL[d.to] ?? d.to}</b> })
+    case 'project_update': return rich(t('ptabs.activity.projectUpdate'), { health: <b>{HEALTH_LABEL[d.health] ?? d.health}</b> })
+    case 'task_created': return rich(t('ptabs.activity.taskCreated'), { task: tk() })
+    case 'task_completed': return rich(t('ptabs.activity.taskCompleted'), { task: tk() })
+    case 'task_reopened': return rich(t('ptabs.activity.taskReopened'), { task: tk() })
+    case 'task_moved': return rich(t('ptabs.activity.taskMoved', { column: q(d.column) }), { task: tk() })
+    case 'task_due': return rich(d.due_date ? t('ptabs.activity.taskDue', { date: fmtDate(d.due_date) }) : t('ptabs.activity.taskDueRemoved'), { task: tk() })
+    case 'task_deleted': return t('ptabs.activity.taskDeleted', { title: q(d.title) })
+    case 'stage_created': return rich(t('ptabs.activity.stageCreated'), { name: <b>{q(d.name)}</b> })
+    case 'stage_status': return rich(t('ptabs.activity.stageStatus'), { name: <b>{q(d.name)}</b>, status: <b>{lower(STAGE_LABEL[d.to] ?? d.to)}</b> })
+    case 'stage_done': return rich(d.automatic ? t('ptabs.activity.stageDoneAuto') : t('ptabs.activity.stageDone'), { name: <b>{q(d.name)}</b> })
+    case 'member_added': return t('ptabs.activity.memberAdded', { person: people.get(d.user_id) ?? t('ptabs.activity.somebody'),
+      role: lower(PROJECT_ROLE_LABEL[d.role] ?? PROJECT_ROLE_LABEL.member) })
+    case 'file_added': return rich(t('ptabs.activity.fileAdded'), { name: <b>{d.filename}</b> })
+    case 'time_logged': return t('ptabs.activity.timeLogged', { duration: fmtMinutes(d.minutes) })
+    case 'email_in': return rich(d.from ? t('ptabs.activity.emailInFrom', { from: d.from }) : t('ptabs.activity.emailIn'),
+      { subject: <b>{d.subject || t('ptabs.emails.noSubject')}</b> })
+    case 'email_out': return rich(t('ptabs.activity.emailOut'), { subject: <b>{d.subject}</b> })
+    case 'client_report': {
+      const recipients = (d.recipients ?? []).join(', ')
+      return d.automatic ? t('ptabs.activity.clientReportAuto', { recipients }) : t('ptabs.activity.clientReport', { recipients })
+    }
+    case 'client_message': return d.email ? t('ptabs.activity.clientMessageEmail', { name: d.name, email: d.email }) : t('ptabs.activity.clientMessage', { name: d.name })
+    case 'invoice_created': return t('ptabs.activity.invoiceCreated', {
+      period: d.period ? t('ptabs.activity.invoicePeriod', { period: d.period }) : '',
+      amount: d.amount_cents != null ? t('ptabs.activity.invoiceAmount', { amount: money(d.amount_cents) }) : '' })
+    case 'event_created': return rich(t('ptabs.activity.eventCreated', { when: at(d.starts_at) }), { title: <b>{q(d.title)}</b> })
+    case 'booking': return t('ptabs.activity.booking', { name: d.name, when: at(d.starts_at) })
+    case 'from_crmlead': return t('ptabs.activity.fromCrmlead')
     default: return it.kind.replace(/_/g, ' ')
   }
 }
@@ -53,6 +66,7 @@ function Body({ text, names }: { text: string; names: string[] }) {
 }
 
 function Composer({ project, onPosted }: { project: ProjectDetail; onPosted: () => void }) {
+  const t = useT()
   const { team } = useApp()
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
@@ -80,7 +94,7 @@ function Composer({ project, onPosted }: { project: ProjectDetail; onPosted: () 
   }
   return (
     <form onSubmit={submit} className="relative border border-border bg-card p-3">
-      <Textarea ref={ref} rows={3} value={body} placeholder="Écrire à l’équipe… tapez @ pour citer quelqu’un" aria-label="Commentaire"
+      <Textarea ref={ref} rows={3} value={body} placeholder={t('ptabs.activity.placeholder')} aria-label={t('ptabs.activity.comment')}
         onChange={(e) => onInput(e.target.value, e.target.selectionStart)}
         onKeyDown={(e) => {
           if (mention && matches.length && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pick(matches[0].name) }
@@ -99,8 +113,8 @@ function Composer({ project, onPosted }: { project: ProjectDetail; onPosted: () 
         </ul>
       )}
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="hidden text-xs text-muted-foreground sm:inline">Les personnes citées sont prévenues.</span>
-        <Button type="submit" variant="primary" size="sm" disabled={busy || !body.trim()}>Publier</Button>
+        <span className="hidden text-xs text-muted-foreground sm:inline">{t('ptabs.activity.mentionHint')}</span>
+        <Button type="submit" variant="primary" size="sm" disabled={busy || !body.trim()}>{t('ptabs.activity.publish')}</Button>
       </div>
     </form>
   )
@@ -108,6 +122,7 @@ function Composer({ project, onPosted }: { project: ProjectDetail; onPosted: () 
 
 /** Le fil du projet : ce qui s'est passé, et les échanges de l'équipe. */
 export default function Activity({ project }: Props) {
+  const t = useT()
   const { team } = useApp()
   const { data, error, reload } = useLoad<Item[]>(`/projects/${project.id}/activity`)
   const people = new Map(team.map((m) => [m.id, m.name]))
@@ -116,14 +131,14 @@ export default function Activity({ project }: Props) {
     <div className="mx-auto max-w-3xl space-y-4">
       <Composer project={project} onPosted={reload} />
       <ErrorNote error={error} />
-      {!data ? <Spinner /> : !data.length ? <Empty title="Rien pour l’instant">Les tâches, étapes, emails et échanges apparaîtront ici.</Empty> : (
+      {!data ? <Spinner /> : !data.length ? <Empty title={t('ptabs.activity.emptyTitle')}>{t('ptabs.activity.emptyBody')}</Empty> : (
         <ol className="border border-border bg-card">
           {data.map((it) => it.type === 'comment' ? (
             <li key={`c${it.id}`} className="flex gap-3 border-b border-border px-4 py-3 last:border-0">
-              <Avatar person={{ name: it.actor_name ?? 'Client', color: it.actor_color ?? '#0284c7' }} size={28} />
+              <Avatar person={{ name: it.actor_name ?? t('ptabs.activity.client'), color: it.actor_color ?? '#0284c7' }} size={28} />
               <div className="min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground"><b className="text-foreground">{it.actor_name ?? 'Client'}</b>
-                  {it.task_title && <> sur <Link to={`?tache=${it.task_id}`} className="font-semibold text-accent hover:underline">{it.task_title}</Link></>}
+                <p className="text-xs text-muted-foreground"><b className="text-foreground">{it.actor_name ?? t('ptabs.activity.client')}</b>
+                  {it.task_title && <> {rich(t('ptabs.activity.onTask'), { task: <Link to={`?tache=${it.task_id}`} className="font-semibold text-accent hover:underline">{it.task_title}</Link> })}</>}
                   {' · '}<time dateTime={it.created_at} title={fmtDateTime(it.created_at)}>{fmtRelative(it.created_at)}</time></p>
                 <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]"><Body text={it.body ?? ''} names={names} /></p>
               </div>

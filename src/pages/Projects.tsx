@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import NewProjectDialog from '../components/project/NewProjectDialog'
 import { AvatarStack, Button, Checkbox, ColorDot, Empty, ErrorNote, HealthBadge, Input, PageHeader, Progress, Select, Spinner,
          StageBadge, StatusBadge, TableStack } from '../components/ui'
+import { useT } from '../i18n'
 import { api } from '../lib/api'
 import { fmtDate, fmtMinutes, STATUS_LABEL, today } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
@@ -15,23 +16,25 @@ const isLate = (p: ProjectSummary) => Boolean(p.due_date && p.due_date < today()
 
 /** Le temps passé face au budget en heures, en rouge au-delà. */
 function TimeBudget({ p, bar }: { p: ProjectSummary; bar?: boolean }) {
+  const t = useT()
   if (!p.budget_minutes) return <span className="tabular-nums">{fmtMinutes(p.minutes_spent)}</span>
   const over = p.minutes_spent > p.budget_minutes
   return (
     <span className="inline-block whitespace-nowrap">
       <span className={clsx('tabular-nums', over && 'font-bold text-late')}>{fmtMinutes(p.minutes_spent)}</span>
       <span className="text-muted-foreground"> / {fmtMinutes(p.budget_minutes)}</span>
-      {bar && <Progress label="Budget d'heures consommé" className="mt-1" value={pct(p.minutes_spent, p.budget_minutes)} tone={over ? 'late' : p.minutes_spent > p.budget_minutes * 0.85 ? 'warn' : 'accent'} />}
+      {bar && <Progress label={t('home.dash.budgetUsed')} className="mt-1" value={pct(p.minutes_spent, p.budget_minutes)} tone={over ? 'late' : p.minutes_spent > p.budget_minutes * 0.85 ? 'warn' : 'accent'} />}
     </span>
   )
 }
 
 function Advance({ p, wide }: { p: ProjectSummary; wide?: boolean }) {
+  const t = useT()
   return (
     <span className={clsx('block w-full min-w-[7rem]', !wide && 'max-w-[12rem]')}>
       <span className="flex justify-between gap-2 whitespace-nowrap text-xs tabular-nums">
-        <span>{p.tasks_done}/{p.tasks_total} tâches</span>
-        {p.stages_total > 0 && <span className="text-muted-foreground" title="Étapes terminées">{p.stages_done}/{p.stages_total} ét.</span>}
+        <span>{t('home.projects.tasks', { done: p.tasks_done, n: p.tasks_total })}</span>
+        {p.stages_total > 0 && <span className="text-muted-foreground" title={t('home.projects.stagesDone')}>{t('home.projects.stagesShort', { done: p.stages_done, total: p.stages_total })}</span>}
       </span>
       <Progress className="mt-1" value={pct(p.tasks_done, p.tasks_total)} tone={p.tasks_total && p.tasks_done === p.tasks_total ? 'ok' : 'accent'} />
     </span>
@@ -43,6 +46,7 @@ const Due = ({ p }: { p: ProjectSummary }) =>
     : <span className="text-muted-foreground">—</span>
 
 function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
+  const t = useT()
   const nav = useNavigate()
   return (
     <TableStack>
@@ -50,14 +54,14 @@ function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
         <thead className="bg-head text-left text-[11px] font-extrabold uppercase tracking-[.05em] text-muted-foreground">
           <tr>
             {/* Libellé dessiné en CSS : au téléphone, le nom du projet devient le titre de la fiche. */}
-            <th className="px-3 py-2 before:content-['Projet']" aria-label="Projet" />
-            <th className="px-3 py-2">Client</th>
-            <th className="px-3 py-2">Statut</th>
-            <th className="px-3 py-2">Étape en cours</th>
-            <th className="px-3 py-2">Avancement</th>
-            <th className="px-3 py-2">Temps</th>
-            <th className="px-3 py-2">Échéance</th>
-            <th className="px-3 py-2">Équipe</th>
+            <th className="px-3 py-2 before:content-[attr(aria-label)]" aria-label={t('home.projects.colProject')} />
+            <th className="px-3 py-2">{t('home.projects.colClient')}</th>
+            <th className="px-3 py-2">{t('home.projects.colStatus')}</th>
+            <th className="px-3 py-2">{t('home.projects.colStage')}</th>
+            <th className="px-3 py-2">{t('home.dash.progress')}</th>
+            <th className="px-3 py-2">{t('home.dash.time')}</th>
+            <th className="px-3 py-2">{t('home.projects.colDue')}</th>
+            <th className="px-3 py-2">{t('home.projects.colTeam')}</th>
           </tr>
         </thead>
         <tbody>
@@ -68,15 +72,15 @@ function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
                   <ColorDot color={p.color} className="mt-1.5 h-3 w-3" />
                   <span className="min-w-0">
                     <Link to={`/projets/${p.id}`} className="font-bold hover:text-accent" onClick={(e) => e.stopPropagation()}>{p.name}</Link>
-                    <span className="block font-mono text-[11px] font-normal text-muted-foreground">{p.code}{p.archived_at && ' · archivé'}</span>
+                    <span className="block font-mono text-[11px] font-normal text-muted-foreground">{p.code}{p.archived_at && ` · ${t('home.projects.archived')}`}</span>
                   </span>
                 </span>
               </td>
-              <td className="max-w-[10rem] px-3 py-2.5">{p.client_name ?? <span className="text-muted-foreground">Interne</span>}</td>
+              <td className="max-w-[10rem] px-3 py-2.5">{p.client_name ?? <span className="text-muted-foreground">{t('home.projects.internal')}</span>}</td>
               <td className="px-3 py-2.5"><span className="inline-flex flex-col items-end gap-1 sm:items-start"><StatusBadge status={p.status} /><HealthBadge health={p.health} /></span></td>
               <td className="px-3 py-2.5">
                 {p.current_stage ? <span className="flex flex-col items-end gap-1 sm:items-start"><span className="font-semibold leading-tight">{p.current_stage.name}</span><StageBadge status={p.current_stage.status} /></span>
-                  : <span className="text-muted-foreground">{p.stages_total ? 'Toutes terminées' : '—'}</span>}
+                  : <span className="text-muted-foreground">{p.stages_total ? t('home.projects.allStagesDone') : '—'}</span>}
               </td>
               <td className="px-3 py-2.5"><Advance p={p} /></td>
               <td className="px-3 py-2.5"><TimeBudget p={p} bar /></td>
@@ -91,6 +95,7 @@ function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
 }
 
 function ProjectCards({ rows }: { rows: ProjectSummary[] }) {
+  const t = useT()
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {rows.map((p) => (
@@ -100,19 +105,19 @@ function ProjectCards({ rows }: { rows: ProjectSummary[] }) {
             <div className="min-w-0">
               {p.code && <p className="font-mono text-[11px] text-muted-foreground">{p.code}</p>}
               <h3 className="font-bold leading-snug group-hover:text-accent [overflow-wrap:anywhere]">{p.name}</h3>
-              <p className="text-sm text-muted-foreground">{p.client_name ?? 'Projet interne'}</p>
+              <p className="text-sm text-muted-foreground">{p.client_name ?? t('home.projects.internalProject')}</p>
             </div>
             <StatusBadge status={p.status} />
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <HealthBadge health={p.health} />
-            {p.current_stage && <span className="text-xs text-muted-foreground">Étape : <b className="text-foreground">{p.current_stage.name}</b></span>}
+            {p.current_stage && <span className="text-xs text-muted-foreground">{t('home.projects.stageLabel')} <b className="text-foreground">{p.current_stage.name}</b></span>}
           </div>
           <div className="mt-4"><Advance p={p} wide /></div>
           <div className="mt-4 flex items-end justify-between gap-3 border-t border-border pt-3 text-xs">
             <div className="space-y-0.5">
-              <p><span className="text-muted-foreground">Temps </span><TimeBudget p={p} /></p>
-              <p><span className="text-muted-foreground">Échéance </span><Due p={p} /></p>
+              <p><span className="text-muted-foreground">{t('home.dash.time')} </span><TimeBudget p={p} /></p>
+              <p><span className="text-muted-foreground">{t('home.projects.colDue')} </span><Due p={p} /></p>
             </div>
             <AvatarStack people={p.members} />
           </div>
@@ -124,6 +129,7 @@ function ProjectCards({ rows }: { rows: ProjectSummary[] }) {
 
 /** Le portefeuille de projets : filtres, tableau ou cartes. */
 export default function Projects() {
+  const t = useT()
   const [params, setParams] = useSearchParams()
   // « Nouveau projet pour ce client » (fiche client) arrive avec ?nouveau=1&client=<id>.
   const [creating, setCreating] = useState(params.get('nouveau') === '1')
@@ -134,7 +140,7 @@ export default function Projects() {
   const view = params.get('vue') === 'cartes' ? 'cards' : 'table'
   const [q, setQ] = useState(params.get('q') ?? '')
   const [debounced, setDebounced] = useState(q)
-  useEffect(() => { const t = setTimeout(() => setDebounced(q.trim()), 250); return () => clearTimeout(t) }, [q])
+  useEffect(() => { const id = setTimeout(() => setDebounced(q.trim()), 250); return () => clearTimeout(id) }, [q])
 
   const set = (k: string, v: string | null) => {
     const n = new URLSearchParams(params)
@@ -159,27 +165,27 @@ export default function Projects() {
 
   return (
     <>
-      <PageHeader title="Projets" subtitle={data ? `${data.length} projet${data.length > 1 ? 's' : ''}` : undefined}
-        actions={<Button variant="primary" onClick={() => setCreating(true)}>Nouveau projet</Button>} />
+      <PageHeader title={t('home.projects.title')} subtitle={data ? t('home.projects.count', { n: data.length }) : undefined}
+        actions={<Button variant="primary" onClick={() => setCreating(true)}>{t('home.projects.new')}</Button>} />
       {me && <div className="-mt-3 mb-4"><PlanLine plan={me.plan} /></div>}
 
       <div className="mb-4 flex flex-wrap items-center gap-2 border border-border bg-card p-3">
-        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, code ou client…" aria-label="Rechercher" className="w-full sm:w-64" />
-        <Select value={status} onChange={(e) => set('statut', e.target.value || null)} aria-label="Statut" className="w-[calc(50%-0.25rem)] sm:w-44">
-          <option value="">Tous les statuts</option>
+        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('home.projects.searchPlaceholder')} aria-label={t('common.search')} className="w-full sm:w-64" />
+        <Select value={status} onChange={(e) => set('statut', e.target.value || null)} aria-label={t('home.projects.colStatus')} className="w-[calc(50%-0.25rem)] sm:w-44">
+          <option value="">{t('home.projects.allStatuses')}</option>
           {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
-        <Select value={client} onChange={(e) => set('client', e.target.value || null)} aria-label="Client" className="w-[calc(50%-0.25rem)] sm:w-52">
-          <option value="">Tous les clients</option>
+        <Select value={client} onChange={(e) => set('client', e.target.value || null)} aria-label={t('home.projects.colClient')} className="w-[calc(50%-0.25rem)] sm:w-52">
+          <option value="">{t('home.projects.allClients')}</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <Checkbox label="Mes projets" checked={mine} onChange={(v) => set('miens', v ? '1' : null)} className="px-1" />
-        <Checkbox label="Archivés" checked={archived} onChange={(v) => set('archives', v ? '1' : null)} className="px-1" />
-        <div className="ml-auto flex border border-input" role="group" aria-label="Affichage">
+        <Checkbox label={t('home.projects.mine')} checked={mine} onChange={(v) => set('miens', v ? '1' : null)} className="px-1" />
+        <Checkbox label={t('home.projects.archivedFilter')} checked={archived} onChange={(v) => set('archives', v ? '1' : null)} className="px-1" />
+        <div className="ml-auto flex border border-input" role="group" aria-label={t('home.projects.view')}>
           {(['table', 'cards'] as const).map((v) => (
             <button key={v} type="button" aria-pressed={view === v} onClick={() => set('vue', v === 'cards' ? 'cartes' : null)}
               className={clsx('px-3 py-1.5 text-xs font-bold', view === v ? 'bg-accent text-white' : 'bg-card text-muted-foreground hover:bg-muted')}>
-              {v === 'table' ? 'Tableau' : 'Cartes'}</button>
+              {v === 'table' ? t('home.projects.table') : t('home.projects.cards')}</button>
           ))}
         </div>
       </div>
@@ -188,9 +194,9 @@ export default function Projects() {
       {!data ? (loading && <Spinner />)
         : !data.length ? (
           filtered
-            ? <Empty title="Aucun projet ne correspond">Élargissez les filtres ou cherchez autrement.</Empty>
-            : <Empty title="Pas encore de projet" action={<Button variant="primary" onClick={() => setCreating(true)}>Créer le premier projet</Button>}>
-                Un projet réunit étapes, tâches, temps passé et suivi du client.</Empty>
+            ? <Empty title={t('home.projects.noMatch')}>{t('home.projects.noMatchBody')}</Empty>
+            : <Empty title={t('home.projects.emptyTitle')} action={<Button variant="primary" onClick={() => setCreating(true)}>{t('home.projects.createFirst')}</Button>}>
+                {t('home.projects.emptyBody')}</Empty>
         ) : view === 'table' ? <ProjectTable rows={data} /> : <ProjectCards rows={data} />}
 
       <NewProjectDialog open={creating} onClose={() => setCreating(false)} clientId={params.get('nouveau') === '1' ? client || undefined : undefined} />

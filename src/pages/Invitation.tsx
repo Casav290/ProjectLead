@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Button, Field, Input, Spinner } from '../components/ui'
+import { useI18n } from '../i18n'
 import { errorText } from '../lib/api'
 import { ROLE_LABEL } from '../lib/format'
 import { AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
@@ -15,6 +16,7 @@ type Invite = { email: string; role: string; account: string; hasUser: boolean; 
  * créer ; celui d'un accès d'avant le Compte Lead reste accepté.
  */
 export default function Invitation() {
+  const { locale, t } = useI18n()
   const { token = '' } = useParams()
   const [params] = useSearchParams()
   const [inv, setInv] = useState<Invite | null>(null)
@@ -44,49 +46,51 @@ export default function Invitation() {
   }
 
   if (invalid) return (
-    <AuthShell title="Invitation introuvable">
-      <p className="text-sm text-muted-foreground">Ce lien a expiré ou a déjà servi. Demandez une nouvelle invitation à la personne qui vous a invité.</p>
-      <Link to="/login" className="mt-4 inline-block text-sm font-semibold text-accent hover:underline">Se connecter</Link>
+    <AuthShell title={t('shell.invite.notFound')}>
+      <p className="text-sm text-muted-foreground">{t('shell.invite.notFoundText')}</p>
+      <Link to="/login" className="mt-4 inline-block text-sm font-semibold text-accent hover:underline">{t('shell.login.submit')}</Link>
     </AuthShell>
   )
-  if (!inv) return <Spinner />
+  // Le chargement, sous le gabarit commun : le sélecteur de langue y est déjà.
+  if (!inv) return <AuthShell><Spinner /></AuthShell>
 
-  const subtitle = <>Vous êtes invité comme <strong className="text-foreground">{(ROLE_LABEL[inv.role] ?? inv.role).toLowerCase()}</strong> avec l'adresse {inv.email}.</>
+  const [before, after = ''] = t('shell.invite.subtitle', { email: inv.email }).split('{role}')
+  const subtitle = <>{before}<strong className="text-foreground">{/* En allemand, le nom garde sa majuscule. */}{locale === 'de' ? (ROLE_LABEL[inv.role] ?? inv.role) : (ROLE_LABEL[inv.role] ?? inv.role).toLowerCase()}</strong>{after}</>
   const form = (
     <form onSubmit={submit} className="space-y-3">
       {inv.hasUser ? (
-        <p className="text-sm text-muted-foreground">Vous avez déjà un compte ProjectLead : confirmez avec votre mot de passe.</p>
+        <p className="text-sm text-muted-foreground">{t('shell.invite.hasAccount')}</p>
       ) : (
-        <Field label="Votre nom"><Input autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} maxLength={120} /></Field>
+        <Field label={t('shell.auth.yourName')}><Input autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} maxLength={120} /></Field>
       )}
-      <Field label="Mot de passe" hint={inv.hasUser ? undefined : '10 caractères au moins.'}>
+      <Field label={t('shell.auth.password')} hint={inv.hasUser ? undefined : t('shell.auth.passwordHint')}>
         <Input type="password" autoComplete={inv.hasUser ? 'current-password' : 'new-password'} required minLength={10}
           value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
       {error && <p role="alert" className="text-sm text-late">{error}</p>}
-      <Button type="submit" variant="primary" className="w-full" disabled={busy}>{busy ? 'Un instant…' : "Accepter l'invitation"}</Button>
+      <Button type="submit" variant="primary" className="w-full" disabled={busy}>{busy ? t('shell.invite.busy') : t('shell.invite.accept')}</Button>
     </form>
   )
 
-  if (!inv.leadId) return <AuthShell title={`Rejoindre ${inv.account}`} subtitle={subtitle}>{form}</AuthShell>
+  const title = t('shell.invite.join', { account: inv.account })
+  if (!inv.leadId) return <AuthShell title={title} subtitle={subtitle}>{form}</AuthShell>
 
   return (
-    <AuthShell title={`Rejoindre ${inv.account}`} subtitle={subtitle}>
+    <AuthShell title={title} subtitle={subtitle}>
       {params.get('erreur') === 'adresse' && (
         <div role="alert" className="mb-6 border border-late bg-late/5 px-3 py-2 text-sm text-late">
-          Vous êtes connecté au Compte Lead avec une autre adresse. Cette invitation est pour {inv.email} : connectez-vous
-          au Compte Lead avec cette adresse pour l'accepter. <Link to="/" className="font-semibold underline">Aller à mon espace</Link>
+          {t('shell.invite.otherAddress', { email: inv.email })} <Link to="/" className="font-semibold underline">{t('shell.invite.goToSpace')}</Link>
         </div>
       )}
       <a href={leadStart(`/invitation/${token}`)} data-testid="lead-accept"
         className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
-        Accepter avec mon Compte Lead</a>
+        {t('shell.invite.acceptLead')}</a>
       <p className="mt-3 text-center text-sm text-muted-foreground">
-        Connectez-vous avec l'adresse {inv.email}, ou créez votre Compte Lead à l'étape suivante. Le même compte pour toutes les applications Lead.
+        {t('shell.invite.leadHint', { email: inv.email })} {t('shell.auth.sameAccount')}
       </p>
       {inv.hasPassword && (withPassword
         ? <div className="mt-6 border-t border-border pt-6">{form}</div>
-        : <AuthSwitch><button type="button" onClick={() => setWithPassword(true)} className={authLink}>J'ai un mot de passe ProjectLead</button></AuthSwitch>)}
+        : <AuthSwitch><button type="button" onClick={() => setWithPassword(true)} className={authLink}>{t('shell.invite.havePassword')}</button></AuthSwitch>)}
     </AuthShell>
   )
 }
