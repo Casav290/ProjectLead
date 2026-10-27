@@ -67,5 +67,6 @@ CRMlead.
 - Traduction de l'interface (français seulement ; InvoiceLead vise aussi l'allemand).
 - Application mobile native.
 - Brouillons et analyses IA repris de CRMlead : lots de la fusion IA (branche `claude/suite-0210`), pas encore en ligne.
-  La bulle « Assistant IA » (questions, ouverture d'écrans, créations confirmées) est, elle, sur la branche
-  `assistant-ia` (24.10.2026, `docs/PASSATION.md`).
+  La bulle « Assistant IA » (questions, ouverture d'écrans, changements confirmés) est en ligne depuis le 24.10.2026 ;
+  depuis le 27.10.2026 tout ce qu'elle propose s'applique d'un clic (plan complet d'un projet, lots de changements :
+  `docs/ASSISTANT-ACTIONS.md`).

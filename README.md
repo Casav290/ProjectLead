@@ -48,6 +48,7 @@ npm run typecheck
 npm test                     # scripts/smoke.ts sur TEST_DATABASE_URL : tout doit être vert
 npx tsx scripts/suites-check.ts   # suites de l'abonnement, sans base : PROJECTLEAD_SUITES_UNIT_OK
 npx tsx scripts/assistant-check.ts # Assistant IA, faux service de modèle (TEST_DATABASE_URL) : ASSISTANT_CHECK_OK
+npx tsx scripts/assistant-actions-check.ts # tout ce que l'assistant propose s'applique : ASSISTANT_ACTIONS_CHECK_OK
 npm run build
 ```
 

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import pg from 'pg'
 
 // bigint (les montants en centimes) revient en nombre, pas en chaîne.
@@ -24,21 +25,71 @@ export type Ctx = { accountId: string; userId: string; role: Role }
 export type Db = pg.PoolClient
 
 /**
+ * Une transaction partagée par plusieurs appels de routes (Assistant IA : une carte « Confirmer » qui porte plusieurs
+ * écritures). Les routes appelées pendant `sharedTransaction` ne changent pas : leur `withTenant` reprend la connexion de
+ * la transaction commune, dans un point de sauvegarde (SAVEPOINT), au lieu d'ouvrir la sienne. Tout est validé à la fin,
+ * ou tout est annulé. `dryRun` : la même chose, toujours annulée (essai d'une proposition avant de l'afficher).
+ */
+type Shared = { client: pg.PoolClient; ctx: Ctx; n: number; dryRun: boolean }
+const shared = new AsyncLocalStorage<Shared>()
+
+/** Vrai pendant une transaction partagée (les tâches de fond n'y démarrent pas). */
+export const inSharedTransaction = () => shared.getStore() !== undefined
+/** Vrai pendant un essai : rien ne doit sortir (emails), et tout sera annulé. */
+export const isDryRun = () => shared.getStore()?.dryRun === true
+
+const begin = async (client: pg.PoolClient, ctx: Ctx) => {
+  await client.query('begin')
+  await client.query('set local role projectlead_app')
+  await client.query(
+    `select set_config('app.account_id', $1, true), set_config('app.user_id', $2, true),
+            set_config('app.role', $3, true), set_config('search_path', 'public', true)`,
+    [ctx.accountId, ctx.userId, ctx.role],
+  )
+}
+
+/**
  * Toute requête métier passe par ici : une transaction, le rôle applicatif endossé (la RLS
  * s'applique donc toujours), et le contexte du compte posé LOCAL à la transaction.
  */
 export async function withTenant<T>(ctx: Ctx, fn: (db: Db) => Promise<T>): Promise<T> {
+  const s = shared.getStore()
+  if (s) {
+    // Dans une transaction partagée : la même personne de la même entreprise, sinon refus (rien ne sort du lot).
+    if (s.ctx.accountId !== ctx.accountId || s.ctx.userId !== ctx.userId || s.ctx.role !== ctx.role) throw new Error('shared_transaction_other_tenant')
+    const sp = `pl_lot_${++s.n}`
+    await s.client.query(`savepoint ${sp}`)
+    try {
+      const out = await fn(s.client)
+      await s.client.query(`release savepoint ${sp}`)
+      return out
+    } catch (e) {
+      await s.client.query(`rollback to savepoint ${sp}`).catch(() => {})
+      throw e
+    }
+  }
   const client = await pool.connect()
   try {
-    await client.query('begin')
-    await client.query('set local role projectlead_app')
-    await client.query(
-      `select set_config('app.account_id', $1, true), set_config('app.user_id', $2, true),
-              set_config('app.role', $3, true), set_config('search_path', 'public', true)`,
-      [ctx.accountId, ctx.userId, ctx.role],
-    )
+    await begin(client, ctx)
     const out = await fn(client)
     await client.query('commit')
+    return out
+  } catch (e) {
+    await client.query('rollback').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+/** Plusieurs écritures (routes de l'application appelées par `fn`) en une seule transaction : tout ou rien. */
+export async function sharedTransaction<T>(ctx: Ctx, fn: (db: Db) => Promise<T>, opts: { dryRun?: boolean } = {}): Promise<T> {
+  if (shared.getStore()) throw new Error('shared_transaction_nested')
+  const client = await pool.connect()
+  try {
+    await begin(client, ctx)
+    const out = await shared.run({ client, ctx, n: 0, dryRun: Boolean(opts.dryRun) }, () => fn(client))
+    await client.query(opts.dryRun ? 'rollback' : 'commit')
     return out
   } catch (e) {
     await client.query('rollback').catch(() => {})

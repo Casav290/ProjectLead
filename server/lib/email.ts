@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer'
-import { anon } from '../db.js'
+import { anon, isDryRun } from '../db.js'
 import { newMessageId } from './mailbox/types.js'
 import { sendVia } from './mailbox/index.js'
 
@@ -44,6 +44,8 @@ async function log(m: Mail, via: string, error: string | null) {
 /** Rend le moyen d'envoi utilisé, ou lève si tout a échoué. */
 export async function sendMail(m: Mail): Promise<{ via: string }> {
   if (!m.to.length) throw new Error('no_recipient')
+  // Essai d'une proposition de l'Assistant IA (transaction toujours annulée) : rien ne part, rien n'est journalisé.
+  if (isDryRun()) return { via: 'essai' }
   // 1. Une boîte branchée : celle de la personne, sinon celle par défaut de l'entreprise.
   if (m.accountId) {
     const mb = await anon(async (db) => (await db.query(

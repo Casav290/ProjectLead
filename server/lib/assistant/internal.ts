@@ -13,7 +13,7 @@ export function bindAssistantApp(a: Hono<any>) { app = a }
 
 export type ApiResult = { status: number; body: any }
 
-export async function callApi(sessionCookie: string, method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<ApiResult> {
+export async function callApi(sessionCookie: string, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body?: unknown): Promise<ApiResult> {
   if (!app) throw new Error('assistant_app_unbound')
   if (!path.startsWith('/api/') || path.startsWith('/api/assistant')) throw new Error('assistant_path_refused')
   const headers: Record<string, string> = { cookie: sessionCookie }

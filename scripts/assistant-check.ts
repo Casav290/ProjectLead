@@ -130,15 +130,15 @@ seen.length = 0
 r = await ask(ann, 'Bonjour')
 const sent = seen[0]?.body
 check('réponse simple → 200 avec reply et historique', r.status === 200 && r.body.reply === 'Bonjour.' && r.body.messages.length === 2, r.body)
-check('modèle claude-opus-5-5, max_tokens 4000, effort low', sent?.model === 'claude-opus-5-5' && sent?.max_tokens === 4000 && sent?.output_config?.effort === 'low', sent)
+check('modèle claude-opus-5-5, max_tokens 16000 (un plan complet tient dans un tour), effort low', sent?.model === 'claude-opus-5-5' && sent?.max_tokens === 16000 && sent?.output_config?.effort === 'low', sent)
 check('repli des refus : fallbacks "default" + en-tête server-side-fallback-2026-07-01',
   sent?.fallbacks === 'default' && String(seen[0]?.headers['anthropic-beta'] ?? '').includes('server-side-fallback-2026-07-01'), { f: sent?.fallbacks, h: seen[0]?.headers['anthropic-beta'] })
 check('système : bloc stable mis en cache, date et langue après', Array.isArray(sent?.system) && sent.system[0].cache_control?.type === 'ephemeral'
   && !sent.system[0].text.includes(today) && sent.system[1].text.includes(today) && !sent.system[1].cache_control, sent?.system?.map((x: any) => x.cache_control))
 const toolNames: string[] = (sent?.tools ?? []).map((t: any) => t.name)
 check('outils = la liste prévue, dans l’ordre', JSON.stringify(toolNames) === JSON.stringify(TOOL_NAMES), toolNames)
-check('aucun outil de suppression, d’équipe, de membres, d’abonnement, de clés ou d’envoi',
-  !toolNames.some((n) => /delete|remove|archive|member|invite|team_|role|billing|subscri|plan|api_key|send|email|reply|portal/.test(n)) && toolNames.includes('list_team'), toolNames)
+check('aucun outil de suppression, d’équipe, de membres, d’abonnement, de clés, de mot de passe ou d’envoi',
+  !toolNames.some((n) => /delete|remove|archive|member|invite|team_|role|subscri|checkout|api_key|password|send|reply|portal|upload/.test(n)) && toolNames.includes('list_team'), toolNames)
 
 // ------------------------------------------------------------------ 4. lecture avec les droits de la personne
 r = await ask(ann, `FAKE:list_projects:{}`)
@@ -171,7 +171,7 @@ r = await eve.post('/api/assistant/confirm', { token: card.token })
 check('jeton présenté depuis une autre entreprise → 403', r.status === 403, r)
 const [data, sig] = card.token.split('.')
 const forged = JSON.parse(Buffer.from(data, 'base64url').toString())
-forged.op.body.title = 'Titre changé en route'
+forged.ops[0].body.title = 'Titre changé en route'
 r = await ann.post('/api/assistant/confirm', { token: `${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${sig}` })
 check('jeton modifié (signature fausse) → 403', r.status === 403 && r.body.error === 'token_invalid', r)
 check('toujours aucune tâche créée après ces refus', await count('select count(*)::int as n from tasks where project_id = $1', [projectId]) === tasksBefore)
@@ -185,14 +185,14 @@ r = await ann.post('/api/assistant/confirm', { token: card.token })
 check('jeton rejoué → 403, rien de plus', r.status === 403 && r.body.error === 'token_used'
   && await count('select count(*)::int as n from tasks where project_id = $1', [projectId]) === tasksBefore + 1, r)
 
-const expired = signConfirm({ u: annId, a: accountId, op: { method: 'POST', path: '/api/tasks', body: { project_id: projectId, title: 'Trop tard' } },
+const expired = signConfirm({ u: annId, a: accountId, mode: 'tx', tool: 'test', ops: [{ method: 'POST', path: '/api/tasks', body: { project_id: projectId, title: 'Trop tard' } }],
   summary: { title: 'x', lines: [] } }, Date.now() - 11 * 60_000)
 r = await ann.post('/api/assistant/confirm', { token: expired })
 check('jeton de plus de 10 minutes → 403 token_expired', r.status === 403 && r.body.error === 'token_expired', r)
-const del = signConfirm({ u: annId, a: accountId, op: { method: 'POST', path: `/api/projects/${projectId}/duplicate`, body: { name: 'x' } }, summary: { title: 'x', lines: [] } })
+const del = signConfirm({ u: annId, a: accountId, mode: 'tx', tool: 'test', ops: [{ method: 'POST', path: `/api/projects/${projectId}/client-report`, body: {} }], summary: { title: 'x', lines: [] } })
 r = await ann.post('/api/assistant/confirm', { token: del })
 check('opération hors liste (même signée) → 403 operation_not_allowed', r.status === 403 && r.body.error === 'operation_not_allowed', r)
-const delTask = signConfirm({ u: annId, a: accountId, op: { method: 'PATCH', path: `/api/tasks/${created[0].id}/../../projects/${projectId}`, body: {} }, summary: { title: 'x', lines: [] } })
+const delTask = signConfirm({ u: annId, a: accountId, mode: 'tx', tool: 'test', ops: [{ method: 'PATCH', path: `/api/tasks/${created[0].id}/../../projects/${projectId}`, body: {} }], summary: { title: 'x', lines: [] } })
 r = await ann.post('/api/assistant/confirm', { token: delTask })
 check('chemin détourné (..) → 403', r.status === 403, r)
 
@@ -202,7 +202,7 @@ check('proposition annulée : rien en base', r.body.actions?.[0]?.type === 'conf
   && await count('select count(*)::int as n from tasks where title = $1', ['Tâche annulée']) === 0)
 
 // Droits revérifiés à la confirmation : Bob (membre, pas intervenant) ne voit pas le projet réservé.
-const bobReserved = signConfirm({ u: bobId, a: accountId, op: { method: 'POST', path: '/api/tasks', body: { project_id: reservedId, title: 'Intrusion' } }, summary: { title: 'x', lines: [] } })
+const bobReserved = signConfirm({ u: bobId, a: accountId, mode: 'tx', tool: 'test', ops: [{ method: 'POST', path: '/api/tasks', body: { project_id: reservedId, title: 'Intrusion' } }], summary: { title: 'x', lines: [] } })
 r = await bob.post('/api/assistant/confirm', { token: bobReserved })
 check('confirmation : les droits de la route s’appliquent (projet réservé → 404, rien créé)', r.status === 404 && r.body.ok === false
   && await count('select count(*)::int as n from tasks where title = $1', ['Intrusion']) === 0, r)

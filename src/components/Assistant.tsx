@@ -11,19 +11,21 @@ import { useApp } from '../lib/store'
  * l'exécute (POST /api/assistant/confirm).
  */
 
-type Summary = { title: string; lines: string[] }
+type Group = { title: string; lines: string[]; more?: number }
+type Summary = { title: string; lines: string[]; groups?: Group[] }
+type Link = { label: string; path: string }
 type Item =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'error'; text: string }
-  | { kind: 'confirm'; token: string; summary: Summary; state: 'pending' | 'busy' | 'done' | 'cancelled' | 'failed'; result?: string; path?: string | null }
+  | { kind: 'confirm'; token: string; summary: Summary; state: 'pending' | 'busy' | 'done' | 'cancelled' | 'failed'; result?: string; path?: string | null; links?: Link[] }
 type Action = { type: 'navigate'; path: string } | { type: 'confirm'; token: string; summary: Summary }
 type Reply = { messages: unknown[]; reply: string; actions: Action[] }
 type Saved = { api: unknown[]; items: Item[]; notes: string[] }
 
 const SUGGESTIONS = [
   'Quelles sont mes tâches en retard ?',
-  'Résume l’avancement de mes projets en cours',
+  'Planifie toutes les étapes de ce projet pour un nouveau site Internet',
   'Crée une tâche « Relancer le client » pour demain',
 ]
 
@@ -126,7 +128,17 @@ export default function Assistant() {
     else if (wasOpen.current) bubble.current?.focus()
     wasOpen.current = open
   }, [open])
-  useEffect(() => { thread.current?.scrollTo({ top: thread.current.scrollHeight }) }, [state.items.length, busy, open])
+  // Une réponse arrive : on montre son début (une longue carte se lit de haut en bas) ; sinon le bas du fil.
+  useEffect(() => {
+    const t = thread.current
+    if (!t) return
+    const last = state.items.length - 1
+    let at = -1
+    for (let k = last; k >= 0; k--) if (state.items[k].kind === 'assistant') { at = k; break }
+    const reply = !busy && state.items[last]?.kind === 'confirm' && at >= 0 ? t.querySelector<HTMLElement>(`[data-item="${at}"]`) : null
+    if (reply && t.scrollHeight - reply.offsetTop > t.clientHeight) t.scrollTo({ top: Math.max(0, reply.offsetTop - 8) })
+    else t.scrollTo({ top: t.scrollHeight })
+  }, [state.items.length, busy, open])
 
   const close = () => setOpen(false)
 
@@ -161,9 +173,11 @@ export default function Assistant() {
   const confirm = async (card: Extract<Item, { kind: 'confirm' }>) => {
     setCard(card.token, { state: 'busy' })
     try {
-      const r = await api.post<{ ok: boolean; message: string; path: string | null }>('/assistant/confirm', { token: card.token })
-      setCard(card.token, { state: 'done', result: r.message, path: r.path })
-      update((s) => ({ ...s, notes: [...s.notes, `la personne a confirmé « ${card.summary.title} » : c’est enregistré.`] }))
+      const r = await api.post<{ ok: boolean; message: string; path: string | null; links?: Link[] }>('/assistant/confirm', { token: card.token })
+      setCard(card.token, { state: 'done', result: r.message, path: r.path, links: r.links ?? [] })
+      // Le résultat (et ses liens) en bas de la carte : à l'écran.
+      setTimeout(() => thread.current?.querySelector(`[data-card="${card.token.slice(-16)}"]`)?.scrollIntoView({ block: 'end' }), 50)
+      update((s) => ({ ...s, notes: [...s.notes, `la personne a confirmé « ${card.summary.title} » : c’est enregistré (${r.message}).`] }))
       refresh()
       // La page ouverte relit ses données : on y retourne (ou on ouvre l'élément créé).
       window.dispatchEvent(new Event('pl:assistant-saved'))
@@ -212,7 +226,7 @@ export default function Assistant() {
           <div ref={thread} className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm" aria-live="polite">
             {!state.items.length && (
               <div className="space-y-3 pt-2">
-                <p className="text-muted-foreground">Demandez ce que vous voulez à ProjectLead : retrouver une information, ouvrir un écran, préparer une tâche, une saisie de temps… Rien n’est enregistré sans votre confirmation.</p>
+                <p className="text-muted-foreground">Demandez ce que vous voulez à ProjectLead : retrouver une information, ouvrir un écran, planifier un projet, créer des tâches, saisir du temps… Rien n’est enregistré sans votre confirmation.</p>
                 <ul className="space-y-2">
                   {SUGGESTIONS.map((s) => (
                     <li key={s}><button type="button" onClick={() => send(s)} className="w-full border border-input bg-[#f7f5f3] px-3 py-2 text-left hover:border-accent">{s}</button></li>
@@ -223,17 +237,35 @@ export default function Assistant() {
             {state.items.map((it, i) => (
               <Fragment key={i}>
                 {it.kind === 'user' && <div className="ml-8 whitespace-pre-wrap bg-accent-veil px-3 py-2 [overflow-wrap:anywhere]">{it.text}</div>}
-                {it.kind === 'assistant' && <div className="mr-4 [overflow-wrap:anywhere]"><Rich text={it.text} onLink={() => { if (small()) setOpen(false) }} /></div>}
+                {it.kind === 'assistant' && <div data-item={i} className="mr-4 [overflow-wrap:anywhere]"><Rich text={it.text} onLink={() => { if (small()) setOpen(false) }} /></div>}
                 {it.kind === 'error' && <p role="alert" className="border-l-[3px] border-late bg-late/5 px-3 py-2 text-late">{it.text}</p>}
                 {it.kind === 'confirm' && (
-                  <div className="border border-accent bg-card" data-assistant-confirm={it.state}>
+                  <div className="border border-accent bg-card" data-assistant-confirm={it.state} data-card={it.token.slice(-16)}>
                     <p className="border-b border-border bg-accent-veil px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wide text-accent-dark">
                       {it.state === 'done' ? 'Confirmé' : it.state === 'cancelled' ? 'Annulé' : it.state === 'failed' ? 'Non enregistré' : 'À confirmer'}</p>
                     <div className="px-3 py-2">
                       <p className="font-bold">{it.summary.title}</p>
                       <ul className="mt-1 space-y-0.5 text-[13px]">{it.summary.lines.map((l, j) => <li key={j} className="[overflow-wrap:anywhere]">{l}</li>)}</ul>
+                      {it.summary.groups?.map((g, j) => (
+                        <div key={j} className="mt-2 border-l-2 border-accent-light pl-2" data-assistant-group>
+                          <p className="text-[13px] font-bold [overflow-wrap:anywhere]">{g.title}</p>
+                          <ul className="space-y-0.5 text-[12.5px] text-muted-foreground">
+                            {g.lines.map((l, k) => {
+                              // « Titre · dates · estimation · après … » : le titre en avant, le reste en retrait.
+                              const at = l.indexOf(' · ')
+                              return <li key={k} className="[overflow-wrap:anywhere]">{at > 0 ? <><span className="font-semibold text-foreground">{l.slice(0, at)}</span>{l.slice(at)}</> : l}</li>
+                            })}
+                            {Boolean(g.more) && <li className="text-muted-foreground">+ {g.more} autre{g.more! > 1 ? 's' : ''}</li>}
+                          </ul>
+                        </div>
+                      ))}
                       {it.result && <p className={clsx('mt-2 text-[13px] font-semibold', it.state === 'failed' ? 'text-late' : 'text-won')}>{it.result}</p>}
-                      {it.state === 'done' && it.path && <Link to={it.path} className="mt-1 inline-block text-[13px] font-semibold text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>Ouvrir</Link>}
+                      {it.state === 'done' && (it.links?.length ? (
+                        <p className="mt-1 flex flex-wrap gap-x-3 text-[13px] font-semibold">
+                          <span className="text-muted-foreground">Voir :</span>
+                          {it.links.map((l) => <Link key={l.path} to={l.path} className="text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>{l.label}</Link>)}
+                        </p>
+                      ) : it.path && <Link to={it.path} className="mt-1 inline-block text-[13px] font-semibold text-accent-dark underline" onClick={() => { if (small()) setOpen(false) }}>Ouvrir</Link>)}
                       {(it.state === 'pending' || it.state === 'busy') && (
                         <div className="mt-3 flex gap-2">
                           <button type="button" disabled={it.state === 'busy'} onClick={() => confirm(it)}

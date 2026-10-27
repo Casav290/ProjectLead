@@ -289,7 +289,32 @@ portes : `GATES-billing-followups.md` (L4 en local).
 - **Mise en ligne** : la migration 011 est additive et rejouable ; l'ancien code ignore `last_seen_at` (retour arrière :
   revenir au commit précédent de `vercel`).
 
-## Assistant IA (bulle, 24.10.2026, branche `assistant-ia`, aperçu seulement)
+## Assistant IA : tout ce qu'il propose s'applique (27.10.2026, branche `assistant-actions`)
+
+Demande d'Ève (capture du 27.10, projet réel) : l'assistant répondait « Je ne peux pas créer d'étapes moi-même » puis
+donnait un plan en texte. Cahier : `~/projets/.unlazy/assistant-actions/CAHIER.md` ; inventaire et règles :
+`docs/ASSISTANT-ACTIONS.md` (chaque écriture de l'écran → outil `propose_*` ou interdit nommé).
+
+- Une carte peut porter plusieurs écritures (`server/lib/assistant/token.ts`, jeton v2 : `ops`, `mode`, références
+  « @clé ») : `propose_project_plan` (étapes datées, tâches, jalons, dépendances, points de contrôle, dates du projet ;
+  dates calculées en jours ouvrés par `server/lib/assistant/schedule.ts`) et `propose_batch` (jusqu'à 150 écritures).
+- Exécution (`server/lib/assistant/run.ts`) : les routes mêmes de l'écran, avec la session de la personne, dans UNE
+  transaction partagée (`sharedTransaction`, `server/db.ts` : les `withTenant` des routes reprennent la connexion dans un
+  SAVEPOINT) ; la première refusée annule tout. Les écritures qui appellent CRMlead, InvoiceLead ou une boîte mail restent
+  seules sur leur carte (mode `route`).
+- Essai avant la carte : les écritures sont jouées dans une transaction annulée (`dryRun`) ; `sendMail` ne fait rien et
+  aucune tâche de fond ne part pendant ce temps. Une proposition qui échouerait n'est jamais montrée.
+- Consigne (`server/lib/assistant/prompt.ts`) : plus de « je ne peux pas » pour une action permise ; un plan ou une liste
+  de changements = la carte applicable dans la même réponse ; interdits inchangés (supprimer, payer, formule, membres et
+  droits, clés et identifiants, envoyer à l'extérieur, fichier).
+- `max_tokens` 16 000 (un plan complet en un appel d'outil), délai par appel 170 s, tour entier 250 s (fonction 300 s).
+- Après « Confirmer » : la page se recharge, la vue qui montre le résultat s'ouvre (plan : Gantt, liens Étapes, Liste,
+  Gantt), la carte dit ce qui a été créé.
+- Contrôles : `TEST_DATABASE_URL=… npx tsx scripts/assistant-actions-check.ts` → `ASSISTANT_ACTIONS_CHECK_OK` ; portes
+  `node scripts/assistant-actions-gates.mjs G1…G6` ; essai réel `node scripts/e2e-assistant-actions.mjs` (en-tête).
+- Aucune migration.
+
+## Assistant IA (bulle, 24.10.2026, branche `assistant-ia`, en production le 24.10)
 
 Cahier commun des six applications : `~/projets/.unlazy/assistant-ia/CAHIER.md` ; critères :
 `~/projets/.unlazy/assistant-ia/GATES-projectlead.md`.
@@ -297,8 +322,8 @@ Cahier commun des six applications : `~/projets/.unlazy/assistant-ia/CAHIER.md` 
 - Bulle en bas à droite de toutes les pages connectées (`src/components/Assistant.tsx`, montée par `Layout`), jamais sur
   les pages publiques ; masquée si `ANTHROPIC_API_KEY` manque (`features.assistant` de `/api/me`, route en 503).
 - `POST /api/assistant` (`server/routes/assistant.ts`) : Tool Runner du SDK `@anthropic-ai/sdk`, modèle
-  `claude-opus-5-5`, effort `low`, `max_tokens` 4000, 10 tours au plus, repli des refus `fallbacks: "default"`, consigne
-  stable en cache (`server/lib/assistant/prompt.ts`).
+  `claude-opus-5-5`, effort `low`, `max_tokens` 4000 (16 000 depuis le 27.10), 10 tours au plus, repli des refus
+  `fallbacks: "default"`, consigne stable en cache (`server/lib/assistant/prompt.ts`).
 - Outils (`server/lib/assistant/tools.ts`) : ils n'ont aucun accès propre à la base, ils rappellent les routes `/api`
   avec la session de la personne (`server/lib/assistant/internal.ts`) : mêmes droits que l'écran. Lecture : recherche,
   accueil, projets, fiche projet, tâches, fiche tâche, équipe (lecture), clients, temps, rapport, charge, agenda,
