@@ -46,6 +46,8 @@ export type LeadClaims = {
   org: string; org_name: string; org_role: 'admin' | 'manager' | 'user'
   lead: LeadEntitlements
   sid?: string                      // la session ERPlead de ce navigateur : une déconnexion ne ferme que ses sessions
+  org_country?: string | null       // pays de l'organisation (ERPlead, 27.10.2026)
+  org_currency?: string | null      // devise par défaut de l'organisation selon son pays (CHF, EUR, USD, GBP)
 }
 export type LeadEntitlements = {
   plan: { code: 'free' | 'pro' | 'pro_plus' | string; name: string; rank: number; seats: number | null }

@@ -57,13 +57,14 @@ export async function openSession(c: any, userId: string, accountId: string, idT
  * Compte Lead : le rôle qu'elle a chez ERPlead (une simple membre qui ouvre ProjectLead la première n'en devient pas
  * l'administratrice ; l'administratrice d'ERPlead le devient à son arrivée, voir `placeIn`).
  */
-async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string; locale?: Locale; country?: string | null },
+async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string; locale?: Locale; country?: string | null; currency?: string | null },
                              userId: string, role = 'admin') {
   // Une entreprise naît en Gratuit : la formule payante se prend dans ProjectLead (Réglages → Entreprise).
   // Sa devise : celle du pays de la personne qui la crée (CH/LI → CHF, zone euro → EUR, US → USD, GB → GBP, sinon CHF),
   // jamais réservée à une formule. Sa langue (celle des documents et du modèle de départ) : celle de la personne.
   const acc = (await db.query('insert into accounts (name, lead_org, plan, currency, locale) values ($1,$2,coalesce($3, \'free\'),$4,$5) returning id',
-    [a.company, a.leadOrg ?? null, a.plan ?? null, currencyForCountry(a.country), a.locale ?? 'fr'])).rows[0]
+    [a.company, a.leadOrg ?? null, a.plan ?? null,
+     ['CHF', 'EUR', 'USD', 'GBP'].includes(String(a.currency ?? '')) ? a.currency : currencyForCountry(a.country), a.locale ?? 'fr'])).rows[0]
   await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,$3)`, [acc.id, userId, role])
   await seedAccount(db, acc.id, userId)
   return acc.id as string
@@ -284,8 +285,11 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
       user = (await db.query('insert into users (email, name, lead_sub, locale) values ($1,$2,$3,$4) returning id',
         [claims.email, claims.name ?? '', claims.sub, locale])).rows[0]
     } else {
-      await db.query('update users set email = $1, name = coalesce(nullif($2, \'\'), name) where id = $3',
-        [claims.email, claims.name ?? '', user.id])
+      // La langue du profil ERPlead suit à chaque connexion, tant que la personne n'en a pas choisi une ici
+      // (`locale_chosen`, POST /api/me/locale) : la langue choisie dans le Compte Lead ouvre ProjectLead dans cette langue.
+      await db.query(`update users set email = $1, name = coalesce(nullif($2, ''), name),
+                             locale = case when locale_chosen or $4::text is null then locale else $4 end where id = $3`,
+        [claims.email, claims.name ?? '', user.id, isLocale(claimed) ? claimed : null])
     }
     const userId = user.id as string
 
@@ -367,7 +371,7 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
     let created = false
     if (!acc) {
       acc = { id: await createAccount(db, { company: claims.org_name || claims.name || claims.email, leadOrg: claims.org, plan: 'free',
-                                              locale, country: opts.hints?.country ?? null }, userId, role) }
+                                              locale, country: claims.org_country || opts.hints?.country || null, currency: claims.org_currency ?? null }, userId, role) }
       created = true
     }
     // La formule ProjectLead du jeton, calculée par ERPlead pour cette application et cette organisation.

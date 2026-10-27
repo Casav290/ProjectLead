@@ -2785,6 +2785,25 @@ section('Cinq langues (27.10.2026) : langue de la personne, de l’entreprise et
   const deAcc = (await pool.query('select id, currency, locale from accounts where lead_org = $1', [deOrg])).rows[0]
   const deUser = (await pool.query(`select locale from users where lead_sub = $1`, [`sub-${deOrg}`])).rows[0]
   check('langue du Compte Lead (de-CH) : personne et entreprise en allemand, devise EUR (pays DE)', deAcc?.locale === 'de' && deUser?.locale === 'de' && deAcc?.currency === 'EUR', { deAcc, deUser })
+  // La langue du profil ERPlead suit à chaque connexion tant que rien n'est choisi dans ProjectLead (27.10.2026).
+  const suitOrg = `suit-${stamp}`
+  await leadLoginFrom((n) => ({ ...lead(n, true, suitOrg), locale: 'de', lead: rights('pro_plus') }), {})
+  const again = await leadLoginFrom((n) => ({ ...lead(n, true, suitOrg), locale: 'it', lead: rights('pro_plus') }), {})
+  const afterIt = (await pool.query(`select locale, locale_chosen from users where lead_sub = $1`, [`sub-${suitOrg}`])).rows[0]
+  check('connexion suivante, profil ERPlead passé en italien : la personne suit (it), rien choisi ici', afterIt?.locale === 'it' && afterIt?.locale_chosen === false, afterIt)
+  const againC = new Client(); againC.cookie = again.session
+  const chose = await againC.post('/api/me/locale', { locale: 'es' })
+  await leadLoginFrom((n) => ({ ...lead(n, true, suitOrg), locale: 'de', lead: rights('pro_plus') }), {})
+  const afterChoice = (await pool.query(`select locale, locale_chosen from users where lead_sub = $1`, [`sub-${suitOrg}`])).rows[0]
+  check('langue choisie dans ProjectLead (es) : gardée à la connexion suivante malgré le profil ERPlead (de)', chose.status === 200
+    && afterChoice?.locale === 'es' && afterChoice?.locale_chosen === true, afterChoice)
+  // Devise : celle que l'organisation ERPlead annonce (org_currency), sinon son pays (org_country), sinon la requête.
+  const curOrg = `orgcur-${stamp}`, ctyOrg = `orgcty-${stamp}`
+  await leadLoginFrom((n) => ({ ...lead(n, true, curOrg), org_country: 'FR', org_currency: 'EUR', lead: rights('pro_plus') }), { 'x-vercel-ip-country': 'CH' })
+  await leadLoginFrom((n) => ({ ...lead(n, true, ctyOrg), org_country: 'US', lead: rights('pro_plus') }), { 'x-vercel-ip-country': 'CH' })
+  const curOf = async (o: string) => (await pool.query('select currency from accounts where lead_org = $1', [o])).rows[0]?.currency
+  check('devise de l’organisation ERPlead : org_currency EUR (et non CHF du pays de la requête), org_country US → USD',
+    (await curOf(curOrg)) === 'EUR' && (await curOf(ctyOrg)) === 'USD', [await curOf(curOrg), await curOf(ctyOrg)])
   const tpl = (await pool.query(`select id, name, description from projects where account_id = $1 and is_template`, [deAcc?.id])).rows[0]
   const tplStages = (await pool.query('select name from stages where project_id = $1 order by position', [tpl?.id])).rows.map((x) => x.name)
   const tplCols = (await pool.query('select name from board_columns where project_id = $1 order by position', [tpl?.id])).rows.map((x) => x.name)
