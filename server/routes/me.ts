@@ -55,7 +55,9 @@ app.patch('/me', async (c) => {
  */
 app.post('/me/locale', async (c) => {
   const b = await body(c, z.object({ locale: z.enum(LOCALES) }))
-  await tx(c, (db) => db.query('update users set locale = $1 where id = app_user()', [b.locale]))
+  // Choisie ici : elle l'emporte désormais sur la langue du Compte Lead (`locale_chosen`, db/032).
+  const ctx = c.get('ctx')
+  await anon((db) => db.query('update users set locale = $1, locale_chosen = true where id = $2', [b.locale, ctx.userId]))
   return c.json({ ok: true, locale: b.locale })
 })
 
