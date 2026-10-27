@@ -32,7 +32,7 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
 ## Commandes
 
 - `npm run dev` (API 3002, Vite 5174), `npm run db:migrate`, `npm run db:seed`.
-- Contrôles : `npm run typecheck`, `npm test` (`scripts/smoke.ts`, sur `TEST_DATABASE_URL`), `npm run build`.
+- Contrôles : `npx tsx scripts/i18n-check.ts --keys` et `--hardcoded`, `npm run typecheck`, `npm test` (`scripts/smoke.ts`, sur `TEST_DATABASE_URL`), `npm run build`.
   Tout doit être vert avant de dire « fait ».
 
 ## Règles
@@ -68,3 +68,10 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   ce qui peut retirer un administrateur prend d'abord `lockAdmins` (`server/lib/admins.ts`) ;
   refus « places » à `/login?erreur=places&formule=…` avec « Changer de compte » (`switch=1` → prompt=login), jamais un
   « Réessayer » qui ramène au même refus. Contrats `data-plan-*` et `data-seat-*` lus par le banc : ne pas les retirer.
+- Cinq langues partout (Ève, 27.10.2026) : fr, de, en, it, es. AUCUN texte en dur dans `src/` : tout passe par `t()`
+  (`src/i18n/index.tsx`, textes dans `src/i18n/locales/<langue>/<partie>.json`, mêmes clés dans les cinq) ; les textes
+  envoyés par le serveur (e-mails, notifications, CSV, brouillons de facture) par `tr(langue, clé)` (`server/lib/i18n.ts`,
+  `server/i18n/<langue>.ts`). Sélecteur `LanguageSelect` sur chaque page ; langue gardée (localStorage `pl.lang`, cookie
+  `pl_lang`, `users.locale`). Langue des documents client : `projects.doc_locale`, sinon `accounts.locale`. Devise de
+  l'entreprise à sa création selon le pays (`currencyForCountry`). Contrôle : `npx tsx scripts/i18n-check.ts --keys`,
+  `--hardcoded`, `--control` ; navigateur : `scripts/e2e-langues.mjs`.
