@@ -121,7 +121,6 @@ const RULES: Rule[] = [
   r('POST', '/api/notifications/read', 'tx'),
   // réglages
   r('PATCH', '/api/me', 'tx'),
-  r('POST', '/api/me/locale', 'tx'),
   r('PATCH', '/api/account', 'tx'),
   r('PATCH', '/api/integrations/settings', 'tx'),
   r('PATCH', '/api/mail/mailboxes/:id', 'tx', (b) => has(b, 'shared')),
@@ -140,6 +139,8 @@ const RULES: Rule[] = [
   r('POST', '/api/integrations/billing/run', 'route'),
   r('POST', '/api/mail/mailboxes/:id/sync', 'route'),
   r('POST', '/api/calendar/feeds/:id/sync', 'route'),
+  // La langue de l'interface s'écrit hors transaction (connexion propriétaire, db/032) : jamais dans un lot ni un essai.
+  r('POST', '/api/me/locale', 'route'),
 ]
 
 const DUMMY = '00000000-0000-4000-8000-000000000000'

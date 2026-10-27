@@ -14,7 +14,7 @@
  *     cette liste ; chaque outil propose_* enregistré figure dans l'inventaire.
  * G2  scripts/assistant-actions-check.ts (lot, plan, chaque outil nouveau : proposition sans écriture, confirmation
  *     exacte, rejeu 403, autre personne / autre entreprise 403, échec au milieu d'un lot = rien) + assistant-check.ts.
- * G3  contrôles complets : types, npm test (smoke), contrôles de l'assistant, suites, build, aucune clé dans le paquet du
+ * G3  contrôles complets : cinq langues (i18n-check), types, npm test (smoke), contrôles de l'assistant, suites, build, aucune clé dans le paquet du
  *     navigateur (témoin positif), aucune clé ni fichier d'environnement dans le dépôt.
  * G4  essai réel sur l'APERÇU Vercel (vrai modèle, compte TEST) : scripts/e2e-assistant-actions.mjs --scenario plan.
  * G5  essai réel sur l'aperçu : demandes interdites (supprimer, envoyer) refusées : e2e … --scenario interdit.
@@ -208,6 +208,11 @@ function g2() {
 function g3() {
   console.log('G3 — contrôles complets (types, smoke, assistant, suites, build, paquet, dépôt)')
   const env = { TEST_DATABASE_URL: testDatabaseUrl() }
+  // Les cinq langues (CLAUDE.md, 27.10.2026) : mêmes clés partout, aucun texte en dur, et le détecteur trouve un témoin.
+  for (const [mode, token] of [['--keys', 'I18N_KEYS_OK'], ['--hardcoded', 'I18N_HARDCODED_OK'], ['--control', 'I18N_CONTROL_OK']]) {
+    const i = run('npx', ['tsx', 'scripts/i18n-check.ts', mode])
+    expect(`i18n-check ${mode}`, i.code === 0 && lastLine(i.out) === token, lastLine(i.out) || i.err.slice(-200))
+  }
   const tsc = run('npm', ['run', '-s', 'typecheck'])
   expect('npm run typecheck', tsc.code === 0, (tsc.out + tsc.err).slice(-400))
   const smoke = run('npm', ['test'], env)
@@ -228,12 +233,13 @@ function g3() {
   const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p) : files.push(p) } }
   if (existsSync(join(ROOT, 'dist'))) walk(join(ROOT, 'dist'))
   // Seule mention permise : Claude cité parmi les outils extérieurs d'une clé d'API (Réglages → API, en production
-  // depuis le 26.10.2026, hors de l'assistant). L'assistant, lui, ne nomme ni fournisseur ni modèle.
-  const ALLOWED = 'Pour Zapier, Make, Claude, ChatGPT ou vos scripts.'
+  // depuis le 26.10.2026, hors de l'assistant ; même liste dans les cinq langues, clé settings.integrations.apiText).
+  // L'assistant, lui, ne nomme ni fournisseur ni modèle.
+  const ALLOWED = 'Zapier, Make, Claude, ChatGPT'
   const BAD = /sk-ant|anthropic|claude|opus-5/i
   const scan = (text) => BAD.test(text.split(ALLOWED).join(''))
   const temoin = join(mkdtempSync(join(tmpdir(), 'pl-g3-')), 'temoin.js')
-  writeFileSync(temoin, `const k = "sk-ant-temoin"; const t = "${ALLOWED}"`)
+  writeFileSync(temoin, `const k = "sk-ant-temoin"; const t = "Pour ${ALLOWED} ou vos scripts."`)
   expect('témoin : la recherche trouve « sk-ant » dans un fichier témoin (et ignore la phrase permise)', scan(readFileSync(temoin, 'utf8'))
     && !scan(ALLOWED))
   rmSync(dirname(temoin), { recursive: true, force: true })

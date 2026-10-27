@@ -161,7 +161,7 @@ ligne interdite ; chaque outil `propose_*` figure ici.
 |---|---|---|---|
 | Cloche (en-tête) | Marquer les notifications comme lues | `POST /api/notifications/read` | propose_mark_notifications_read, propose_batch |
 | Réglages → Profil | Son nom, sa couleur | `PATCH /api/me` | propose_update_settings, propose_batch |
-| Sélecteur de langue (chaque page) | Choisir la langue de l'interface | `POST /api/me/locale` | propose_update_settings, propose_batch |
+| Sélecteur de langue (chaque page) | Choisir la langue de l'interface (seule sur sa carte : écrite hors transaction) | `POST /api/me/locale` | propose_set_language |
 | Réglages → Profil | Changer son mot de passe | `POST /api/me/password` | interdit : identifiants |
 | Réglages → Entreprise (administrateurs) | Nom, fuseau, devise, heures par semaine, langue des documents | `PATCH /api/account` | propose_update_settings, propose_batch |
 | Réglages → Entreprise, Applications Lead | Facturation mensuelle (automatique, jour, langue, signature du suivi) | `PATCH /api/integrations/settings` | propose_update_settings, propose_batch |
@@ -172,6 +172,7 @@ ligne interdite ; chaque outil `propose_*` figure ici.
 | Réglages → Applications Lead | Effacer une clé (retiré le 26.10, 410) | `DELETE /api/integrations/:id` | interdit : integrations |
 | Facturation | Créer les brouillons du mois dans InvoiceLead (rien n'est émis) | `POST /api/integrations/billing/run` | propose_monthly_billing |
 | Réglages → Équipe | Inviter une personne | `POST /api/team/invite` | interdit : membres-droits |
+| Réglages → Équipe | Inviter une personne (même route, autre adresse) | `POST /api/team/invitations` | interdit : membres-droits |
 | Réglages → Équipe | Annuler une invitation | `DELETE /api/team/invitations/:id` | interdit : membres-droits |
 | Réglages → Équipe | Rôle, taux, capacité d'une personne | `PATCH /api/team/members/:id` | interdit : membres-droits |
 | Réglages → Équipe | Retirer une personne | `POST /api/team/members/:id/remove` | interdit : membres-droits |

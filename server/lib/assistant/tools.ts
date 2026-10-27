@@ -920,9 +920,9 @@ export function buildTools(s: ToolScope) {
 
   write({
     name: 'propose_update_settings', batch: true,
-    description: 'Prépare des réglages : profile (son nom, sa couleur, sa langue d’interface), company (entreprise, administrateurs : nom, fuseau, devise, heures par semaine, langue des documents), billing (facturation mensuelle vers InvoiceLead : automatique, jour, langue, signature du suivi client ; responsables et administrateurs), mailbox (une boîte branchée : nom affiché, boîte par défaut). Ni mot de passe, ni partage d’une boîte, ni équipe, ni formule.',
+    description: 'Prépare des réglages : profile (son nom, sa couleur), company (entreprise, administrateurs : nom, fuseau, devise, heures par semaine, langue des documents), billing (facturation mensuelle vers InvoiceLead : automatique, jour, langue, signature du suivi client ; responsables et administrateurs), mailbox (une boîte branchée : nom affiché, boîte par défaut). Ni mot de passe, ni partage d’une boîte, ni équipe, ni formule. La langue de l’interface : propose_set_language.',
     schema: z.object({
-      profile: z.object({ name: z.string().trim().min(1).max(120).optional(), color: COLOR.optional(), locale: LOCALE.optional() }).optional(),
+      profile: z.object({ name: z.string().trim().min(1).max(120).optional(), color: COLOR.optional() }).optional(),
       company: z.object({ name: z.string().trim().min(1).max(200).optional(), timezone: z.string().max(60).optional(),
         currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), week_hours: z.number().min(1).max(80).optional(), locale: LOCALE.optional() }).optional(),
       billing: z.object({ monthly_billing_auto: z.boolean().optional(), monthly_billing_day: z.number().int().min(1).max(28).optional(),
@@ -933,14 +933,11 @@ export function buildTools(s: ToolScope) {
       const ops: WriteOp[] = []
       const lines: Line[] = []
       const set = (k: string, v: unknown) => L(k, { value: typeof v === 'boolean' ? yesNo(v) : clip(String(v), 80) })
-      if (a.profile && (a.profile.name !== undefined || a.profile.color !== undefined)) {
-        const { locale: _l, ...rest } = a.profile
-        ops.push({ method: 'PATCH', path: '/api/me', body: rest })
-      }
-      if (a.profile?.locale) ops.push({ method: 'POST', path: '/api/me/locale', body: { locale: a.profile.locale } })
-      if (a.profile && Object.values(a.profile).some((v) => v !== undefined))
+      if (a.profile && Object.values(a.profile).some((v) => v !== undefined)) {
+        ops.push({ method: 'PATCH', path: '/api/me', body: a.profile })
         lines.push(L('assistant.card.profile', { value: [a.profile.name !== undefined && set('assistant.card.set.name', a.profile.name),
-          a.profile.color && set('assistant.card.set.color', a.profile.color), a.profile.locale && L('assistant.card.set.locale', { value: L(LANG_K[a.profile.locale]) })].filter(Boolean).join(', ') }))
+          a.profile.color && set('assistant.card.set.color', a.profile.color)].filter(Boolean).join(', ') }))
+      }
       if (a.company && Object.values(a.company).some((v) => v !== undefined)) {
         ops.push({ method: 'PATCH', path: '/api/account', body: a.company })
         lines.push(L('assistant.card.company', { value: [a.company.name !== undefined && set('assistant.card.set.name', a.company.name),
@@ -1152,6 +1149,16 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.syncFeed'), mode: 'route', ops: [{ method: 'POST', path: `/api/calendar/feeds/${id}/sync`, body: {} }],
         lines: [L('assistant.card.feed', { name: f.name }), L('assistant.card.feedReread')], open: '/agenda' }
     },
+  })
+
+  write({
+    name: 'propose_set_language', batch: false,
+    description: 'Prépare le changement de SA langue d’interface (fr, de, en, it, es), comme le sélecteur de langue de chaque page : la page passe dans cette langue après « Confirmer ».',
+    schema: z.object({ locale: LOCALE }),
+    build: async ({ locale }) => ({
+      title: L('assistant.card.title.setLanguage'), mode: 'route', ops: [{ method: 'POST', path: '/api/me/locale', body: { locale } }],
+      lines: [L('assistant.card.language', { value: L(LANG_K[locale]) })], open: null,
+    }),
   })
 
   // ------------------------------------------------------------------ le plan d'un projet (outil métier)
@@ -1642,4 +1649,4 @@ export const TOOL_NAMES = ['search', 'dashboard', 'list_projects', 'get_project'
   'propose_set_file_visibility', 'propose_log_time', 'propose_update_time_entry', 'propose_set_timesheet_day', 'propose_timer', 'propose_create_client',
   'propose_update_client', 'propose_client_contact', 'propose_event', 'propose_set_email_status', 'propose_mark_notifications_read',
   'propose_update_settings', 'propose_booking_page', 'propose_intake_form', 'propose_automation', 'propose_email_to_project', 'propose_link_email',
-  'propose_import_client', 'propose_monthly_billing', 'propose_sync_now', 'propose_project_plan', 'propose_batch'] as const
+  'propose_import_client', 'propose_monthly_billing', 'propose_sync_now', 'propose_set_language', 'propose_project_plan', 'propose_batch'] as const

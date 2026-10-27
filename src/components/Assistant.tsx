@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { getLocale, t, useT } from '../i18n'
+import { getLocale, isLocale, t, useI18n, useT } from '../i18n'
 import { api, ApiError } from '../lib/api'
 import { useApp } from '../lib/store'
 
@@ -103,6 +103,7 @@ const Sparkle = ({ className }: { className?: string }) => (
 export default function Assistant() {
   const { me, refresh } = useApp()
   const tr = useT()
+  const { setLocale } = useI18n()
   const userId = me?.user.id ?? ''
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<Saved>(() => (userId ? load(userId) : { api: [], items: [], notes: [] }))
@@ -171,8 +172,10 @@ export default function Assistant() {
   const confirm = async (card: Extract<Item, { kind: 'confirm' }>) => {
     setCard(card.token, { state: 'busy' })
     try {
-      const r = await api.post<{ ok: boolean; message: string; path: string | null; links?: Link[] }>('/assistant/confirm', { token: card.token, locale: getLocale() })
+      const r = await api.post<{ ok: boolean; message: string; path: string | null; links?: Link[]; locale?: string }>('/assistant/confirm', { token: card.token, locale: getLocale() })
       setCard(card.token, { state: 'done', result: r.message, path: r.path, links: r.links ?? [] })
+      // Une carte « langue de l'interface » confirmée : l'écran change de langue sur place.
+      if (isLocale(r.locale) && r.locale !== getLocale()) setLocale(r.locale).catch(() => {})
       // Le résultat (et ses liens) en bas de la carte : à l'écran.
       setTimeout(() => thread.current?.querySelector(`[data-card="${card.token.slice(-16)}"]`)?.scrollIntoView({ block: 'end' }), 50)
       // Notes pour le modèle, jamais affichées.

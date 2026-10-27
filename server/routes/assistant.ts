@@ -219,7 +219,9 @@ app.post('/confirm', async (c) => {
   const links = (p.links ?? []).map((l) => ({ label: l.label, path: at(l.path) })).filter((l): l is { label: string; path: string } => Boolean(l.path))
   const done = tr(l, 'assistant.confirmed', { title: p.summary.title })
   const message = p.ops.length === 1 ? done : `${done} ${doneLine(p.ops, l)}`
-  return c.json({ ok: true, message, path: at(p.open), links })
+  // La langue de l'interface vient de changer : l'écran la prend sur place (comme le sélecteur de langue).
+  const locale = p.ops.find((op) => op.method === 'POST' && op.path === '/api/me/locale')?.body.locale
+  return c.json({ ok: true, message, path: at(p.open), links, ...(typeof locale === 'string' ? { locale } : {}) })
 })
 
 export default app
