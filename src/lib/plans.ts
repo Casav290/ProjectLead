@@ -1,3 +1,4 @@
+import { intlLocale, labels, t } from '../i18n'
 import type { Plan } from './types'
 
 /**
@@ -8,17 +9,21 @@ import type { Plan } from './types'
 export type Tier = Plan['tier']
 
 export const PLAN_RANK: Record<Tier, number> = { free: 0, pro: 1, pro_plus: 2 }
-export const PLAN_NAME: Record<Tier, string> = { free: 'Gratuit', pro: 'Pro', pro_plus: 'Pro+' }
-export const PLAN_FEATURES: Record<Tier, string[]> = {
-  free: ['3 projets en cours à la fois', '1 personne', 'Toutes les fonctions de ProjectLead'],
-  pro: ['Projets sans limite', '1 personne', 'Toutes les fonctions de ProjectLead'],
-  pro_plus: ['Projets sans limite', "Jusqu'à 5 personnes", 'Toutes les fonctions de ProjectLead'],
+// Les noms et les lignes des formules suivent la langue : lus à chaque accès (clés shell.plan.*).
+export const PLAN_NAME: Record<Tier, string> = labels('shell.plan.name', ['free', 'pro', 'pro_plus'])
+const FEATURE_KEYS: Record<Tier, string[]> = {
+  free: ['projects3', 'person1', 'allFeatures'],
+  pro: ['projectsUnlimited', 'person1', 'allFeatures'],
+  pro_plus: ['projectsUnlimited', 'persons5', 'allFeatures'],
 }
+export const PLAN_FEATURES = {} as Record<Tier, string[]>
+for (const k of Object.keys(FEATURE_KEYS) as Tier[])
+  Object.defineProperty(PLAN_FEATURES, k, { enumerable: true, get: () => FEATURE_KEYS[k].map((f) => t(`shell.plan.feature.${f}`)) })
 export const PLAN_PRICES: Record<'pro' | 'pro_plus', Record<'month' | 'year', number>> = {
   pro: { month: 19, year: 190 },
   pro_plus: { month: 39, year: 390 },
 }
 
 /** Un prix en euros, sans décimales quand il est rond (19 €, 15,83 €). */
-export const euros = (n: number) => new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'EUR',
+export const euros = (n: number) => new Intl.NumberFormat(intlLocale(), { style: 'currency', currency: 'EUR',
   minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n)

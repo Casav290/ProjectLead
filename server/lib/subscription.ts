@@ -3,6 +3,7 @@ import { leadIdOn } from './env.js'
 import { reportSubscription } from './leadId.js'
 import { savePlan } from './plans.js'
 import { APP, StripeError, idOf, invoiceSubscription, own, periodEnd, planOfSubscription, stripe, stripeConfigured } from './stripe.js'
+import { LOCALES, tr } from './i18n.js'
 
 /**
  * L'abonnement ProjectLead côté base : le client Stripe de l'entreprise, l'état des abonnements tel que Stripe le
@@ -138,20 +139,24 @@ async function notifyIfTwoSubscriptions(db: Db, accountId: string, subscriptionI
     [accountId, subscriptionId, GRANTING])).rows[0].n
   if (!others) return
   console.warn('[abonnement] deux abonnements ProjectLead en cours pour une entreprise :', accountId)
-  await db.query(
-    `insert into notifications (account_id, user_id, kind, title, link)
-     select $1, au.user_id, 'plan', $2, '/reglages/entreprise' from account_users au
-      where au.account_id = $1 and au.role = 'admin' and au.active`,
-    [accountId, 'Votre entreprise a deux abonnements ProjectLead en cours : résiliez celui en trop dans Réglages → Entreprise → Gérer l\'abonnement.'])
+  await notifyAdmins(db, accountId, 'notif.twoSubscriptions')
 }
 
 /** Prévient les administrateurs d'un paiement échoué (notification dans ProjectLead, aucun e-mail). */
 async function notifyPaymentFailed(db: Db, accountId: string) {
-  await db.query(
+  await notifyAdmins(db, accountId, 'notif.paymentFailed')
+}
+
+/** Une notification « formule » aux administrateurs actifs, chacun dans sa langue ($2…$6 = fr, de, en, it, es). */
+async function notifyAdmins(db: Db, accountId: string, key: 'notif.twoSubscriptions' | 'notif.paymentFailed') {
+  // tr(l, 'notif.twoSubscriptions') tr(l, 'notif.paymentFailed')
+  await db.query( // i18n-ok
     `insert into notifications (account_id, user_id, kind, title, link)
-     select $1, au.user_id, 'plan', $2, '/reglages/entreprise' from account_users au
+     select $1, au.user_id, 'plan', case u.locale when 'de' then $3 when 'en' then $4 when 'it' then $5 when 'es' then $6 else $2 end,
+            '/reglages/entreprise'
+       from account_users au join users u on u.id = au.user_id
       where au.account_id = $1 and au.role = 'admin' and au.active`,
-    [accountId, 'Le paiement de l\'abonnement ProjectLead a échoué : mettez à jour le moyen de paiement (Réglages → Entreprise → Gérer l\'abonnement).'])
+    [accountId, ...LOCALES.map((l) => tr(l, key))])
 }
 
 /**

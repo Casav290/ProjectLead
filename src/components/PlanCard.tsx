@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
+import { intlLocale, useT } from '../i18n'
 import { api, errorText } from '../lib/api'
 import { leadEntry } from '../lib/leadFamily'
 import { isNativeApp } from '../lib/native'
@@ -9,8 +10,7 @@ import { euros, PLAN_FEATURES as FEATURES, PLAN_NAME as NAME, PLAN_RANK as RANK 
 import type { Billing, Plan } from '../lib/types'
 import { Button, Card, Spinner } from './ui'
 
-const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`
-const day = (d: string) => new Date(d).toLocaleDateString('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
+const day = (d: string) => new Date(d).toLocaleDateString(intlLocale(), { day: '2-digit', month: '2-digit', year: 'numeric' })
 const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'ScanLead', invoicelead: 'InvoiceLead', greetlead: 'Greetlead' } as Record<string, string>)[code ?? ''] ?? code ?? 'Lead'
 
 /**
@@ -21,6 +21,7 @@ const appName = (code: string | null) => ({ crmlead: 'CRMlead', scanlead: 'ScanL
  */
 export function PlanCard() {
   const { me, refresh } = useApp()
+  const t = useT()
   const [b, setB] = useState<Billing | null>(null)
   const [annual, setAnnual] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -51,23 +52,24 @@ export function PlanCard() {
   }, [])
 
   if (!me?.plan.linked) return null
-  if (!b) return <Card title="Formule">{error ? <p className="p-4 text-sm text-late">{error}</p> : <Spinner />}</Card>
+  if (!b) return <Card title={t('shell.plan.card.title')}>{error ? <p className="p-4 text-sm text-late">{error}</p> : <Spinner />}</Card>
 
   const plan = b.plan
   const sub = b.subscription
-  const seats = plan.seats === null ? 'sans limite' : plural(plan.seats, 'personne', 'personnes')
+  const seats = plan.seats === null ? t('shell.plan.unlimited') : t('shell.plan.persons', { n: plan.seats })
   const usage = (
     <ul className="space-y-1">
-      <li>Projets en cours : <span className="font-semibold tabular-nums">{plan.openProjects}</span>
-        {plan.projectLimit !== null ? <> sur {plan.projectLimit}</> : <span className="text-muted-foreground"> (sans limite)</span>}</li>
-      <li>Personnes : <span className="font-semibold tabular-nums">{plan.members + plan.invited}</span> sur {seats}
-        {plan.invited > 0 && <span className="text-muted-foreground"> (dont {plural(plan.invited, 'invitation en attente', 'invitations en attente')})</span>}</li>
+      <li>{t('shell.plan.usage.projects')} <span className="font-semibold tabular-nums">{plan.openProjects}</span>
+        {plan.projectLimit !== null ? <> {t('shell.plan.usage.of', { n: plan.projectLimit })}</>
+          : <span className="text-muted-foreground"> {t('shell.plan.usage.unlimited')}</span>}</li>
+      <li>{t('shell.plan.usage.people')} <span className="font-semibold tabular-nums">{plan.members + plan.invited}</span> {t('shell.plan.usage.of', { n: seats })}
+        {plan.invited > 0 && <span className="text-muted-foreground"> {t('shell.plan.usage.pending', { n: plan.invited })}</span>}</li>
     </ul>
   )
   // Dans l'app mobile : la formule et ce qu'on en utilise, rien à acheter (src/lib/native.ts).
   if (isNativeApp) {
     return (
-      <Card title="Formule ProjectLead">
+      <Card title={t('shell.plan.card.titleFull')}>
         <div className="space-y-4 p-4 text-sm" data-plan-app="">
           <PlanStatus b={b} />
           {usage}
@@ -96,50 +98,46 @@ export function PlanCard() {
   )
 
   return (
-    <Card title="Formule ProjectLead">
+    <Card title={t('shell.plan.card.titleFull')}>
       <div className="space-y-4 p-4 text-sm">
         {back === 'ok' && (
           <p role="status" className="border border-l-[3px] border-won/40 border-l-won bg-won/5 px-3 py-2">
-            {plan.paidTier === 'free' ? 'Paiement reçu, merci. Votre formule s\'active dans quelques secondes.'
-              : `Paiement reçu, merci. Votre formule ${NAME[plan.paidTier]} est active.`}</p>
+            {plan.paidTier === 'free' ? t('shell.plan.paid.pending') : t('shell.plan.paid.active', { plan: NAME[plan.paidTier] })}</p>
         )}
         {back === 'annule' && (
           <p role="status" className="border border-l-[3px] border-border bg-card px-3 py-2">
-            Paiement annulé : rien n'a été débité, votre formule reste la même.</p>
+            {t('shell.plan.cancelled')}</p>
         )}
 
         <div className="flex flex-wrap items-start justify-between gap-2">
           <PlanStatus b={b} />
           {b.portal && b.canManage && b.hasCustomer && (
-            <Button onClick={portal} disabled={!!busy}>{busy === '/billing/portal' ? 'Ouverture…' : "Gérer l'abonnement"}</Button>
+            <Button onClick={portal} disabled={!!busy}>{busy === '/billing/portal' ? t('shell.plan.opening') : t('shell.plan.manage')}</Button>
           )}
         </div>
         {sub && ['past_due', 'unpaid'].includes(sub.status) && (
           <p className="border border-l-[3px] border-soon/40 border-l-soon bg-soon/5 px-3 py-2 text-xs">
-            Le dernier paiement a échoué. Mettez à jour votre moyen de paiement dans « Gérer l'abonnement » pour garder votre formule.</p>
+            {t('shell.plan.pastDue')}</p>
         )}
 
         {usage}
 
         {!b.configured && (
           <p role="status" className="border border-l-[3px] border-border bg-card px-3 py-2 text-xs">
-            Le paiement en ligne n'est pas encore ouvert : votre espace fonctionne normalement d'ici là.</p>
+            {t('shell.plan.notConfigured')}</p>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div role="group" aria-label="Période de paiement" className="inline-flex border border-input">
-            {toggle(false, 'Mensuel')}
-            {toggle(true, <>Annuel <span className={clsx('px-1.5 py-0.5 text-[11px] font-extrabold', annual ? 'bg-white/20' : 'bg-accent-veil text-accent-dark')}>2 mois offerts</span></>)}
+          <div role="group" aria-label={t('shell.plan.period')} className="inline-flex border border-input">
+            {toggle(false, t('shell.plan.monthly'))}
+            {toggle(true, <>{t('shell.plan.annual')} <span className={clsx('px-1.5 py-0.5 text-[11px] font-extrabold', annual ? 'bg-white/20' : 'bg-accent-veil text-accent-dark')}>{t('shell.plan.twoMonthsFree')}</span></>)}
           </div>
-          {!b.canManage && <p className="text-xs text-muted-foreground">Seul un administrateur peut changer la formule.</p>}
+          {!b.canManage && <p className="text-xs text-muted-foreground">{t('shell.plan.adminOnly')}</p>}
         </div>
         <PlanTiers b={b} annual={annual} busy={busy} onCheckout={checkout} onPortal={portal} />
         {error && <p className="text-late">{error}</p>}
 
-        <p className="text-xs text-muted-foreground">Les demandes à qualifier, les projets terminés, archivés et les modèles ne comptent pas.
-          Votre formule ProjectLead se prend ici et ne vaut que pour ProjectLead. Les brouillons de factures dans InvoiceLead se
-          créent sans clé, dans toutes les formules.</p>
-        <p className="text-xs text-muted-foreground">Prix hors taxes, en euros. Paiement sécurisé par Stripe. L'abonnement se renouvelle
-          automatiquement ; résiliable à tout moment dans « Gérer l'abonnement », effectif à la fin de la période payée.</p>
+        <p className="text-xs text-muted-foreground">{t('shell.plan.note')}</p>
+        <p className="text-xs text-muted-foreground">{t('shell.plan.terms')}</p>
       </div>
     </Card>
   )
@@ -152,27 +150,32 @@ export function PlanCard() {
  * laquelle une formule se vend ; jamais l'héritage).
  */
 export function PlanStatus({ b }: { b: Billing }) {
+  const t = useT()
   const plan = b.plan
   const sub = b.subscription
   const subscribed = Boolean(sub?.active)
   return (
     <div className="space-y-1">
-      <p data-plan-current={plan.tier} data-plan-acquired={plan.paidTier}>Votre formule : <span className="font-bold">{plan.name}</span>
-        {plan.tier === 'free' && <span className="text-muted-foreground"> : toutes les fonctions de ProjectLead, en plus petite quantité.</span>}</p>
+      <p data-plan-current={plan.tier} data-plan-acquired={plan.paidTier}>{t('shell.plan.status.yours')} <span className="font-bold">{plan.name}</span>
+        {plan.tier === 'free' && <span className="text-muted-foreground">{t('shell.plan.status.freeLine')}</span>}</p>
       {sub && subscribed && (
-        <p className="text-muted-foreground">Abonnement ProjectLead {NAME[sub.plan]}{sub.interval === 'year' ? ', annuel' : sub.interval === 'month' ? ', mensuel' : ''}
-          {sub.endsAt ? <> · se termine le {day(sub.endsAt)}, puis Gratuit</>
-            : sub.currentPeriodEnd ? <> · renouvellement le {day(sub.currentPeriodEnd)}</> : null}</p>
+        <p className="text-muted-foreground">{t('shell.plan.status.sub', { plan: NAME[sub.plan] })}
+          {sub.interval === 'year' ? t('shell.plan.status.subYear') : sub.interval === 'month' ? t('shell.plan.status.subMonth') : ''}
+          {sub.endsAt ? <>{t('shell.plan.status.ends', { date: day(sub.endsAt) })}</>
+            : sub.currentPeriodEnd ? <>{t('shell.plan.status.renews', { date: day(sub.currentPeriodEnd) })}</> : null}</p>
       )}
       {plan.lead && (
         <p className="text-muted-foreground">
-          {NAME[plan.lead.tier]} par votre compte ERPlead{plan.lead.until ? `, jusqu'au ${day(plan.lead.until)}` : ''}. Cette formule se gère dans
-          ERPlead, pas ici. <a href={leadEntry('erplead')} className="font-semibold text-accent-dark hover:underline">Ouvrir mon compte ERPlead</a></p>
+          {plan.lead.until ? t('shell.plan.status.leadUntil', { plan: NAME[plan.lead.tier], date: day(plan.lead.until) })
+            : t('shell.plan.status.lead', { plan: NAME[plan.lead.tier] })}{' '}
+          <a href={leadEntry('erplead')} className="font-semibold text-accent-dark hover:underline">{t('shell.plan.status.openErp')}</a></p>
       )}
       {plan.inherited && (
         <p className="text-muted-foreground">
-          {NAME[plan.inherited.tier]}{plan.inherited.until ? ` jusqu'au ${day(plan.inherited.until)}` : ''} grâce à votre abonnement {appName(plan.inherited.app)},
-          puis Gratuit{isNativeApp ? '' : ', sauf si vous prenez une formule ici'}.</p>
+          {plan.inherited.until
+            ? t('shell.plan.status.inheritedUntil', { plan: NAME[plan.inherited.tier], date: day(plan.inherited.until), app: appName(plan.inherited.app) })
+            : t('shell.plan.status.inherited', { plan: NAME[plan.inherited.tier], app: appName(plan.inherited.app) })}
+          {isNativeApp ? '' : t('shell.plan.status.inheritedHere')}.</p>
       )}
     </div>
   )
@@ -189,6 +192,7 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
   const subscribed = Boolean(sub?.active)
   // Un abonnement en cours ou impayé se règle ou se change au portail, jamais par un second abonnement.
   const locked = Boolean(sub?.blocking)
+  const t = useT()
   const current = b.plan.paidTier
   const card = (p: Plan['tier']) => {
     // « Formule actuelle » seulement sur la période prise : l'autre période se change au portail.
@@ -196,14 +200,14 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
     const price = p === 'free' ? 0 : b.prices[p][annual ? 'year' : 'month']
     let action: ReactNode = null
     if (here) {
-      action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">Formule actuelle</p>
+      action = <p className="border border-accent px-3 py-2 text-center text-[13px] font-bold text-accent-dark">{t('shell.plan.current')}</p>
     } else if (b.configured && b.canManage && p !== 'free') {
       action = locked
         // Déjà abonné : on change de formule dans le portail, jamais par un second abonnement.
-        ? (b.portal ? <Button className="w-full" onClick={onPortal} disabled={!!busy}>Changer de formule</Button> : null)
+        ? (b.portal ? <Button className="w-full" onClick={onPortal} disabled={!!busy}>{t('shell.plan.change')}</Button> : null)
         : RANK[p] > RANK[current]
           ? <Button variant="primary" className="w-full" data-plan-offer={p} onClick={() => onCheckout(p)} disabled={!!busy}>
-              {busy === '/billing/checkout' ? 'Ouverture du paiement…' : p === 'pro' ? 'Passer à Pro' : 'Passer à Pro+'}</Button>
+              {busy === '/billing/checkout' ? t('shell.plan.openingCheckout') : p === 'pro' ? t('shell.plan.upgradePro') : t('shell.plan.upgradeProPlus')}</Button>
           : null
     }
     return (
@@ -211,10 +215,10 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
         <h3 className="text-base font-extrabold">{NAME[p]}</h3>
         <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5">
           <span className="text-2xl font-extrabold leading-none tracking-[-.02em]">{euros(price)}</span>
-          <span className="text-xs text-muted-foreground">{p === 'free' ? 'sans limite de durée' : annual ? '/ an HT' : '/ mois HT'}</span>
+          <span className="text-xs text-muted-foreground">{p === 'free' ? t('shell.plan.noTimeLimit') : annual ? t('shell.plan.perYear') : t('shell.plan.perMonth')}</span>
         </p>
         <p className="mt-1 h-4 text-xs text-muted-foreground">
-          {p !== 'free' && annual ? `soit ${euros(Math.round((price / 12) * 100) / 100)} / mois` : ''}</p>
+          {p !== 'free' && annual ? t('shell.plan.monthlyEquivalent', { price: euros(Math.round((price / 12) * 100) / 100) }) : ''}</p>
         <ul className="mt-3 flex-1 space-y-1.5 text-sm">
           {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
         </ul>
@@ -228,20 +232,22 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
 /** Le lien « Passer à Pro » : vers la page Formule pour un administrateur, une indication pour les autres. */
 export function UpgradeLink({ plan, children }: { plan: Plan; children: ReactNode }) {
   const { me } = useApp()
+  const t = useT()
   // Dans l'app mobile, aucune invitation à changer de formule (règle 3.1.1 d'Apple).
   if (isNativeApp) return null
-  if (me?.user.role !== 'admin') return <span className="text-muted-foreground">Un administrateur peut changer la formule (Réglages → Entreprise).</span>
+  if (me?.user.role !== 'admin') return <span className="text-muted-foreground">{t('shell.plan.adminCanChange')}</span>
   return <Link to={plan.upgradeUrl} className="font-semibold text-accent-dark hover:underline">{children}</Link>
 }
 
 /** Une ligne sous le titre des projets, en formule gratuite seulement. */
 export function PlanLine({ plan }: { plan: Plan }) {
+  const t = useT()
   if (!plan.linked || plan.projectLimit === null) return null
   const full = plan.openProjects >= plan.projectLimit
   return (
     <p className={full ? 'text-sm text-late' : 'text-sm text-muted-foreground'}>
-      Formule gratuite : {plan.openProjects} projet{plan.openProjects > 1 ? 's' : ''} en cours sur {plan.projectLimit}.{' '}
-      <UpgradeLink plan={plan}>Passer à Pro</UpgradeLink>
+      {t('shell.plan.freeLine', { n: plan.openProjects, limit: plan.projectLimit })}{' '}
+      <UpgradeLink plan={plan}>{t('shell.plan.upgradePro')}</UpgradeLink>
     </p>
   )
 }

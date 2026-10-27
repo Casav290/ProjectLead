@@ -1,3 +1,4 @@
+import { labels, useT } from '../../i18n'
 import { Field, Input, Select, Textarea } from '../ui'
 import type { Client } from '../../lib/types'
 
@@ -30,66 +31,66 @@ export const draftToBody = (d: ClientDraft) => {
   }
 }
 
-export const COUNTRIES: Record<string, string> = {
-  CH: 'Suisse', FR: 'France', DE: 'Allemagne', IT: 'Italie', AT: 'Autriche', LI: 'Liechtenstein', BE: 'Belgique',
-  LU: 'Luxembourg', NL: 'Pays-Bas', ES: 'Espagne', PT: 'Portugal', GB: 'Royaume-Uni', US: 'États-Unis',
-}
-export const LANGUAGES: Record<string, string> = { fr: 'Français', de: 'Allemand', it: 'Italien', en: 'Anglais' }
+/** Les noms suivent la langue de l'interface (objets à getters, src/i18n). */
+export const COUNTRIES: Record<string, string> = labels('clients.country',
+  ['CH', 'FR', 'DE', 'IT', 'AT', 'LI', 'BE', 'LU', 'NL', 'ES', 'PT', 'GB', 'US'])
+export const LANGUAGES: Record<string, string> = labels('clients.language', ['fr', 'de', 'it', 'en', 'es'])
 
 export function ClientFields({ value, onChange }: { value: ClientDraft; onChange: (d: ClientDraft) => void }) {
+  const t = useT()
   const set = <K extends keyof ClientDraft>(k: K, v: ClientDraft[K]) => onChange({ ...value, [k]: v })
   const company = value.kind === 'company'
   return (
     <div className="grid gap-3 sm:grid-cols-6">
-      <div className="flex gap-0 sm:col-span-6" role="radiogroup" aria-label="Type de client">
+      <div className="flex gap-0 sm:col-span-6" role="radiogroup" aria-label={t('clients.kindLabel')}>
         {(['company', 'person'] as const).map((k) => (
           <button key={k} type="button" role="radio" aria-checked={value.kind === k} onClick={() => set('kind', k)}
             className={`flex-1 border px-3 py-2 text-[13px] font-bold ${value.kind === k ? 'border-accent bg-accent-veil text-accent-dark' : 'border-input bg-card text-muted-foreground hover:text-foreground'}`}>
-            {k === 'company' ? 'Société' : 'Personne'}
+            {k === 'company' ? t('clients.kind.company') : t('clients.kind.person')}
           </button>
         ))}
       </div>
-      <Field label={company ? 'Nom de la société' : 'Nom et prénom'} className="sm:col-span-6">
+      <Field label={company ? t('clients.field.companyName') : t('clients.field.personName')} className="sm:col-span-6">
         <Input value={value.name} onChange={(e) => set('name', e.target.value)} required maxLength={200} />
       </Field>
       {company && (
-        <Field label="Personne de contact" className="sm:col-span-6">
+        <Field label={t('clients.field.contactPerson')} className="sm:col-span-6">
           <Input value={value.contact_person} onChange={(e) => set('contact_person', e.target.value)} maxLength={200} />
         </Field>
       )}
-      <Field label="Email" className="sm:col-span-3">
+      <Field label={t('clients.field.email')} className="sm:col-span-3">
         <Input type="email" value={value.email} onChange={(e) => set('email', e.target.value)} />
       </Field>
-      <Field label="Téléphone" className="sm:col-span-3">
+      <Field label={t('clients.field.phone')} className="sm:col-span-3">
         <Input type="tel" value={value.phone} onChange={(e) => set('phone', e.target.value)} maxLength={50} />
       </Field>
-      <Field label="Rue" className="sm:col-span-4">
+      <Field label={t('clients.field.street')} className="sm:col-span-4">
         <Input value={value.street} onChange={(e) => set('street', e.target.value)} maxLength={70} autoComplete="address-line1" />
       </Field>
-      <Field label="Numéro" className="sm:col-span-2">
+      <Field label={t('clients.field.number')} className="sm:col-span-2">
         <Input value={value.building_number} onChange={(e) => set('building_number', e.target.value)} maxLength={16} />
       </Field>
-      <Field label="NPA" className="sm:col-span-2">
+      <Field label={t('clients.field.postalCode')} className="sm:col-span-2">
         <Input value={value.postal_code} onChange={(e) => set('postal_code', e.target.value)} maxLength={16} autoComplete="postal-code" />
       </Field>
-      <Field label="Localité" className="sm:col-span-4">
+      <Field label={t('clients.field.town')} className="sm:col-span-4">
         <Input value={value.town} onChange={(e) => set('town', e.target.value)} maxLength={35} autoComplete="address-level2" />
       </Field>
-      <Field label="Pays" className="sm:col-span-2">
+      <Field label={t('clients.field.country')} className="sm:col-span-2">
         <Select value={value.country} onChange={(e) => set('country', e.target.value)}>
           {!COUNTRIES[value.country] && <option value={value.country}>{value.country}</option>}
           {Object.entries(COUNTRIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
-      <Field label="Langue" className="sm:col-span-2">
+      <Field label={t('clients.field.language')} className="sm:col-span-2">
         <Select value={value.language} onChange={(e) => set('language', e.target.value)}>
           {Object.entries(LANGUAGES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
-      <Field label="N° TVA" className="sm:col-span-2">
-        <Input value={value.vat_number} onChange={(e) => set('vat_number', e.target.value)} maxLength={40} placeholder="CHE-123.456.789 TVA" />
+      <Field label={t('clients.field.vat')} className="sm:col-span-2">
+        <Input value={value.vat_number} onChange={(e) => set('vat_number', e.target.value)} maxLength={40} placeholder={t('clients.field.vatPlaceholder')} />
       </Field>
-      <Field label="Notes" className="sm:col-span-6">
+      <Field label={t('clients.field.notes')} className="sm:col-span-6">
         <Textarea rows={3} value={value.notes} onChange={(e) => set('notes', e.target.value)} maxLength={5000} />
       </Field>
     </div>

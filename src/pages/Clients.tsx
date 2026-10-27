@@ -3,12 +3,14 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ClientFields, draftToBody, emptyClient, isFromCrmlead, type ClientDraft } from '../components/clients/ClientFields'
 import { Badge, Button, Empty, ErrorNote, Input, Modal, PageHeader, Spinner, TableStack, Tabs, toast } from '../components/ui'
 import { NotUsed } from '../components/LeadLinks'
+import { labels, useT } from '../i18n'
 import { api, ApiError } from '../lib/api'
 import { useApp, useLoad } from '../lib/store'
 import type { Client } from '../lib/types'
 
 /** Le carnet d'adresses : les clients, repris de CRMlead ou saisis ici. */
 export default function Clients() {
+  const t = useT()
   const { me } = useApp()
   const [q, setQ] = useState('')
   const [query, setQuery] = useState('')
@@ -29,49 +31,49 @@ export default function Clients() {
   const setIlImporting = (v: boolean) => openImport(v ? 'invoicelead' : null)
 
   // La recherche part une fois la frappe posée.
-  useEffect(() => { const t = setTimeout(() => setQuery(q.trim()), 250); return () => clearTimeout(t) }, [q])
+  useEffect(() => { const tm = setTimeout(() => setQuery(q.trim()), 250); return () => clearTimeout(tm) }, [q])
   const path = `/clients?q=${encodeURIComponent(query)}${tab === 'archived' ? '&archived=1' : ''}`
   const { data, error, loading, reload } = useLoad<Client[]>(path)
   const rows = (data ?? []).filter((c) => (tab === 'archived' ? c.archived_at : !c.archived_at))
 
   return (
     <>
-      <PageHeader title="Clients" subtitle="Le carnet d'adresses des projets, repris de CRMlead ou d'InvoiceLead, ou saisi ici."
+      <PageHeader title={t('clients.title')} subtitle={t('clients.subtitle')}
         actions={<>
-          <Button onClick={() => setImporting(true)}>Importer depuis CRMlead</Button>
-          <Button onClick={() => setIlImporting(true)}>Importer depuis InvoiceLead</Button>
-          <Button variant="primary" onClick={() => setCreating(true)}>Nouveau client</Button>
+          <Button onClick={() => setImporting(true)}>{t('clients.importCrm')}</Button>
+          <Button onClick={() => setIlImporting(true)}>{t('clients.importIl')}</Button>
+          <Button variant="primary" onClick={() => setCreating(true)}>{t('clients.newClient')}</Button>
         </>} />
 
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, email ou localité…"
-          aria-label="Rechercher un client" className="w-full sm:w-80" />
+        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('clients.searchPlaceholder')}
+          aria-label={t('clients.searchAria')} className="w-full sm:w-80" />
       </div>
       <Tabs active={tab} onChange={(id) => setTab(id as typeof tab)}
-        tabs={[{ id: 'active', label: 'Clients' }, { id: 'archived', label: 'Archivés' }]} />
+        tabs={[{ id: 'active', label: t('clients.title') }, { id: 'archived', label: t('clients.tabArchived') }]} />
 
       <ErrorNote error={error} />
       {loading && !data ? <Spinner /> : rows.length === 0 ? (
-        tab === 'archived' ? <Empty title="Aucun client archivé" /> : query
-          ? <Empty title="Aucun client trouvé">Essayez un autre nom, ou cherchez-le dans CRMlead.</Empty>
-          : <Empty title="Aucun client pour l'instant"
+        tab === 'archived' ? <Empty title={t('clients.emptyArchived')} /> : query
+          ? <Empty title={t('clients.notFound')}>{t('clients.notFoundHint')}</Empty>
+          : <Empty title={t('clients.emptyTitle')}
               action={<div className="flex flex-wrap justify-center gap-2">
-                <Button onClick={() => setImporting(true)}>Importer depuis CRMlead</Button>
-                <Button onClick={() => setIlImporting(true)}>Importer depuis InvoiceLead</Button>
-                <Button variant="primary" onClick={() => setCreating(true)}>Nouveau client</Button>
+                <Button onClick={() => setImporting(true)}>{t('clients.importCrm')}</Button>
+                <Button onClick={() => setIlImporting(true)}>{t('clients.importIl')}</Button>
+                <Button variant="primary" onClick={() => setCreating(true)}>{t('clients.newClient')}</Button>
               </div>}>
-              Reprenez vos adresses depuis CRMlead ou InvoiceLead, ou saisissez votre premier client.
+              {t('clients.emptyHint')}
             </Empty>
       ) : (
         <TableStack>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left">
-                <th className="px-3 py-2">Client</th>
-                <th className="px-3 py-2">Contact</th>
-                <th className="px-3 py-2">Localité</th>
-                <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2 text-right">Projets actifs</th>
+                <th className="px-3 py-2">{t('clients.col.client')}</th>
+                <th className="px-3 py-2">{t('clients.field.contact')}</th>
+                <th className="px-3 py-2">{t('clients.field.town')}</th>
+                <th className="px-3 py-2">{t('clients.field.email')}</th>
+                <th className="px-3 py-2 text-right">{t('clients.col.activeProjects')}</th>
               </tr>
             </thead>
             <tbody>
@@ -107,6 +109,7 @@ export default function Clients() {
 }
 
 function NewClientDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT()
   const nav = useNavigate()
   const [draft, setDraft] = useState<ClientDraft>(emptyClient)
   const [busy, setBusy] = useState(false)
@@ -118,16 +121,16 @@ function NewClientDialog({ open, onClose }: { open: boolean; onClose: () => void
     setBusy(true)
     try {
       const { id } = await api.post<{ id: string }>('/clients', draftToBody(draft))
-      toast('Client ajouté')
+      toast(t('clients.added'))
       nav(`/clients/${id}`)
     } catch (err) { setError(err) } finally { setBusy(false) }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nouveau client" wide
+    <Modal open={open} onClose={onClose} title={t('clients.newClient')} wide
       footer={<>
-        <Button onClick={onClose}>Annuler</Button>
-        <Button variant="primary" type="submit" form="new-client" disabled={busy || !draft.name.trim()}>Ajouter le client</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
+        <Button variant="primary" type="submit" form="new-client" disabled={busy || !draft.name.trim()}>{t('clients.addClient')}</Button>
       </>}>
       <form id="new-client" onSubmit={submit} className="space-y-3">
         <ClientFields value={draft} onChange={setDraft} />
@@ -139,11 +142,12 @@ function NewClientDialog({ open, onClose }: { open: boolean; onClose: () => void
 
 type CrmResult = { id: string; title: string; company: string | null; address: string | null; status: string; imported: boolean }
 
-const LEAD_STATUS: Record<string, string> = { new: 'Nouveau', open: 'En cours', won: 'Gagné', lost: 'Perdu' }
+const LEAD_STATUS: Record<string, string> = labels('clients.leadStatus', ['new', 'open', 'won', 'lost'])
 
 type ImportProps = { open: boolean; onClose: () => void; connected: boolean; initialQ: string; onQuery: (q: string) => void }
 
 function CrmleadImportDialog({ open, onClose, connected, initialQ, onQuery }: ImportProps) {
+  const t = useT()
   const nav = useNavigate()
   const [q, setQ] = useState('')
   const [results, setResults] = useState<CrmResult[] | null>(null)
@@ -176,30 +180,29 @@ function CrmleadImportDialog({ open, onClose, connected, initialQ, onQuery }: Im
     setTaking(r.id)
     try {
       const { id } = await api.post<{ id: string }>('/clients/crmlead/import', { leadId: r.id })
-      toast(`${r.company || r.title} repris de CRMlead`)
+      toast(t('clients.takenCrm', { name: r.company || r.title }))
       setResults((x) => x?.map((y) => (y.id === r.id ? { ...y, imported: true } : y)) ?? null)
       return id
     } catch (err) { setError(err); return null } finally { setTaking(null) }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Importer depuis CRMlead" wide>
+    <Modal open={open} onClose={onClose} title={t('clients.importCrm')} wide>
       {notConnected ? (
         <div className="space-y-3 text-sm">
           <NotUsed app="crmlead" />
-          <p className="text-muted-foreground">Ensuite, vous retrouvez ici les entreprises de vos leads et reprenez leur adresse et leurs
-            contacts en un clic, sans rien ressaisir.</p>
+          <p className="text-muted-foreground">{t('clients.crmNotUsedHint')}</p>
         </div>
       ) : (
         <div className="space-y-4">
           <form onSubmit={search} className="flex gap-2">
-            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom de l'entreprise ou du lead"
-              aria-label="Rechercher dans CRMlead" />
-            <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Recherche…' : 'Rechercher'}</Button>
+            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('clients.crmSearchPlaceholder')}
+              aria-label={t('clients.crmSearchAria')} />
+            <Button type="submit" variant="primary" disabled={busy}>{busy ? t('clients.searching') : t('common.search')}</Button>
           </form>
           <ErrorNote error={error} />
           {results && (results.length === 0
-            ? <p className="text-sm text-muted-foreground">Rien trouvé dans CRMlead pour cette recherche.</p>
+            ? <p className="text-sm text-muted-foreground">{t('clients.crmNothing')}</p>
             : (
               <ul className="divide-y divide-border border border-border">
                 {results.map((r) => (
@@ -207,14 +210,14 @@ function CrmleadImportDialog({ open, onClose, connected, initialQ, onQuery }: Im
                     <div className="min-w-0 flex-1">
                       <p className="font-bold break-words">{r.company || r.title}</p>
                       {r.company && r.title !== r.company && <p className="text-xs text-muted-foreground break-words">{r.title}</p>}
-                      <p className="text-xs text-muted-foreground break-words">{r.address || 'Sans adresse'}</p>
+                      <p className="text-xs text-muted-foreground break-words">{r.address || t('clients.noAddress')}</p>
                     </div>
                     {LEAD_STATUS[r.status] && <Badge>{LEAD_STATUS[r.status]}</Badge>}
                     {r.imported ? (
-                      <span className="text-xs font-bold text-muted-foreground">Déjà repris</span>
+                      <span className="text-xs font-bold text-muted-foreground">{t('clients.alreadyTaken')}</span>
                     ) : (
                       <Button size="sm" variant="primary" disabled={taking === r.id} onClick={() => take(r)}>
-                        {taking === r.id ? 'Reprise…' : 'Reprendre'}
+                        {taking === r.id ? t('clients.taking') : t('clients.take')}
                       </Button>
                     )}
                     {r.imported && (
@@ -222,13 +225,13 @@ function CrmleadImportDialog({ open, onClose, connected, initialQ, onQuery }: Im
                         // Le client repris est retrouvé (ou rafraîchi) par son lien CRMlead.
                         const id = await take(r)
                         if (id) nav(`/clients/${id}`)
-                      }}>Ouvrir</Button>
+                      }}>{t('clients.open')}</Button>
                     )}
                   </li>
                 ))}
               </ul>
             ))}
-          {!results && <p className="text-sm text-muted-foreground">L'adresse et les contacts sont repris tels quels ; la fiche reste liée à CRMlead pour les mises à jour.</p>}
+          {!results && <p className="text-sm text-muted-foreground">{t('clients.crmHint')}</p>}
         </div>
       )}
     </Modal>
@@ -239,6 +242,7 @@ type IlResult = { id: string; name: string; email: string | null; address: strin
 
 /** Le carnet de contacts d'InvoiceLead : un contact, ou tous d'un coup. */
 function InvoiceleadImportDialog({ open, onClose, connected, initialQ, onQuery }: ImportProps) {
+  const t = useT()
   const [q, setQ] = useState('')
   const [results, setResults] = useState<IlResult[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -272,46 +276,45 @@ function InvoiceleadImportDialog({ open, onClose, connected, initialQ, onQuery }
     try {
       const { count } = await api.post<{ id: string; count: number }>('/clients/invoicelead/import',
         r ? { contactId: r.id, q: searched } : { all: true, q: searched })
-      toast(r ? `${r.name} repris d'InvoiceLead` : `${count} client${count > 1 ? 's' : ''} repris d'InvoiceLead`)
+      toast(r ? t('clients.takenIl', { name: r.name }) : t('clients.takenIlCount', { n: count }))
       setResults((x) => x?.map((y) => (!r || y.id === r.id ? { ...y, imported: true } : y)) ?? null)
     } catch (err) { setError(err) } finally { setTaking(null) }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Importer depuis InvoiceLead" wide>
+    <Modal open={open} onClose={onClose} title={t('clients.importIl')} wide>
       {notConnected ? (
         <div className="space-y-3 text-sm">
           <NotUsed app="invoicelead" />
-          <p className="text-muted-foreground">Ensuite, vous retrouvez ici vos contacts InvoiceLead et les reprenez comme clients, sans
-            rien ressaisir.</p>
+          <p className="text-muted-foreground">{t('clients.ilNotUsedHint')}</p>
         </div>
       ) : (
         <div className="space-y-4">
           <form onSubmit={search} className="flex gap-2">
-            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom, email ou localité"
-              aria-label="Rechercher dans InvoiceLead" />
-            <Button type="submit" disabled={busy}>{busy ? 'Recherche…' : 'Rechercher'}</Button>
+            <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('clients.ilSearchPlaceholder')}
+              aria-label={t('clients.ilSearchAria')} />
+            <Button type="submit" disabled={busy}>{busy ? t('clients.searching') : t('common.search')}</Button>
           </form>
           <ErrorNote error={error} />
           {results && results.length > 0 && results.some((r) => !r.imported) && (
             <Button variant="primary" disabled={taking !== null} onClick={() => take(null)}>
-              {taking === 'all' ? 'Reprise…' : 'Tout reprendre'}
+              {taking === 'all' ? t('clients.taking') : t('clients.takeAll')}
             </Button>
           )}
           {results && (results.length === 0
-            ? <p className="text-sm text-muted-foreground">Aucun contact client dans InvoiceLead pour cette recherche.</p>
+            ? <p className="text-sm text-muted-foreground">{t('clients.ilNothing')}</p>
             : (
               <ul className="divide-y divide-border border border-border">
                 {results.map((r) => (
                   <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
                       <p className="font-bold break-words">{r.name}</p>
-                      <p className="text-xs text-muted-foreground break-words">{[r.address, r.email].filter(Boolean).join(' · ') || 'Sans adresse'}</p>
+                      <p className="text-xs text-muted-foreground break-words">{[r.address, r.email].filter(Boolean).join(' · ') || t('clients.noAddress')}</p>
                     </div>
                     {r.imported
-                      ? <span className="text-xs font-bold text-muted-foreground">Déjà repris</span>
+                      ? <span className="text-xs font-bold text-muted-foreground">{t('clients.alreadyTaken')}</span>
                       : <Button size="sm" variant="primary" disabled={taking !== null} onClick={() => take(r)}>
-                          {taking === r.id ? 'Reprise…' : 'Reprendre'}
+                          {taking === r.id ? t('clients.taking') : t('clients.take')}
                         </Button>}
                   </li>
                 ))}

@@ -534,7 +534,7 @@ export function buildTools(s: ToolScope) {
         contact_person: z.string().trim().max(200).optional(), email: z.string().trim().email().max(254).optional(),
         phone: z.string().trim().max(50).optional(), street: z.string().trim().max(70).optional(), building_number: z.string().trim().max(16).optional(),
         postal_code: z.string().trim().max(16).optional(), town: z.string().trim().max(35).optional(),
-        country: z.string().regex(/^[A-Z]{2}$/).default('CH'), language: z.enum(['fr', 'de', 'it', 'en']).default('fr'),
+        country: z.string().regex(/^[A-Z]{2}$/).default('CH'), language: z.enum(['fr', 'de', 'it', 'en', 'es']).default('fr'),
       }),
       run: async (a) => {
         mark('propose_create_client')

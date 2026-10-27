@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { publicUrl } from '../lib/env.js'
 import { body, HttpError, router, tx, type Env } from '../lib/http.js'
+import { asLocale } from '../lib/i18n.js'
 import { isAbove, planOf } from '../lib/plans.js'
 import type { Db } from '../db.js'
 import { APP, PRICES, StripeError, portalConfiguration, priceIds, stripe, stripeConfigured, verifyStripeSignature,
@@ -96,7 +97,8 @@ app.post('/billing/checkout', async (c) => {
       line_items: [{ price: priceIds()[plan][interval], quantity: 1 }],
       success_url: RETURN('ok'),
       cancel_url: RETURN('annule'),
-      locale: 'fr',
+      // Stripe parle les cinq langues : celle de la personne.
+      locale: asLocale(c.get('locale')),
       metadata: meta,
       subscription_data: { metadata: meta },
       // La carte seule : sans cette liste, Stripe proposerait tout ce qui est activé sur le compte partagé.
@@ -129,7 +131,7 @@ app.post('/billing/portal', async (c) => {
   if (!customer) throw new HttpError(409, 'no_customer')
   try {
     const s = await stripe<{ url: string }>('POST', '/v1/billing_portal/sessions', {
-      customer, return_url: RETURN(), locale: 'fr', configuration: portalConfiguration(),
+      customer, return_url: RETURN(), locale: asLocale(c.get('locale')), configuration: portalConfiguration(),
     })
     return c.json({ url: s.url })
   } catch (e) { return failure(e) }

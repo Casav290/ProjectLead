@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Button, Field, Input, Textarea } from '../components/ui'
+import { getLocale, useT } from '../i18n'
 import { PublicShell, publicError, publicFetch } from './Booking'
 
 type Form = { name: string; intro: string; account: string }
 
 /** Formulaire public de demande : chaque envoi ouvre un projet « à qualifier ». */
 export default function IntakeForm() {
+  const t = useT()
   const { slug = '' } = useParams()
   const [form, setForm] = useState<Form | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -25,7 +27,7 @@ export default function IntakeForm() {
     setBusy(true); setError(null)
     try {
       await publicFetch(`/forms/${slug}`, {
-        name: f.name.trim(), email: f.email.trim(), subject: f.subject.trim(), message: f.message, website: f.website,
+        name: f.name.trim(), email: f.email.trim(), subject: f.subject.trim(), message: f.message, website: f.website, locale: getLocale(),
         ...(f.company.trim() ? { company: f.company.trim() } : {}), ...(f.phone.trim() ? { phone: f.phone.trim() } : {}),
       })
       setSent(true)
@@ -33,7 +35,7 @@ export default function IntakeForm() {
     } catch (err) { setError(publicError(err)) } finally { setBusy(false) }
   }
 
-  if (!form) return <PublicShell><p className="border border-border bg-card p-6 text-center text-sm">{loadError ?? 'Chargement…'}</p></PublicShell>
+  if (!form) return <PublicShell><p className="border border-border bg-card p-6 text-center text-sm">{loadError ?? t('common.loading')}</p></PublicShell>
 
   return (
     <PublicShell account={form.account}>
@@ -43,8 +45,8 @@ export default function IntakeForm() {
             <div className="mx-auto mb-4 grid h-12 w-12 place-items-center bg-won text-white" aria-hidden="true">
               <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12l5 5 9-10" /></svg>
             </div>
-            <h1 className="font-display text-2xl">Merci, votre demande est bien arrivée</h1>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">{form.account} l'a reçue et reviendra vers vous à l'adresse {f.email}.</p>
+            <h1 className="font-display text-2xl">{t('public.intake.thanks')}</h1>
+            <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">{t('public.intake.thanksNote', { account: form.account, email: f.email })}</p>
           </div>
         ) : (
           <>
@@ -53,20 +55,20 @@ export default function IntakeForm() {
             {form.intro && <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{form.intro}</p>}
             <form onSubmit={submit} className="mt-5 space-y-3">
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Nom et prénom"><Input required maxLength={120} autoComplete="name" value={f.name} onChange={set('name')} /></Field>
-                <Field label="Email"><Input required type="email" autoComplete="email" value={f.email} onChange={set('email')} /></Field>
-                <Field label="Entreprise (facultatif)"><Input maxLength={200} autoComplete="organization" value={f.company} onChange={set('company')} /></Field>
-                <Field label="Téléphone (facultatif)"><Input type="tel" maxLength={50} autoComplete="tel" value={f.phone} onChange={set('phone')} /></Field>
+                <Field label={t('public.field.fullName')}><Input required maxLength={120} autoComplete="name" value={f.name} onChange={set('name')} /></Field>
+                <Field label={t('public.field.email')}><Input required type="email" autoComplete="email" value={f.email} onChange={set('email')} /></Field>
+                <Field label={t('public.field.companyOptional')}><Input maxLength={200} autoComplete="organization" value={f.company} onChange={set('company')} /></Field>
+                <Field label={t('public.field.phoneOptional')}><Input type="tel" maxLength={50} autoComplete="tel" value={f.phone} onChange={set('phone')} /></Field>
               </div>
-              <Field label="Objet de la demande"><Input required maxLength={200} value={f.subject} onChange={set('subject')} placeholder="Ex. Rénovation de nos bureaux" /></Field>
-              <Field label="Votre message"><Textarea rows={6} maxLength={10000} value={f.message} onChange={set('message')} placeholder="Le contexte, les délais, le budget envisagé…" /></Field>
+              <Field label={t('public.intake.subject')}><Input required maxLength={200} value={f.subject} onChange={set('subject')} placeholder={t('public.intake.subjectPlaceholder')} /></Field>
+              <Field label={t('public.intake.message')}><Textarea rows={6} maxLength={10000} value={f.message} onChange={set('message')} placeholder={t('public.intake.messagePlaceholder')} /></Field>
               {/* Piège à robots : invisible pour un humain, doit rester vide. */}
               <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
-                <label>Site web<input tabIndex={-1} autoComplete="off" value={f.website} onChange={set('website')} name="website" /></label>
+                <label>{t('public.intake.website')}<input tabIndex={-1} autoComplete="off" value={f.website} onChange={set('website')} name="website" /></label>
               </div>
               {error && <p role="alert" className="text-sm text-late">{error}</p>}
-              <Button type="submit" variant="primary" className="w-full py-3 sm:w-auto" disabled={busy}>{busy ? 'Envoi…' : 'Envoyer ma demande'}</Button>
-              <p className="text-xs text-muted-foreground">Vos coordonnées servent uniquement à répondre à votre demande.</p>
+              <Button type="submit" variant="primary" className="w-full py-3 sm:w-auto" disabled={busy}>{busy ? t('public.sending') : t('public.intake.send')}</Button>
+              <p className="text-xs text-muted-foreground">{t('public.intake.privacy')}</p>
             </form>
           </>
         )}

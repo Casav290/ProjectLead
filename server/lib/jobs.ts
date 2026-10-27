@@ -1,4 +1,5 @@
 import { anon } from '../db.js'
+import { LOCALES, tr } from './i18n.js'
 import { previousPeriod, runMonthly } from './billing.js'
 import { sendReport } from './clientReport.js'
 import { calendarsOnce } from './extcal.js'
@@ -51,13 +52,17 @@ async function clientUpdates() {
 
 /** Une fois par jour : les échéances du jour, rappelées aux personnes assignées. */
 async function dueReminders() {
+  // Le texte dans la langue de chaque personne : $1…$5 = fr, de, en, it, es (« {title} » remplacé par le titre de la tâche).
   return anon(async (db) => (await db.query(
     `insert into notifications (account_id, user_id, kind, title, link)
-     select t.account_id, ta.user_id, 'due', 'Échéance aujourd''hui : ' || t.title, '/projets/' || t.project_id || '?tache=' || t.id
-       from tasks t join task_assignees ta on ta.task_id = t.id join projects p on p.id = t.project_id
+     select t.account_id, ta.user_id, 'due',
+            left(replace(case u.locale when 'de' then $2 when 'en' then $3 when 'it' then $4 when 'es' then $5 else $1 end, '{title}', t.title), 300),
+            '/projets/' || t.project_id || '?tache=' || t.id
+       from tasks t join task_assignees ta on ta.task_id = t.id join projects p on p.id = t.project_id join users u on u.id = ta.user_id
       where t.completed_at is null and t.due_date = current_date and not p.is_template and p.archived_at is null
         and not exists (select 1 from notifications n where n.user_id = ta.user_id and n.kind = 'due'
-                         and n.link = '/projets/' || t.project_id || '?tache=' || t.id and n.created_at::date = current_date)`)).rowCount ?? 0)
+                         and n.link = '/projets/' || t.project_id || '?tache=' || t.id and n.created_at::date = current_date)`,
+    LOCALES.map((l) => tr(l, 'notif.due', { title: '{title}' })))).rowCount ?? 0)
 }
 
 /**
@@ -70,6 +75,7 @@ async function dueReminders() {
 export async function monthlyBilling() {
   if (!leadIdOn()) return 0
   const accounts = await anon(async (db) => (await db.query(
+    // i18n-ok
     `select s.account_id, s.monthly_billing_day, a.timezone, a.lead_org, adm.user_id as admin_id, adm.lead_sub as admin_sub
        from account_settings s join accounts a on a.id = s.account_id
        left join lateral (select au.user_id, u.lead_sub from account_users au join users u on u.id = au.user_id

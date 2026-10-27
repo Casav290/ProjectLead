@@ -11,6 +11,7 @@ import { assertSeatFree, savePlan, type Tier } from '../lib/plans.js'
 import { seedAccount } from '../lib/defaults.js'
 import { openProof, sealProof } from '../lib/personProof.js'
 import { saveAppsUsed } from '../lib/links.js'
+import { currencyForCountry, isLocale, requestCountry, requestLocale, type Locale } from '../lib/i18n.js'
 
 /**
  * Connexion. Deux portes, comme le veut la famille Lead :
@@ -56,14 +57,24 @@ export async function openSession(c: any, userId: string, accountId: string, idT
  * Compte Lead : le rôle qu'elle a chez ERPlead (une simple membre qui ouvre ProjectLead la première n'en devient pas
  * l'administratrice ; l'administratrice d'ERPlead le devient à son arrivée, voir `placeIn`).
  */
-async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string }, userId: string, role = 'admin') {
+async function createAccount(db: Db, a: { company: string; leadOrg?: string | null; plan?: string; locale?: Locale; country?: string | null },
+                             userId: string, role = 'admin') {
   // Une entreprise naît en Gratuit : la formule payante se prend dans ProjectLead (Réglages → Entreprise).
-  const acc = (await db.query('insert into accounts (name, lead_org, plan) values ($1,$2,coalesce($3, \'free\')) returning id',
-    [a.company, a.leadOrg ?? null, a.plan ?? null])).rows[0]
+  // Sa devise : celle du pays de la personne qui la crée (CH/LI → CHF, zone euro → EUR, US → USD, GB → GBP, sinon CHF),
+  // jamais réservée à une formule. Sa langue (celle des documents et du modèle de départ) : celle de la personne.
+  const acc = (await db.query('insert into accounts (name, lead_org, plan, currency, locale) values ($1,$2,coalesce($3, \'free\'),$4,$5) returning id',
+    [a.company, a.leadOrg ?? null, a.plan ?? null, currencyForCountry(a.country), a.locale ?? 'fr'])).rows[0]
   await db.query(`insert into account_users (account_id, user_id, role) values ($1,$2,$3)`, [acc.id, userId, role])
   await seedAccount(db, acc.id, userId)
   return acc.id as string
 }
+
+/** Ce que la requête dit de la personne : sa langue (cookie du sélecteur, Accept-Language) et son pays (Vercel, Accept-Language). */
+export type RequestHints = { locale: Locale | null; country: string | null }
+export const requestHints = (c: any): RequestHints => ({
+  locale: requestLocale(c.req.header('cookie'), c.req.header('accept-language')),
+  country: requestCountry((n) => c.req.header(n)),
+})
 
 app.post('/api/auth/signup', async (c) => {
   // Avec le Compte Lead, on s'inscrit là-bas : tout le monde y entre, la formule ProjectLead fixe les limites (lib/plans.ts).
@@ -76,9 +87,11 @@ app.post('/api/auth/signup', async (c) => {
   const out = await anonTx(async (db) => {
     const exists = (await db.query('select 1 from users where lower(email) = $1', [b.email])).rowCount
     if (exists) throw new HttpError(409, 'email_taken')
-    const u = (await db.query('insert into users (email, name, password_hash) values ($1,$2,$3) returning id',
-      [b.email, b.name, hashPassword(b.password)])).rows[0]
-    const accountId = await createAccount(db, { company: b.company }, u.id)
+    const hints = requestHints(c)
+    const locale = hints.locale ?? 'fr'
+    const u = (await db.query('insert into users (email, name, password_hash, locale) values ($1,$2,$3,$4) returning id',
+      [b.email, b.name, hashPassword(b.password), locale])).rows[0]
+    const accountId = await createAccount(db, { company: b.company, locale, country: hints.country }, u.id)
     return { userId: u.id as string, accountId }
   })
   await openSession(c, out.userId, out.accountId)
@@ -88,6 +101,7 @@ app.post('/api/auth/signup', async (c) => {
 app.post('/api/auth/login', async (c) => {
   const b = await body(c, z.object({ email, password: z.string().min(1).max(200) }))
   const u = await anon(async (db) => (await db.query(
+    // i18n-ok
     `select u.id, u.password_hash, au.account_id from users u
        join account_users au on au.user_id = u.id and au.active
       where lower(u.email) = $1 order by au.joined_at limit 1`, [b.email])).rows[0])
@@ -173,7 +187,9 @@ const startLeadLogin = async (c: any) => {
   const home = callbackOrigin()
   const here = new URL(c.req.url)
   if (home && here.hostname === `www.${home.hostname}`) return c.redirect(`${home.origin}${here.pathname}${here.search}`)
-  const s = startLogin({ locale: 'fr' })
+  // La langue des écrans du Compte Lead : ?locale= de l'adresse, sinon le choix du sélecteur ou du navigateur.
+  const asked = c.req.query('locale')?.slice(0, 2).toLowerCase()
+  const s = startLogin({ locale: isLocale(asked) ? asked : requestLocale(c.req.header('cookie'), c.req.header('accept-language')) ?? 'fr' })
   const next = safeNext(c.req.query('next'))
   // La page demandée voyage aussi dans `state` (rendu tel quel par ERPlead) : un retour qui a perdu le cookie de départ
   // ramène quand même vers elle (`nextFromState`). Le `state` entier reste comparé à celui du cookie (finishLogin).
@@ -250,10 +266,13 @@ export const invitationToken = (next?: string | null) => /^\/invitation\/([A-Za-
  * - quand son organisation n'a encore AUCUN espace ici et qu'elle est active dans une entreprise ProjectLead (invitée
  *   depuis une autre organisation, ou membre d'une entreprise d'avant le Compte Lead), elle y entre, sans rien créer.
  */
-export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: string } = {}) {
+export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: string; hints?: RequestHints } = {}) {
   // Sans organisation ni formule (portée « lead » retirée de l'adresse d'autorisation), on ne saurait pas
   // à quelle entreprise ni à quelle formule rattacher la personne : on refuse plutôt que d'ouvrir sans limite.
   if (!claims.org || !claims.lead?.plan?.code) throw new Error('lead_scope_missing')
+  // La langue de la personne : celle de son Compte Lead si c'est l'une des cinq, sinon celle de son navigateur.
+  const claimed = typeof claims.locale === 'string' ? claims.locale.slice(0, 2).toLowerCase() : ''
+  const locale: Locale = isLocale(claimed) ? claimed : opts.hints?.locale ?? 'fr'
   return anonTx(async (db) => {
     let user = (await db.query('select id from users where lead_sub = $1', [claims.sub])).rows[0]
     if (!user && claims.email_verified) {
@@ -263,7 +282,7 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
     if (!user) {
       if (!claims.email_verified) throw new Error('email_not_verified')
       user = (await db.query('insert into users (email, name, lead_sub, locale) values ($1,$2,$3,$4) returning id',
-        [claims.email, claims.name ?? '', claims.sub, (claims.locale ?? 'fr').slice(0, 2)])).rows[0]
+        [claims.email, claims.name ?? '', claims.sub, locale])).rows[0]
     } else {
       await db.query('update users set email = $1, name = coalesce(nullif($2, \'\'), name) where id = $3',
         [claims.email, claims.name ?? '', user.id])
@@ -326,6 +345,7 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
     let acc: { id: string } | null = (await db.query('select id from accounts where lead_org = $1', [claims.org])).rows[0] ?? null
     if (!acc && claims.org_role === 'admin') {
       acc = (await db.query(
+        // i18n-ok
         `update accounts set lead_org = $1
           where id = (select a.id from accounts a join account_users au on au.account_id = a.id
                        where au.user_id = $2 and au.active and au.role = 'admin' and a.lead_org is null
@@ -346,7 +366,8 @@ export async function attachLeadPerson(claims: LeadClaims, opts: { invitation?: 
     const role = claims.org_role === 'admin' ? 'admin' : claims.org_role === 'manager' ? 'manager' : 'member'
     let created = false
     if (!acc) {
-      acc = { id: await createAccount(db, { company: claims.org_name || claims.name || claims.email, leadOrg: claims.org, plan: 'free' }, userId, role) }
+      acc = { id: await createAccount(db, { company: claims.org_name || claims.name || claims.email, leadOrg: claims.org, plan: 'free',
+                                              locale, country: opts.hints?.country ?? null }, userId, role) }
       created = true
     }
     // La formule ProjectLead du jeton, calculée par ERPlead pour cette application et cette organisation.
@@ -429,7 +450,7 @@ app.get('/auth/lead/callback', async (c) => {
     const { claims, tokens } = await finishLogin(c.req.query(), saved)
     // Toute personne du Compte Lead entre, quelle que soit sa formule (Ève, 02.10.2026), dans l'espace de son entreprise.
     const invite = invitationToken(saved.next)
-    const who = await attachLeadPerson(claims, { invitation: invite })
+    const who = await attachLeadPerson(claims, { invitation: invite, hints: requestHints(c) })
     // Les applications Lead que l'entreprise utilise déjà (« Reliée » / « Pas encore utilisée », lib/links.ts).
     await saveAppsUsed(who.accountId, claims.lead).catch(() => {})
     await openSession(c, who.userId, who.accountId, tokens.id_token, leadSid(claims.sid))

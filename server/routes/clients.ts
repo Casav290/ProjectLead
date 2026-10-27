@@ -21,7 +21,7 @@ const clientSchema = z.object({
   postal_code: z.string().trim().max(16).nullish(),
   town: z.string().trim().max(35).nullish(),
   country: z.string().regex(/^[A-Z]{2}$/).default('CH'),
-  language: z.enum(['fr', 'de', 'it', 'en']).default('fr'),
+  language: z.enum(['fr', 'de', 'it', 'en', 'es']).default('fr'),
   vat_number: z.string().trim().max(40).nullish(),
   notes: z.string().max(5000).nullish(),
 })

@@ -6,6 +6,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
 import { useEffect, useMemo, useState } from 'react'
+import { useT } from '../../i18n'
 import { api, errorText } from '../../lib/api'
 import { useApp } from '../../lib/store'
 import type { Column, ProjectDetail, Task } from '../../lib/types'
@@ -27,6 +28,7 @@ const parseContainer = (id: string) => { const [lane, col] = id.split('|'); retu
 const LANE_KEY = 'pl:board-lanes'
 
 export default function Board({ project, onChanged }: { project: ProjectDetail; onChanged: () => void }) {
+  const t = useT()
   const { data, setData, error, loading, reload } = useProjectTasks(project.id)
   const { team } = useApp()
   const openTask = useOpenTask()
@@ -38,15 +40,15 @@ export default function Board({ project, onChanged }: { project: ProjectDetail; 
   const tasks = useMemo(() => data ?? [], [data])
   const columns = project.columns
   const lanes = useMemo<Lane[]>(() => {
-    if (laneMode === 'stage') return [...project.stages.map((s) => ({ key: s.id, label: s.name })), { key: NONE, label: 'Sans étape' }]
+    if (laneMode === 'stage') return [...project.stages.map((s) => ({ key: s.id, label: s.name })), { key: NONE, label: t('ptabs.common.noStage') }]
     if (laneMode === 'person') {
       const ids = new Set(tasks.flatMap((t) => t.assignees.map((a) => a.id)))
       const people = [...project.members_detail, ...team].filter((p, i, all) => ids.has(p.id) && all.findIndex((x) => x.id === p.id) === i)
       return [...people.sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ key: p.id, label: p.name, color: p.color })),
-        { key: NONE, label: 'Non assignées' }]
+        { key: NONE, label: t('ptabs.board.unassigned') }]
     }
     return [{ key: NONE, label: '' }]
-  }, [laneMode, project.stages, project.members_detail, team, tasks])
+  }, [laneMode, project.stages, project.members_detail, team, tasks, t])
 
   const laneOf = (t: Task): string[] => {
     if (laneMode === 'stage') return [t.stage_id && project.stages.some((s) => s.id === t.stage_id) ? t.stage_id : NONE]
@@ -145,7 +147,7 @@ export default function Board({ project, onChanged }: { project: ProjectDetail; 
 
   if (loading && !data) return <Spinner />
   if (error) return <ErrorNote error={error} />
-  if (!columns.length) return <p className="text-sm text-muted-foreground">Ce projet n'a pas encore de colonnes.</p>
+  if (!columns.length) return <p className="text-sm text-muted-foreground">{t('ptabs.board.noColumns')}</p>
 
   const activeTask = active ? byId.get(parseCard(active).task) : undefined
   const openCount = (colId: string) => tasks.filter((t) => t.column_id === colId && !t.completed_at).length
@@ -153,13 +155,13 @@ export default function Board({ project, onChanged }: { project: ProjectDetail; 
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <label htmlFor="board-lanes" className="text-xs font-medium text-muted-foreground">Couloirs</label>
+        <label htmlFor="board-lanes" className="text-xs font-medium text-muted-foreground">{t('ptabs.board.lanes')}</label>
         <Select id="board-lanes" value={laneMode} onChange={(e) => setLaneMode(e.target.value as LaneMode)} className="w-auto px-2 py-1.5 text-sm">
-          <option value="none">Aucun</option>
-          <option value="stage">Par étape</option>
-          <option value="person">Par personne</option>
+          <option value="none">{t('common.none')}</option>
+          <option value="stage">{t('ptabs.board.byStage')}</option>
+          <option value="person">{t('ptabs.board.byPerson')}</option>
         </Select>
-        <span className="ml-auto text-xs text-muted-foreground">{tasks.length} tâche{tasks.length > 1 ? 's' : ''}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{t('ptabs.board.taskCount', { n: tasks.length })}</span>
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}
@@ -176,10 +178,10 @@ export default function Board({ project, onChanged }: { project: ProjectDetail; 
                     over ? 'border-late' : c.is_done ? 'border-won' : 'border-foreground')}>
                     <h3 className="min-w-0 flex-1 truncate text-[13px] font-extrabold uppercase tracking-[.05em]">{c.name}</h3>
                     <span className={clsx('text-xs font-bold', over ? 'text-late' : 'text-muted-foreground')}
-                      title={c.wip_limit != null ? `Limite d'en-cours : ${c.wip_limit}` : undefined}>
+                      title={c.wip_limit != null ? t('ptabs.board.wipTitle', { n: c.wip_limit }) : undefined}>
                       {c.is_done ? tasks.filter((t) => t.column_id === c.id).length : n}{c.wip_limit != null && ` / ${c.wip_limit}`}
                     </span>
-                    {over && <Badge tone="late">Limite dépassée</Badge>}
+                    {over && <Badge tone="late">{t('ptabs.board.overLimit')}</Badge>}
                   </div>
                 )
               })}
@@ -213,27 +215,29 @@ export default function Board({ project, onChanged }: { project: ProjectDetail; 
 
 function BoardColumn({ id, ids, byId, onOpen, onAdd, tall }:
   { id: string; ids: string[]; byId: Map<string, Task>; onOpen: (id: string) => void; onAdd: (title: string) => Promise<void>; tall: boolean }) {
+  const t = useT()
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
     <div className={clsx('flex w-[272px] shrink-0 flex-col border border-border bg-[#f5f3f1] p-1.5', isOver && 'border-accent')}>
       <SortableContext id={id} items={ids} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className={clsx('flex flex-col gap-1.5', tall ? 'min-h-[120px]' : 'min-h-[44px]')}>
           {ids.map((cid) => {
-            const t = byId.get(parseCard(cid).task)
-            return t ? <SortableCard key={cid} id={cid} task={t} onOpen={onOpen} /> : null
+            const task = byId.get(parseCard(cid).task)
+            return task ? <SortableCard key={cid} id={cid} task={task} onOpen={onOpen} /> : null
           })}
         </div>
       </SortableContext>
-      <QuickAdd label="Ajouter une carte" onAdd={onAdd} className="mt-1" />
+      <QuickAdd label={t('ptabs.board.addCard')} onAdd={onAdd} className="mt-1" />
     </div>
   )
 }
 
 function SortableCard({ id, task, onOpen }: { id: string; task: Task; onOpen: (id: string) => void }) {
+  const t = useT()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Translate.toString(transform), transition }} {...attributes} {...listeners}
-      aria-roledescription="carte déplaçable" aria-label={task.title}
+      aria-roledescription={t('ptabs.board.draggable')} aria-label={task.title}
       onClick={() => onOpen(task.id)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(task.id); else listeners?.onKeyDown?.(e) }}
       className={clsx('touch-manipulation', isDragging && 'opacity-30')}>
       <Card task={task} />
@@ -241,28 +245,29 @@ function SortableCard({ id, task, onOpen }: { id: string; task: Task; onOpen: (i
   )
 }
 
-function Card({ task: t, overlay }: { task: Task; overlay?: boolean }) {
-  const done = Boolean(t.completed_at)
+function Card({ task, overlay }: { task: Task; overlay?: boolean }) {
+  const t = useT()
+  const done = Boolean(task.completed_at)
   return (
     <article className={clsx('cursor-grab select-none border bg-card px-2.5 py-2 text-left hover:border-accent',
-      overlay ? 'rotate-1 cursor-grabbing border-accent' : 'border-border', t.blocked && !done && 'stripe-today')}>
+      overlay ? 'rotate-1 cursor-grabbing border-accent' : 'border-border', task.blocked && !done && 'stripe-today')}>
       <div className="flex items-start gap-1.5">
-        {t.is_milestone && <MilestoneMark className="mt-1.5" />}
+        {task.is_milestone && <MilestoneMark className="mt-1.5" />}
         <p className={clsx('clamp-2 min-w-0 flex-1 text-[13.5px] font-semibold leading-snug [overflow-wrap:anywhere]', done && 'text-muted-foreground line-through')}>
-          {t.title}
+          {task.title}
         </p>
       </div>
-      {(t.priority !== 'normal' || t.blocked || t.tags.length > 0) && (
+      {(task.priority !== 'normal' || task.blocked || task.tags.length > 0) && (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          <PriorityBadge priority={t.priority} />
-          {t.blocked && !done && <Badge tone="warn">Bloquée</Badge>}
-          {t.tags.slice(0, 3).map((tag) => <span key={tag} className="bg-muted px-1.5 py-px text-[10.5px] font-semibold text-muted-foreground">{tag}</span>)}
+          <PriorityBadge priority={task.priority} />
+          {task.blocked && !done && <Badge tone="warn">{t('ptabs.board.blocked')}</Badge>}
+          {task.tags.slice(0, 3).map((tag) => <span key={tag} className="bg-muted px-1.5 py-px text-[10.5px] font-semibold text-muted-foreground">{tag}</span>)}
         </div>
       )}
       <div className="mt-2 flex items-center gap-2 text-xs">
-        <DueLabel task={t} />
-        <TaskCounters task={t} />
-        <span className="ml-auto">{t.assignees.length > 0 && <AvatarStack people={t.assignees} size={20} max={3} />}</span>
+        <DueLabel task={task} />
+        <TaskCounters task={task} />
+        <span className="ml-auto">{task.assignees.length > 0 && <AvatarStack people={task.assignees} size={20} max={3} />}</span>
       </div>
     </article>
   )

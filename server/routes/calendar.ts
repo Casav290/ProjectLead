@@ -7,6 +7,7 @@ import { normalizeCalendarUrl, syncFeed } from '../lib/extcal.js'
 import { body, email, HttpError, notFound, router, setClause, tx, uuid } from '../lib/http.js'
 import { ics, type IcsEvent } from '../lib/ics.js'
 import { assertProjectVisible } from '../lib/visibility.js'
+import { asLocale, intlLocale, tr, type Locale } from '../lib/i18n.js'
 import { mailboxSecretConfigured, seal } from '../lib/mailbox/secret.js'
 
 /**
@@ -25,13 +26,14 @@ async function assertEventSeen(db: any, id: string) {
   if (!(await db.query(`select 1 from events e where e.id = $1 and ${EVENT_SEEN}`, [id])).rowCount) throw notFound()
 }
 
-const fmt = (d: Date, tz: string) => new Intl.DateTimeFormat('fr-CH', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' }).format(d)
+const fmt = (d: Date, tz: string, l: Locale) => new Intl.DateTimeFormat(intlLocale(l), { timeZone: tz, dateStyle: 'full', timeStyle: 'short' }).format(d)
 
 app.get('/events', async (c) => tx(c, async (db) => {
   const from = c.req.query('from'), to = c.req.query('to')
   if (!from || !to) throw new HttpError(400, 'range_required')
   const mine = c.req.query('scope') !== 'all'
   const events = (await db.query(
+    // i18n-ok
     `select e.*, p.name as project_name, p.color as project_color, cl.name as client_name, u.name as organizer_name,
             coalesce((select json_agg(json_build_object('user_id', a.user_id, 'email', coalesce(a.email, au.email), 'name', coalesce(a.name, au.name)))
               from event_attendees a left join users au on au.id = a.user_id where a.event_id = e.id), '[]') as attendees
@@ -67,18 +69,21 @@ const eventSchema = z.object({
   send_invites: z.boolean().default(false),
 })
 
-/** Envoie l'invitation (fichier .ics joint) aux participants extérieurs. */
+/** Envoie l'invitation (fichier .ics joint) aux participants extérieurs, dans la langue de l'entreprise. */
 async function invite(accountId: string, userId: string, userName: string, userEmail: string, ev: any, emails: string[], cancel = false) {
   if (!emails.length) return
-  const tz = await anon(async (db) => (await db.query('select timezone from accounts where id = $1', [accountId])).rows[0]?.timezone ?? 'Europe/Zurich')
+  const acc = await anon(async (db) => (await db.query('select timezone, locale from accounts where id = $1', [accountId])).rows[0])
+  const tz = acc?.timezone ?? 'Europe/Zurich'
+  const l = asLocale(acc?.locale)
   const file = ics([{ uid: `${ev.id}@projectlead`, title: ev.title, description: ev.description, location: ev.location,
     start: new Date(ev.starts_at), end: new Date(ev.ends_at), organizer: { name: userName, email: userEmail },
     attendees: emails.map((e) => ({ email: e })), status: cancel ? 'CANCELLED' : 'CONFIRMED' }], { method: cancel ? 'CANCEL' : 'REQUEST' })
-  const when = fmt(new Date(ev.starts_at), tz)
-  const text = cancel ? `Le rendez-vous « ${ev.title} » du ${when} est annulé.`
-    : `${userName} vous invite : ${ev.title}\nQuand : ${when}${ev.location ? `\nOù : ${ev.location}` : ''}${ev.description ? `\n\n${ev.description}` : ''}`
-  await sendMail({ accountId, to: emails, subject: `${cancel ? 'Annulé' : 'Invitation'} : ${ev.title}`, text,
-    html: layout(ev.title, htmlParagraphs(text)), fromUserId: userId, fromName: userName,
+  const when = fmt(new Date(ev.starts_at), tz, l)
+  const text = cancel ? tr(l, 'event.cancelledText', { title: ev.title, when })
+    : tr(l, 'event.inviteText', { who: userName, title: ev.title, when }) + (ev.location ? `\n${tr(l, 'event.where', { location: ev.location })}` : '')
+      + (ev.description ? `\n\n${ev.description}` : '')
+  await sendMail({ accountId, to: emails, subject: tr(l, cancel ? 'event.cancelledSubject' : 'event.inviteSubject', { title: ev.title }), text,
+    html: layout(ev.title, htmlParagraphs(text), undefined, l), fromUserId: userId, fromName: userName,
     attachments: [{ filename: 'invitation.ics', content: Buffer.from(file), contentType: `text/calendar; method=${cancel ? 'CANCEL' : 'REQUEST'}; charset=utf-8` }] })
 }
 
@@ -95,7 +100,7 @@ app.post('/events', async (c) => {
       await db.query('insert into event_attendees (event_id, account_id, user_id) values ($1,$2,$3) on conflict do nothing', [e.id, ctx.accountId, u])
     for (const m of b.attendee_emails)
       await db.query('insert into event_attendees (event_id, account_id, email) values ($1,$2,$3)', [e.id, ctx.accountId, m])
-    await notify(db, ctx, b.attendee_user_ids, { kind: 'event', title: `Invitation : ${b.title}`, link: '/agenda' })
+    await notify(db, ctx, b.attendee_user_ids, { kind: 'event', title: (l) => tr(l, 'notif.event', { title: b.title }), link: '/agenda' })
     if (b.project_id) await logActivity(db, ctx, b.project_id, 'event_created', { title: b.title, starts_at: b.starts_at })
     return e
   })
@@ -181,7 +186,8 @@ publicCalendar.get('/:file', async (c) => {
   if (!/^[0-9a-f]{36}$/.test(token)) return c.text('not found', 404)
   const out = await anon(async (db) => {
     const who = (await db.query(
-      `select au.user_id, au.account_id, u.name from account_users au join users u on u.id = au.user_id where au.ical_token = $1 and au.active`, [token])).rows[0]
+      // i18n-ok
+      `select au.user_id, au.account_id, u.name, u.locale from account_users au join users u on u.id = au.user_id where au.ical_token = $1 and au.active`, [token])).rows[0]
     if (!who) return null
     const base = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
     const evs = (await db.query(
@@ -197,7 +203,7 @@ publicCalendar.get('/:file', async (c) => {
     const list: IcsEvent[] = [
       ...evs.map((e) => ({ uid: `${e.id}@projectlead`, title: e.project_name ? `${e.title} (${e.project_name})` : e.title,
         description: e.description, location: e.location, start: new Date(e.starts_at), end: new Date(e.ends_at) })),
-      ...tasks.map((t) => ({ uid: `task-${t.id}@projectlead`, title: `Échéance : ${t.title} (${t.project_name})`, allDay: true,
+      ...tasks.map((t) => ({ uid: `task-${t.id}@projectlead`, title: tr(who.locale, 'event.icsDue', { title: t.title, project: t.project_name }), allDay: true,
         date: t.due_date, start: new Date(t.due_date), end: new Date(t.due_date), url: `${base}/projets/${t.project_id}?tache=${t.id}` })),
     ]
     return ics(list, { name: `ProjectLead — ${who.name}` })

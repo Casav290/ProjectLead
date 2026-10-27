@@ -1,5 +1,6 @@
 import type { Db } from '../db.js'
 import { esc, htmlParagraphs, layout, sendMail } from './email.js'
+import { asLocale, fmtDateIn, tr, type Locale } from './i18n.js'
 
 /**
  * Le suivi de projet envoyé au client : l'état de chaque étape visible, l'avancement global,
@@ -7,24 +8,25 @@ import { esc, htmlParagraphs, layout, sendMail } from './email.js'
  * Le même contenu sert à l'aperçu, à l'envoi manuel et à l'envoi automatique périodique.
  */
 
-export const STAGE_LABEL: Record<string, string> = {
-  todo: 'À venir', in_progress: 'En cours', done: 'Terminée', blocked: 'En attente',
-}
-const HEALTH_LABEL: Record<string, string> = {
-  on_track: 'Dans les temps', at_risk: 'Sous surveillance', off_track: 'En retard',
-}
+/** Le libellé d'un état d'étape, dans la langue du document. */
+export const stageLabel = (l: Locale, status: string) => tr(l, `report.stage.${status}`)
+const healthLabel = (l: Locale, h: string) => tr(l, `report.health.${h}`)
+// Clés écrites en entier pour le contrôle des clés (scripts/i18n-check.ts --keys) :
+// tr(l, 'report.stage.todo') tr(l, 'report.stage.in_progress') tr(l, 'report.stage.done') tr(l, 'report.stage.blocked')
+// tr(l, 'report.health.on_track') tr(l, 'report.health.at_risk') tr(l, 'report.health.off_track')
 
-const fmtDate = (d: string | null) => d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : null
+export type Report = { subject: string; text: string; html: string; recipients: string[]; portalUrl: string | null; locale: Locale }
 
-export type Report = { subject: string; text: string; html: string; recipients: string[]; portalUrl: string | null }
-
+/** Le suivi, dans la langue des documents du projet (`projects.doc_locale`, sinon celle de l'entreprise). */
 export async function buildReport(db: Db, projectId: string, message?: string | null): Promise<Report> {
   const p = (await db.query(
-    `select p.*, a.name as account_name, c.name as client_name, c.email as client_email, s.client_update_signature
+    `select p.*, a.name as account_name, a.locale as account_locale, c.name as client_name, c.email as client_email, s.client_update_signature
        from projects p join accounts a on a.id = p.account_id left join clients c on c.id = p.client_id
        left join account_settings s on s.account_id = p.account_id
       where p.id = $1`, [projectId])).rows[0]
   if (!p) throw new Error('not_found')
+  const l = asLocale(p.doc_locale ?? p.account_locale)
+  const fmtDate = (d: string | null) => d ? fmtDateIn(l, d) : null
   const stages = (await db.query(
     `select s.name, s.status, s.due_date, s.client_note, s.completed_at::date as completed_on,
             (select count(*)::int from tasks t where t.stage_id = s.id and t.parent_id is null) as total,
@@ -44,45 +46,48 @@ export async function buildReport(db: Db, projectId: string, message?: string | 
 
   const doneStages = stages.filter((s) => s.status === 'done').length
   const progress = stages.length ? Math.round((doneStages / stages.length) * 100) : 0
-  const portalUrl = p.portal_enabled ? `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/suivi/${p.portal_token}` : null
+  // La page de suivi s'ouvre dans la langue du document (le visiteur peut en changer).
+  const portalUrl = p.portal_enabled ? `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/suivi/${p.portal_token}?lang=${l}` : null
+  const intro = message?.trim() || tr(l, 'report.intro', { name: p.name })
+  const signature = p.client_update_signature?.trim() || tr(l, 'report.regards', { account: p.account_name })
 
   const lines: string[] = []
-  lines.push(`Bonjour,`, '')
-  lines.push(message?.trim() || `Voici où en est le projet « ${p.name} ».`, '')
-  lines.push(`Avancement : ${doneStages} étape${doneStages > 1 ? 's' : ''} terminée${doneStages > 1 ? 's' : ''} sur ${stages.length} (${progress} %).`)
-  if (p.due_date) lines.push(`Échéance prévue : ${fmtDate(p.due_date)}.`)
-  lines.push('', 'Étapes :')
+  lines.push(tr(l, 'report.greeting'), '')
+  lines.push(intro, '')
+  lines.push(tr(l, 'report.progress', { done: doneStages, total: stages.length, pct: progress }))
+  if (p.due_date) lines.push(tr(l, 'report.due', { date: fmtDate(p.due_date) }))
+  lines.push('', tr(l, 'report.stages'))
   for (const s of stages) {
-    const when = s.status === 'done' ? (s.completed_on ? ` le ${fmtDate(s.completed_on)}` : '')
-      : s.due_date ? `, prévue pour le ${fmtDate(s.due_date)}` : ''
-    lines.push(`- ${s.name} : ${STAGE_LABEL[s.status]}${when}${s.total ? ` (${s.done}/${s.total} tâches)` : ''}`)
+    const when = s.status === 'done' ? (s.completed_on ? tr(l, 'report.whenDone', { date: fmtDate(s.completed_on) }) : '')
+      : s.due_date ? tr(l, 'report.whenDue', { date: fmtDate(s.due_date) }) : ''
+    lines.push(`- ${s.name} : ${stageLabel(l, s.status)}${when}${s.total ? tr(l, 'report.taskCount', { done: s.done, total: s.total }) : ''}`)
     if (s.client_note) lines.push(`  ${s.client_note}`)
   }
   if (tasks.length) {
-    lines.push('', 'Tâches suivies :')
-    for (const t of tasks) lines.push(`- [${t.done ? 'x' : ' '}] ${t.title}${t.due_date && !t.done ? ` (pour le ${fmtDate(t.due_date)})` : ''}`)
+    lines.push('', tr(l, 'report.tasks'))
+    for (const t of tasks) lines.push(`- [${t.done ? 'x' : ' '}] ${t.title}${t.due_date && !t.done ? tr(l, 'report.taskDue', { date: fmtDate(t.due_date) }) : ''}`)
   }
-  if (update) lines.push('', `Dernier point (${fmtDate(update.on)}, ${HEALTH_LABEL[update.health].toLowerCase()}) :`, update.body)
-  if (portalUrl) lines.push('', `Suivre le projet en ligne : ${portalUrl}`)
-  lines.push('', p.client_update_signature?.trim() || `Cordialement,\n${p.account_name}`)
+  if (update) lines.push('', tr(l, 'report.lastUpdate', { date: fmtDate(update.on), health: healthLabel(l, update.health).toLowerCase() }), update.body)
+  if (portalUrl) lines.push('', tr(l, 'report.followOnline', { url: portalUrl }))
+  lines.push('', signature)
   const text = lines.join('\n')
 
   const color = (s: string) => s === 'done' ? '#15803d' : s === 'in_progress' ? '#9a6a00' : s === 'blocked' ? '#c2410c' : '#67625c'
   const rows = stages.map((s) => `<tr>
     <td style="padding:8px 10px;border-bottom:1px solid #eeebe7;border-left:3px solid ${color(s.status)}"><strong>${esc(s.name)}</strong>
       ${s.client_note ? `<div style="color:#67625c;font-size:13px;margin-top:2px">${esc(s.client_note)}</div>` : ''}</td>
-    <td style="padding:8px 10px;border-bottom:1px solid #eeebe7;color:${color(s.status)};font-weight:700;white-space:nowrap">${STAGE_LABEL[s.status]}</td>
+    <td style="padding:8px 10px;border-bottom:1px solid #eeebe7;color:${color(s.status)};font-weight:700;white-space:nowrap">${esc(stageLabel(l, s.status))}</td>
     <td style="padding:8px 10px;border-bottom:1px solid #eeebe7;color:#67625c;white-space:nowrap">${s.status === 'done' ? fmtDate(s.completed_on) ?? '' : fmtDate(s.due_date) ?? ''}</td></tr>`).join('')
   const html = layout(p.name,
-    htmlParagraphs(`Bonjour,\n\n${message?.trim() || `Voici où en est le projet « ${p.name} ».`}`) +
-    `<p style="margin:0 0 6px;font-weight:700">Avancement : ${progress} %</p>
+    htmlParagraphs(`${tr(l, 'report.greeting')}\n\n${intro}`) +
+    `<p style="margin:0 0 6px;font-weight:700">${esc(tr(l, 'report.progressHtml', { pct: progress }))}</p>
      <div style="background:#f2f0ee;height:8px;margin-bottom:16px"><div style="background:#9a6a00;height:8px;width:${progress}%"></div></div>
      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7e4e0;font-size:14px">${rows}</table>` +
-    (update ? `<p style="margin:16px 0 4px;font-weight:700">Dernier point</p>${htmlParagraphs(update.body)}` : '') +
-    htmlParagraphs(p.client_update_signature?.trim() || `Cordialement,\n${p.account_name}`),
-    portalUrl ? { label: 'Suivre le projet en ligne', url: portalUrl } : undefined)
+    (update ? `<p style="margin:16px 0 4px;font-weight:700">${esc(tr(l, 'report.lastUpdateHtml'))}</p>${htmlParagraphs(update.body)}` : '') +
+    htmlParagraphs(signature),
+    portalUrl ? { label: tr(l, 'report.followButton'), url: portalUrl } : undefined, l)
 
-  return { subject: `Suivi du projet ${p.name}`, text, html, recipients, portalUrl }
+  return { subject: tr(l, 'report.subject', { name: p.name }), text, html, recipients, portalUrl, locale: l }
 }
 
 /** Envoie le suivi, le journalise sur le projet. */

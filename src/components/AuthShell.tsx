@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { useT } from '../i18n'
+import LanguageSelect from './LanguageSelect'
 
 /**
  * Écran de connexion commun aux applications Lead (Trait net, « Écran de connexion commun »,
@@ -8,15 +10,18 @@ import { Link } from 'react-router-dom'
  * initiales changent d'une application à l'autre.
  */
 export function AuthShell({ title, children, subtitle }: { title?: string; children: ReactNode; subtitle?: ReactNode }) {
+  const t = useT()
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+    <div className="relative flex min-h-screen items-center justify-center bg-background px-4 pb-10 pt-16 sm:py-16">
+      {/* Le sélecteur de langue, en haut à droite de l'écran (ordinateur et téléphone). */}
+      <div className="absolute right-4 top-4"><LanguageSelect /></div>
       <div className="w-full max-w-[420px]">
         <div className="text-center">
           <p className="inline-flex items-center gap-3 text-[28px] font-extrabold leading-none tracking-[-.025em]">
             <span aria-hidden="true" className="grid h-10 w-10 place-items-center bg-brand text-base text-white">PL</span>
             ProjectLead
           </p>
-          <p className="mt-2 text-[15px] text-muted-foreground">La gestion de projet après la signature</p>
+          <p className="mt-2 text-[15px] text-muted-foreground">{t('shell.auth.tagline')}</p>
         </div>
         <div className="mt-8 border border-input bg-card p-6 sm:p-10">
           {title && <h1 className="mb-6 text-left text-[28px] font-extrabold leading-tight tracking-[-.025em] [overflow-wrap:anywhere]">{title}</h1>}
@@ -24,9 +29,9 @@ export function AuthShell({ title, children, subtitle }: { title?: string; child
           {children}
         </div>
         <p className="mt-4 text-center text-[13px] text-muted-foreground">
-          <Link to="/confidentialite" className="hover:underline">Confidentialité</Link>
+          <Link to="/confidentialite" className="hover:underline">{t('shell.legal.privacy')}</Link>
           {' · '}
-          <Link to="/conditions" className="hover:underline">Conditions d'utilisation</Link>
+          <Link to="/conditions" className="hover:underline">{t('shell.legal.terms')}</Link>
         </p>
       </div>
     </div>

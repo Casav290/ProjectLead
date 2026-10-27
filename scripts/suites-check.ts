@@ -51,7 +51,11 @@ async function block(title: string, fn: () => Promise<void> | void) {
   console.log(title)
   try { await fn() } catch (e) { check(`${title} : exécuté sans erreur`, false, String((e as Error)?.stack ?? e).slice(0, 400)) }
 }
-const render = (el: ReactElement) => renderToStaticMarkup(createElement(StaticRouter, { location: '/' }, el))
+// L'interface passe par t() (src/i18n) : le français est chargé depuis ses fichiers, et le rendu a son I18nProvider.
+const { useLocaleFromFiles } = await import('./i18n-node.ts')
+useLocaleFromFiles('fr')
+const { I18nProvider } = await import('../src/i18n/index.tsx')
+const render = (el: ReactElement) => renderToStaticMarkup(createElement(I18nProvider, null, createElement(StaticRouter, { location: '/' }, el)))
 const text = (html: string) => html.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
   .replace(/&nbsp;| | /g, ' ').replace(/\s+/g, ' ').trim()
 const attrs = (html: string, name: string) => [...html.matchAll(new RegExp(`${name}="([^"]*)"`, 'g'))].map((m) => m[1])

@@ -2,7 +2,8 @@ import clsx from 'clsx'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, errorText } from '../lib/api'
-import { addDays, fmtDateTime, fmtRelative, mondayOf, today } from '../lib/format'
+import { addDays, fmtDateTime, fmtRelative, mondayOf, today, weekdayShort } from '../lib/format'
+import { intlLocale, labels, useT } from '../i18n'
 import { useApp, useLoad } from '../lib/store'
 import type { Client, ProjectSummary } from '../lib/types'
 import { Badge, Button, Card, Checkbox, Confirm, ErrorNote, Field, Input, Modal, PageHeader, PeoplePicker, Select, Spinner, Tabs, Textarea,
@@ -25,13 +26,12 @@ type Item = { key: string; type: 'event' | 'task' | 'stage' | 'external'; title:
   sub?: string; done?: boolean; ev?: Ev; link?: string }
 type View = 'month' | 'week' | 'list'
 
-const KIND: Record<string, string> = { meeting: 'Réunion', call: 'Appel', workshop: 'Atelier', deadline: 'Échéance', other: 'Autre' }
+const KIND = labels('agenda.kind', ['meeting', 'call', 'workshop', 'deadline', 'other'])
 const pad = (n: number) => String(n).padStart(2, '0')
 const dkey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
 const local = (s: string) => new Date(s + 'T12:00:00')
-const fmt = (s: string, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('fr-CH', o).format(local(s))
-const WEEKDAYS = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.']
+const fmt = (s: string, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(intlLocale(), o).format(local(s))
 
 /** Les bornes affichées pour une vue et une date de référence. */
 function bounds(view: View, cursor: string): [string, string] {
@@ -42,6 +42,7 @@ function bounds(view: View, cursor: string): [string, string] {
 }
 
 export default function Agenda() {
+  const t = useT()
   const { me } = useApp()
   const navigate = useNavigate()
   const [view, setView] = useState<View>(() => (window.innerWidth < 640 ? 'list' : 'month'))
@@ -59,13 +60,13 @@ export default function Agenda() {
         color: e.project_color ?? '#9a6a00', sub: [e.project_name ?? e.client_name, e.location].filter(Boolean).join(' · '), ev: e })),
       ...data.tasks.map((t) => ({ key: `t${t.id}`, type: 'task' as const, title: t.title, start: local(t.due_date.slice(0, 10)), end: local(t.due_date.slice(0, 10)),
         allDay: true, color: t.project_color, sub: t.project_name, done: !!t.completed_at, link: `/projets/${t.project_id}?tache=${t.id}` })),
-      ...data.stages.map((s) => ({ key: `s${s.id}`, type: 'stage' as const, title: `Étape : ${s.name}`, start: local(s.due_date.slice(0, 10)), end: local(s.due_date.slice(0, 10)),
+      ...data.stages.map((s) => ({ key: `s${s.id}`, type: 'stage' as const, title: t('agenda.stagePrefix', { name: s.name }), start: local(s.due_date.slice(0, 10)), end: local(s.due_date.slice(0, 10)),
         allDay: true, color: s.project_color, sub: s.project_name, done: s.status === 'done', link: `/projets/${s.project_id}` })),
       ...data.external.map((x) => ({ key: `x${x.id}`, type: 'external' as const, title: x.title, start: new Date(x.starts_at), end: new Date(x.ends_at),
         allDay: x.all_day, color: '#a8a29e', sub: x.feed_name })),
     ]
     return list.sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.getTime() - b.start.getTime())
-  }, [data])
+  }, [data, t])
 
   /** Les éléments de chaque jour ; un événement sur plusieurs jours apparaît chaque jour. */
   const byDay = useMemo(() => {
@@ -90,30 +91,30 @@ export default function Agenda() {
     setCursor(next); setSelected(next)
   }
   const title = view === 'week'
-    ? `Semaine du ${fmt(from, { day: 'numeric', month: 'long' })}`
+    ? t('agenda.weekOf', { date: fmt(from, { day: 'numeric', month: 'long' }) })
     : fmt(cursor.slice(0, 8) + '15', { month: 'long', year: 'numeric' })
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Agenda" subtitle="Réunions, rendez-vous, échéances des tâches et vos agendas extérieurs."
-        actions={<Button variant="primary" onClick={() => setEditing({ date: selected })}>+ Nouvel événement</Button>} />
+      <PageHeader title={t('agenda.title')} subtitle={t('agenda.subtitle')}
+        actions={<Button variant="primary" onClick={() => setEditing({ date: selected })}>{t('agenda.newEvent')}</Button>} />
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex">
-          <Button aria-label="Précédent" onClick={() => move(-1)}>←</Button>
-          <Button className="-ml-px" onClick={() => { setCursor(today()); setSelected(today()) }}>Aujourd'hui</Button>
-          <Button className="-ml-px" aria-label="Suivant" onClick={() => move(1)}>→</Button>
+          <Button aria-label={t('agenda.previous')} onClick={() => move(-1)}>←</Button>
+          <Button className="-ml-px" onClick={() => { setCursor(today()); setSelected(today()) }}>{t('agenda.today')}</Button>
+          <Button className="-ml-px" aria-label={t('agenda.next')} onClick={() => move(1)}>→</Button>
         </div>
         <h2 className="font-display text-lg first-letter:uppercase">{title}</h2>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Select className="w-auto" value={scope} onChange={(e) => setScope(e.target.value as 'mine' | 'all')} aria-label="Afficher">
-            <option value="mine">Mon agenda</option>
-            <option value="all">Toute l'équipe</option>
+          <Select className="w-auto" value={scope} onChange={(e) => setScope(e.target.value as 'mine' | 'all')} aria-label={t('agenda.show')}>
+            <option value="mine">{t('agenda.scope.mine')}</option>
+            <option value="all">{t('agenda.scope.all')}</option>
           </Select>
         </div>
       </div>
       <Tabs active={view} onChange={(v) => setView(v as View)}
-        tabs={[{ id: 'month', label: 'Mois' }, { id: 'week', label: 'Semaine' }, { id: 'list', label: 'Liste' }]} />
+        tabs={[{ id: 'month', label: t('agenda.view.month') }, { id: 'week', label: t('agenda.view.week') }, { id: 'list', label: t('agenda.view.list') }]} />
       <ErrorNote error={error} />
       {loading && !data ? <Spinner /> : (
         <>
@@ -126,9 +127,9 @@ export default function Agenda() {
         </>
       )}
       <p className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 bg-accent" />Événement (couleur du projet)</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 border-2 border-accent" />Échéance de tâche ou d'étape</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 bg-[#a8a29e]" />Agenda extérieur</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 bg-accent" />{t('agenda.legend.event')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 border-2 border-accent" />{t('agenda.legend.deadline')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 bg-[#a8a29e]" />{t('agenda.legend.external')}</span>
       </p>
 
       <div className="grid gap-5 lg:grid-cols-2">
@@ -156,12 +157,15 @@ function Chip({ it, onOpen, compact }: { it: Item; onOpen: (it: Item) => void; c
 
 function MonthView({ cursor, from, byDay, selected, onSelect, onOpen }:
   { cursor: string; from: string; byDay: Map<string, Item[]>; selected: string; onSelect: (d: string) => void; onOpen: (it: Item) => void }) {
+  const t = useT()
   const month = cursor.slice(0, 7)
   const days = Array.from({ length: 42 }, (_, i) => addDays(from, i))
+  // La grille commence le lundi (`from`) : les sept premiers jours donnent les noms courts dans la langue en cours.
+  const weekdays = days.slice(0, 7).map((d) => weekdayShort(d))
   return (
     <div className="border border-border bg-card">
       <div className="grid grid-cols-7 border-b border-border bg-head">
-        {WEEKDAYS.map((w) => <div key={w} className="px-1 py-1.5 text-center text-[11px] font-bold uppercase text-muted-foreground sm:px-2 sm:text-left">{w}</div>)}
+        {weekdays.map((w) => <div key={w} className="px-1 py-1.5 text-center text-[11px] font-bold uppercase text-muted-foreground sm:px-2 sm:text-left">{w}</div>)}
       </div>
       <div className="grid grid-cols-7">
         {days.map((d, i) => {
@@ -172,12 +176,12 @@ function MonthView({ cursor, from, byDay, selected, onSelect, onOpen }:
               className={clsx('min-h-[64px] min-w-0 cursor-pointer border-border p-1 sm:min-h-[104px]', i % 7 !== 6 && 'border-r', i >= 7 && 'border-t',
                 d.slice(0, 7) !== month && 'bg-head/70 text-muted-foreground', d === selected && 'outline outline-2 -outline-offset-2 outline-accent')}>
               <button type="button" onClick={(e) => { e.stopPropagation(); onSelect(d) }} aria-pressed={d === selected}
-                aria-label={`${fmt(d, { weekday: 'long', day: 'numeric', month: 'long' })}, ${list.length} élément(s)`}
+                aria-label={t('agenda.dayAria', { day: fmt(d, { weekday: 'long', day: 'numeric', month: 'long' }), n: list.length })}
                 className={clsx('mb-1 inline-grid h-6 min-w-6 place-items-center px-1 text-xs font-bold tabular-nums', d === today() && 'bg-accent text-white')}>
                 {+d.slice(8)}</button>
               <div className="hidden space-y-0.5 sm:block">
                 {list.slice(0, 3).map((it) => <Chip key={it.key} it={it} onOpen={onOpen} />)}
-                {list.length > 3 && <span className="block px-1 text-[11px] font-bold text-muted-foreground">+{list.length - 3} de plus</span>}
+                {list.length > 3 && <span className="block px-1 text-[11px] font-bold text-muted-foreground">{t('agenda.more', { n: list.length - 3 })}</span>}
               </div>
               <div className="space-y-0.5 sm:hidden">{list.slice(0, 4).map((it) => <Chip key={it.key} it={it} onOpen={onOpen} compact />)}</div>
             </div>
@@ -189,13 +193,14 @@ function MonthView({ cursor, from, byDay, selected, onSelect, onOpen }:
 }
 
 function Row({ it, onOpen }: { it: Item; onOpen: (it: Item) => void }) {
+  const t = useT()
   const clickable = !!(it.ev || it.link)
   return (
     <li>
       <button type="button" disabled={!clickable} onClick={() => onOpen(it)}
         className={clsx('flex w-full items-start gap-3 px-4 py-2.5 text-left text-sm', clickable && 'hover:bg-head', 'disabled:cursor-default')}>
         <span className="w-[86px] shrink-0 text-xs tabular-nums text-muted-foreground">
-          {it.allDay ? (it.type === 'task' || it.type === 'stage' ? 'Échéance' : 'Journée') : `${hhmm(it.start)} – ${hhmm(it.end)}`}
+          {it.allDay ? (it.type === 'task' || it.type === 'stage' ? t('agenda.row.deadline') : t('agenda.row.allDay')) : `${hhmm(it.start)} – ${hhmm(it.end)}`}
         </span>
         <span className="mt-1 h-2.5 w-2.5 shrink-0" style={it.type === 'event' || it.type === 'external' ? { background: it.color } : { border: `2px solid ${it.color}` }} />
         <span className="min-w-0 flex-1">
@@ -203,23 +208,25 @@ function Row({ it, onOpen }: { it: Item; onOpen: (it: Item) => void }) {
           {it.sub && <span className="block truncate text-xs text-muted-foreground">{it.sub}</span>}
         </span>
         {it.ev && it.ev.kind !== 'meeting' && <Badge>{KIND[it.ev.kind]}</Badge>}
-        {it.ev?.booking_id && <Badge tone="info">Rendez-vous</Badge>}
+        {it.ev?.booking_id && <Badge tone="info">{t('agenda.booking')}</Badge>}
       </button>
     </li>
   )
 }
 
 function DayList({ day, items, onOpen, onCreate }: { day: string; items: Item[]; onOpen: (it: Item) => void; onCreate: () => void }) {
+  const t = useT()
   return (
     <Card title={<span className="first-letter:uppercase">{fmt(day, { weekday: 'long', day: 'numeric', month: 'long' })}</span>}
-      action={<Button size="sm" onClick={onCreate}>+ Événement ce jour</Button>}>
-      {items.length === 0 ? <p className="px-4 py-4 text-sm text-muted-foreground">Rien ce jour-là.</p>
+      action={<Button size="sm" onClick={onCreate}>{t('agenda.eventThisDay')}</Button>}>
+      {items.length === 0 ? <p className="px-4 py-4 text-sm text-muted-foreground">{t('agenda.nothingDay')}</p>
         : <ul className="divide-y divide-border">{items.map((it) => <Row key={it.key} it={it} onOpen={onOpen} />)}</ul>}
     </Card>
   )
 }
 
 function WeekView({ from, byDay, onOpen, onCreate }: { from: string; byDay: Map<string, Item[]>; onOpen: (it: Item) => void; onCreate: (d: string) => void }) {
+  const t = useT()
   return (
     <div className="grid border border-border bg-card lg:grid-cols-7">
       {Array.from({ length: 7 }, (_, i) => addDays(from, i)).map((d, i) => {
@@ -228,10 +235,10 @@ function WeekView({ from, byDay, onOpen, onCreate }: { from: string; byDay: Map<
           <div key={d} className={clsx('min-w-0 border-border lg:min-h-[320px]', i > 0 && 'border-t lg:border-l lg:border-t-0')}>
             <div className={clsx('flex items-center justify-between border-b border-border px-2 py-1.5 text-xs font-bold', d === today() ? 'bg-accent-veil text-accent-dark' : 'bg-head')}>
               <span className="first-letter:uppercase">{fmt(d, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
-              <button type="button" aria-label={`Nouvel événement le ${d}`} className="px-1 text-muted-foreground hover:text-accent" onClick={() => onCreate(d)}>+</button>
+              <button type="button" aria-label={t('agenda.newEventOn', { date: d })} className="px-1 text-muted-foreground hover:text-accent" onClick={() => onCreate(d)}>+</button>
             </div>
             <div className="space-y-1 p-1.5">
-              {list.length === 0 && <p className="px-1 py-1 text-xs text-muted-foreground lg:hidden">Rien</p>}
+              {list.length === 0 && <p className="px-1 py-1 text-xs text-muted-foreground lg:hidden">{t('agenda.nothing')}</p>}
               {list.map((it) => (
                 <div key={it.key}>
                   <Chip it={it} onOpen={onOpen} />
@@ -247,9 +254,10 @@ function WeekView({ from, byDay, onOpen, onCreate }: { from: string; byDay: Map<
 }
 
 function ListView({ from, to, byDay, onOpen }: { from: string; to: string; byDay: Map<string, Item[]>; onOpen: (it: Item) => void }) {
+  const t = useT()
   const days: string[] = []
   for (let d = from; d <= to; d = addDays(d, 1)) if (byDay.get(d)?.length) days.push(d)
-  if (!days.length) return <p className="border border-dashed border-input bg-card px-4 py-8 text-center text-sm text-muted-foreground">Rien de prévu ce mois-ci.</p>
+  if (!days.length) return <p className="border border-dashed border-input bg-card px-4 py-8 text-center text-sm text-muted-foreground">{t('agenda.nothingMonth')}</p>
   return (
     <div className="border border-border bg-card">
       {days.map((d) => (
@@ -266,6 +274,7 @@ function ListView({ from, to, byDay, onOpen }: { from: string; to: string; byDay
 // ------------------------------------------------------------------ formulaire
 
 function EventForm({ initial, onClose, onSaved }: { initial: Ev | { date: string }; onClose: () => void; onSaved: () => void }) {
+  const t = useT()
   const { me, team } = useApp()
   const ev = 'id' in initial ? initial : null
   const { data: projects } = useLoad<ProjectSummary[]>('/projects')
@@ -290,86 +299,86 @@ function EventForm({ initial, onClose, onSaved }: { initial: Ev | { date: string
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (badEmail) { setError(`Adresse non valable : ${badEmail}`); return }
-    const s = new Date(`${f.date}T${f.all_day ? '00:00' : f.start}:00`), t = new Date(`${f.date}T${f.all_day ? '23:59' : f.end}:00`)
-    if (t < s) { setError("L'heure de fin précède l'heure de début."); return }
+    if (badEmail) { setError(t('agenda.form.invalidEmail', { email: badEmail })); return }
+    const s = new Date(`${f.date}T${f.all_day ? '00:00' : f.start}:00`), endAt = new Date(`${f.date}T${f.all_day ? '23:59' : f.end}:00`)
+    if (endAt < s) { setError(t('agenda.form.endBeforeStart')); return }
     setBusy(true); setError(null)
-    const body = { title: f.title, kind: f.kind, starts_at: s.toISOString(), ends_at: t.toISOString(), all_day: f.all_day, location: f.location,
+    const body = { title: f.title, kind: f.kind, starts_at: s.toISOString(), ends_at: endAt.toISOString(), all_day: f.all_day, location: f.location,
       description: f.description, project_id: f.project_id || null, client_id: f.client_id || null,
       attendee_user_ids: f.users, attendee_emails: emails, send_invites: f.send_invites && emails.length > 0 }
     try {
       if (ev) await api.patch(`/calendar/events/${ev.id}`, body)
       else await api.post('/calendar/events', body)
-      toast(body.send_invites ? 'Enregistré, invitations envoyées' : 'Événement enregistré')
+      toast(body.send_invites ? t('agenda.form.savedInvites') : t('agenda.form.saved'))
       onSaved()
     } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
   const remove = async () => {
     try {
       await api.del(`/calendar/events/${ev!.id}${notify && emails.length ? '?notify=1' : ''}`)
-      toast(notify && emails.length ? 'Supprimé, invités prévenus' : 'Événement supprimé')
+      toast(notify && emails.length ? t('agenda.form.deletedNotified') : t('agenda.form.deleted'))
       onSaved()
     } catch (err) { toast(errorText(err)) }
   }
 
   return (
-    <Modal open onClose={onClose} wide title={ev ? 'Modifier l\'événement' : 'Nouvel événement'}
+    <Modal open onClose={onClose} wide title={ev ? t('agenda.form.editTitle') : t('agenda.form.newTitle')}
       footer={<>
-        {ev && !readOnly && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>Supprimer</Button>}
-        <Button onClick={onClose}>{readOnly ? 'Fermer' : 'Annuler'}</Button>
-        {!readOnly && <Button variant="primary" type="submit" form="event-form" disabled={busy || !f.title.trim()}>{busy ? 'Enregistrement…' : 'Enregistrer'}</Button>}
+        {ev && !readOnly && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>{t('common.delete')}</Button>}
+        <Button onClick={onClose}>{readOnly ? t('common.close') : t('common.cancel')}</Button>
+        {!readOnly && <Button variant="primary" type="submit" form="event-form" disabled={busy || !f.title.trim()}>{busy ? t('agenda.form.saving') : t('common.save')}</Button>}
       </>}>
       <form id="event-form" onSubmit={submit} className="space-y-3">
         <fieldset disabled={readOnly} className="space-y-3">
-          {ev?.organizer_name && ev.organizer_id !== me?.user.id && <p className="text-xs text-muted-foreground">Organisé par {ev.organizer_name}.</p>}
+          {ev?.organizer_name && ev.organizer_id !== me?.user.id && <p className="text-xs text-muted-foreground">{t('agenda.form.organizedBy', { name: ev.organizer_name })}</p>}
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
-            <Field label="Titre"><Input required value={f.title} onChange={set('title')} placeholder="Réunion de lancement" /></Field>
-            <Field label="Type"><Select value={f.kind} onChange={set('kind')}>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
+            <Field label={t('agenda.form.title')}><Input required value={f.title} onChange={set('title')} placeholder={t('agenda.form.titlePlaceholder')} /></Field>
+            <Field label={t('agenda.form.type')}><Select value={f.kind} onChange={set('kind')}>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_136px_136px]">
-            <Field label="Date" className="col-span-2 sm:col-span-1"><Input type="date" required value={f.date} onChange={set('date')} /></Field>
+            <Field label={t('agenda.form.date')} className="col-span-2 sm:col-span-1"><Input type="date" required value={f.date} onChange={set('date')} /></Field>
             {!f.all_day && <>
-              <Field label="Début"><Input type="time" required value={f.start} onChange={set('start')} /></Field>
-              <Field label="Fin"><Input type="time" required value={f.end} onChange={set('end')} /></Field>
+              <Field label={t('agenda.form.start')}><Input type="time" required value={f.start} onChange={set('start')} /></Field>
+              <Field label={t('agenda.form.end')}><Input type="time" required value={f.end} onChange={set('end')} /></Field>
             </>}
           </div>
-          <Checkbox label="Toute la journée" checked={f.all_day} onChange={(v) => setF({ ...f, all_day: v })} />
-          <Field label="Lieu ou lien de visioconférence"><Input value={f.location} onChange={set('location')} /></Field>
+          <Checkbox label={t('agenda.form.allDay')} checked={f.all_day} onChange={(v) => setF({ ...f, all_day: v })} />
+          <Field label={t('agenda.form.location')}><Input value={f.location} onChange={set('location')} /></Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Projet">
+            <Field label={t('agenda.form.project')}>
               <Select value={f.project_id} onChange={(e) => {
                 const p = projects?.find((x) => x.id === e.target.value)
                 setF({ ...f, project_id: e.target.value, client_id: f.client_id || p?.client_id || '' })
               }}>
-                <option value="">Aucun</option>
+                <option value="">{t('common.none')}</option>
                 {(projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
             </Field>
-            <Field label="Client">
+            <Field label={t('agenda.form.client')}>
               <Select value={f.client_id} onChange={set('client_id')}>
-                <option value="">Aucun</option>
+                <option value="">{t('common.none')}</option>
                 {(clients ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
             </Field>
           </div>
-          <Field label="Description"><Textarea rows={3} value={f.description} onChange={set('description')} /></Field>
+          <Field label={t('agenda.form.description')}><Textarea rows={3} value={f.description} onChange={set('description')} /></Field>
           <div className="space-y-1.5">
-            <span className="block text-xs font-medium text-muted-foreground">Participants de l'équipe</span>
-            <PeoplePicker people={team.filter((m) => m.active && m.id !== me?.user.id)} value={f.users} onChange={(users) => setF({ ...f, users })} placeholder="Ajouter une personne…" />
+            <span className="block text-xs font-medium text-muted-foreground">{t('agenda.form.teamAttendees')}</span>
+            <PeoplePicker people={team.filter((m) => m.active && m.id !== me?.user.id)} value={f.users} onChange={(users) => setF({ ...f, users })} placeholder={t('agenda.form.addPerson')} />
           </div>
-          <Field label="Invités extérieurs" hint="Adresses email séparées par des virgules." error={badEmail ? `Adresse non valable : ${badEmail}` : null}>
-            <Input value={f.emails} onChange={set('emails')} placeholder="client@exemple.ch" inputMode="email" />
+          <Field label={t('agenda.form.guests')} hint={t('agenda.form.guestsHint')} error={badEmail ? t('agenda.form.invalidEmail', { email: badEmail }) : null}>
+            <Input value={f.emails} onChange={set('emails')} placeholder={t('agenda.form.guestsPlaceholder')} inputMode="email" />
           </Field>
           {emails.length > 0 && (
             <Checkbox checked={f.send_invites} onChange={(v) => setF({ ...f, send_invites: v })}
-              label={<>Envoyer {ev ? 'la mise à jour' : 'les invitations'} par email <span className="text-muted-foreground">(avec le fichier d'agenda joint)</span></>} />
+              label={<>{ev ? t('agenda.form.sendUpdate') : t('agenda.form.sendInvites')} <span className="text-muted-foreground">{t('agenda.form.withIcs')}</span></>} />
           )}
           {error && <p role="alert" className="text-sm text-late">{error}</p>}
         </fieldset>
       </form>
-      <Confirm open={removing} title="Supprimer l'événement" danger confirmLabel="Supprimer" onClose={() => setRemoving(false)} onConfirm={remove}>
-        <p>Supprimer « {ev?.title} » ?{ev?.booking_id && ' Le rendez-vous pris en ligne sera annulé.'}</p>
-        {emails.length > 0 && <Checkbox className="mt-3" checked={notify} onChange={setNotify} label={`Prévenir les invités (${emails.length}) de l'annulation`} />}
+      <Confirm open={removing} title={t('agenda.form.deleteTitle')} danger confirmLabel={t('common.delete')} onClose={() => setRemoving(false)} onConfirm={remove}>
+        <p>{t('agenda.form.deleteQuestion', { title: ev?.title })}{ev?.booking_id && ` ${t('agenda.form.bookingCancelled')}`}</p>
+        {emails.length > 0 && <Checkbox className="mt-3" checked={notify} onChange={setNotify} label={t('agenda.form.notifyGuests', { n: emails.length })} />}
       </Confirm>
     </Modal>
   )
@@ -378,6 +387,7 @@ function EventForm({ initial, onClose, onSaved }: { initial: Ev | { date: string
 // ------------------------------------------------------------------ mes agendas
 
 function MyCalendars({ icalUrl, onSynced }: { icalUrl: string; onSynced: () => void }) {
+  const t = useT()
   const { data: feeds, error, reload } = useLoad<Feed[]>('/calendar/feeds')
   const [f, setF] = useState({ name: '', url: '', color: '#57534e' })
   const [busy, setBusy] = useState<string | null>(null)
@@ -386,50 +396,50 @@ function MyCalendars({ icalUrl, onSynced }: { icalUrl: string; onSynced: () => v
   const [help, setHelp] = useState(false)
 
   const copy = async () => {
-    try { await navigator.clipboard.writeText(icalUrl); toast('Lien copié') } catch { toast('Copie impossible : sélectionnez le lien.') }
+    try { await navigator.clipboard.writeText(icalUrl); toast(t('agenda.cal.copied')) } catch { toast(t('agenda.cal.copyFailed')) }
   }
   const add = async (e: React.FormEvent) => {
     e.preventDefault()
     setBusy('add'); setErr(null)
     try {
       const r = await api.post<{ error?: string | null; imported?: number }>('/calendar/feeds', f)
-      toast(r.error ? 'Agenda ajouté, mais la lecture a échoué' : 'Agenda ajouté')
+      toast(r.error ? t('agenda.cal.addedReadFailed') : t('agenda.cal.added'))
       setF({ name: '', url: '', color: '#57534e' }); reload(); onSynced()
     } catch (e2) { setErr(errorText(e2)) } finally { setBusy(null) }
   }
   const sync = async (feed: Feed) => {
     setBusy(feed.id)
-    try { await api.post(`/calendar/feeds/${feed.id}/sync`); toast('Agenda relu'); reload(); onSynced() } catch (e2) { toast(errorText(e2)) } finally { setBusy(null) }
+    try { await api.post(`/calendar/feeds/${feed.id}/sync`); toast(t('agenda.cal.synced')); reload(); onSynced() } catch (e2) { toast(errorText(e2)) } finally { setBusy(null) }
   }
   const remove = async (feed: Feed) => {
-    try { await api.del(`/calendar/feeds/${feed.id}`); toast('Agenda retiré'); reload(); onSynced() } catch (e2) { toast(errorText(e2)) }
+    try { await api.del(`/calendar/feeds/${feed.id}`); toast(t('agenda.cal.removed')); reload(); onSynced() } catch (e2) { toast(errorText(e2)) }
   }
 
   return (
-    <Card title="Mes agendas">
+    <Card title={t('agenda.cal.title')}>
       <div className="space-y-5 p-4">
         <section className="space-y-2">
-          <h3 className="text-sm font-bold">Voir ProjectLead dans votre agenda</h3>
-          <p className="text-sm text-muted-foreground">Ajoutez ce lien dans Google Agenda, Outlook ou Apple Calendrier : vos réunions et les échéances de vos tâches y apparaîtront et se mettront à jour toutes seules.</p>
+          <h3 className="text-sm font-bold">{t('agenda.cal.seeTitle')}</h3>
+          <p className="text-sm text-muted-foreground">{t('agenda.cal.seeText')}</p>
           <div className="flex min-w-0 gap-2">
-            <Input readOnly value={icalUrl} onFocus={(e) => e.target.select()} className="min-w-0 flex-1 font-mono text-xs" aria-label="Lien iCalendar personnel" />
-            <Button onClick={copy}>Copier</Button>
+            <Input readOnly value={icalUrl} onFocus={(e) => e.target.select()} className="min-w-0 flex-1 font-mono text-xs" aria-label={t('agenda.cal.icalAria')} />
+            <Button onClick={copy}>{t('agenda.cal.copy')}</Button>
           </div>
           <button type="button" className="text-xs font-bold text-accent hover:underline" onClick={() => setHelp(!help)} aria-expanded={help}>
-            {help ? 'Masquer l\'aide' : 'Comment l\'ajouter ?'}</button>
+            {help ? t('agenda.cal.hideHelp') : t('agenda.cal.howTo')}</button>
           {help && (
             <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-              <li><b>Google Agenda</b> : Autres agendas, « + », À partir de l'URL, collez le lien.</li>
-              <li><b>Outlook</b> : Ajouter un calendrier, S'abonner à partir du web, collez le lien.</li>
-              <li><b>Apple Calendrier</b> : Fichier, Nouvel abonnement à un calendrier, collez le lien.</li>
-              <li>Ce lien est personnel : ne le partagez pas.</li>
+              <li><b>{t('agenda.cal.googleName')}</b>{t('agenda.cal.help.google')}</li>
+              <li><b>Outlook</b>{t('agenda.cal.help.outlook')}</li>
+              <li><b>{t('agenda.cal.appleName')}</b>{t('agenda.cal.help.apple')}</li>
+              <li>{t('agenda.cal.help.private')}</li>
             </ul>
           )}
         </section>
 
         <section className="space-y-2 border-t border-border pt-4">
-          <h3 className="text-sm font-bold">Agendas extérieurs</h3>
-          <p className="text-sm text-muted-foreground">Vos rendez-vous personnels s'affichent en gris et bloquent les créneaux de prise de rendez-vous. Ils restent privés.</p>
+          <h3 className="text-sm font-bold">{t('agenda.cal.externalTitle')}</h3>
+          <p className="text-sm text-muted-foreground">{t('agenda.cal.externalText')}</p>
           <ErrorNote error={error} />
           {(feeds ?? []).length > 0 && (
             <ul className="divide-y divide-border border border-border">
@@ -439,51 +449,53 @@ function MyCalendars({ icalUrl, onSynced }: { icalUrl: string; onSynced: () => v
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold">{x.name}</div>
                     <div className={clsx('text-xs', x.sync_error ? 'text-late' : 'text-muted-foreground')}>
-                      {x.sync_error ? `Lecture impossible : ${x.sync_error}` : `${x.events} événement${x.events > 1 ? 's' : ''} · lu ${x.last_synced_at ? fmtRelative(x.last_synced_at) : 'jamais'}`}
+                      {x.sync_error ? t('agenda.cal.readError', { error: x.sync_error })
+                        : t('agenda.cal.feedStatus', { n: x.events, when: x.last_synced_at ? fmtRelative(x.last_synced_at) : t('agenda.cal.never') })}
                     </div>
                   </div>
-                  <Button size="sm" disabled={busy === x.id} onClick={() => sync(x)}>{busy === x.id ? 'Lecture…' : 'Resynchroniser'}</Button>
-                  <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(x)}>Retirer</Button>
+                  <Button size="sm" disabled={busy === x.id} onClick={() => sync(x)}>{busy === x.id ? t('agenda.cal.reading') : t('agenda.cal.resync')}</Button>
+                  <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(x)}>{t('agenda.cal.remove')}</Button>
                 </li>
               ))}
             </ul>
           )}
           <form onSubmit={add} className="space-y-2">
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_44px]">
-              <Input required placeholder="Nom (ex. Perso)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Nom de l'agenda" />
-              <Input required placeholder="https://… ou webcal://…" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} aria-label="Adresse iCal secrète" />
-              <input type="color" value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} aria-label="Couleur" className="h-[38px] w-16 border sm:w-full border-input bg-card p-1" />
+              <Input required placeholder={t('agenda.cal.namePlaceholder')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label={t('agenda.cal.nameAria')} />
+              <Input required placeholder={t('agenda.cal.urlPlaceholder')} value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} aria-label={t('agenda.cal.urlAria')} />
+              <input type="color" value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} aria-label={t('agenda.cal.color')} className="h-[38px] w-16 border sm:w-full border-input bg-card p-1" />
             </div>
             {err && <p role="alert" className="text-sm text-late">{err}</p>}
-            <Button type="submit" disabled={busy === 'add'}>{busy === 'add' ? 'Lecture de l\'agenda…' : 'Brancher cet agenda'}</Button>
+            <Button type="submit" disabled={busy === 'add'}>{busy === 'add' ? t('agenda.cal.readingCal') : t('agenda.cal.connect')}</Button>
           </form>
           <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer font-bold text-foreground">Où trouver l'adresse iCal secrète ?</summary>
+            <summary className="cursor-pointer font-bold text-foreground">{t('agenda.cal.whereTitle')}</summary>
             <ul className="mt-2 list-disc space-y-1 pl-5">
-              <li><b>Google Agenda</b> : Paramètres, choisissez l'agenda, Intégrer l'agenda, « Adresse secrète au format iCal ».</li>
-              <li><b>Outlook / Microsoft 365</b> : Paramètres, Calendrier, Calendriers partagés, Publier un calendrier, lien « ICS ».</li>
-              <li><b>Apple iCloud</b> : dans Calendrier, partagez l'agenda en « Calendrier public » et copiez le lien webcal://.</li>
+              <li><b>{t('agenda.cal.googleName')}</b>{t('agenda.cal.where.google')}</li>
+              <li><b>Outlook / Microsoft 365</b>{t('agenda.cal.where.outlook')}</li>{/* i18n-ok : noms de produits */}
+              <li><b>Apple iCloud</b>{t('agenda.cal.where.icloud')}</li>{/* i18n-ok : nom de produit */}
             </ul>
           </details>
         </section>
       </div>
-      <Confirm open={!!removing} title="Retirer l'agenda" danger confirmLabel="Retirer" onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)}>
-        Retirer « {removing?.name} » ? Ses événements disparaîtront de ProjectLead ; l'agenda d'origine n'est pas touché.
+      <Confirm open={!!removing} title={t('agenda.cal.removeTitle')} danger confirmLabel={t('agenda.cal.remove')} onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)}>
+        {t('agenda.cal.removeText', { name: removing?.name })}
       </Confirm>
     </Card>
   )
 }
 
 function Bookings() {
+  const t = useT()
   const { data, error, loading } = useLoad<Booking[]>('/booking/bookings')
   const now = Date.now()
   const upcoming = (data ?? []).filter((b) => Date.parse(b.starts_at) >= now).sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   const past = (data ?? []).filter((b) => Date.parse(b.starts_at) < now)
   const list = [...upcoming, ...past].slice(0, 15)
   return (
-    <Card title="Rendez-vous pris" action={<Link to="/reglages/rendez-vous" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">Types de rendez-vous</Link>}>
+    <Card title={t('agenda.bookings.title')} action={<Link to="/reglages/rendez-vous" className="whitespace-nowrap text-xs font-bold text-accent hover:underline">{t('agenda.bookings.types')}</Link>}>
       {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} /></div> : list.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-muted-foreground">Aucun rendez-vous pris en ligne ces 30 derniers jours. Partagez votre page de prise de rendez-vous (Réglages) pour en recevoir.</p>
+        <p className="px-4 py-6 text-sm text-muted-foreground">{t('agenda.bookings.empty')}</p>
       ) : (
         <ul className="divide-y divide-border">
           {list.map((b) => (
@@ -491,10 +503,11 @@ function Bookings() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{b.name}</span>
                 {b.company && <span className="text-muted-foreground">· {b.company}</span>}
-                <span className="ml-auto">{b.status === 'cancelled' ? <Badge tone="late">Annulé</Badge> : Date.parse(b.starts_at) < now ? <Badge>Passé</Badge> : <Badge tone="ok">Confirmé</Badge>}</span>
+                <span className="ml-auto">{b.status === 'cancelled' ? <Badge tone="late">{t('agenda.bookings.cancelled')}</Badge> : Date.parse(b.starts_at) < now ? <Badge>{t('agenda.bookings.past')}</Badge> : <Badge tone="ok">{t('agenda.bookings.confirmed')}</Badge>}</span>
               </div>
               <div className="text-xs text-muted-foreground">
-                {fmtDateTime(b.starts_at)} · {b.type_name}{b.host_name ? ` avec ${b.host_name}` : ''}
+                {fmtDateTime(b.starts_at)} · {b.type_name}{b.host_name ? ` ${t('agenda.bookings.with', { name: b.host_name })}` : ''}
+
               </div>
               <div className="flex flex-wrap gap-x-3 text-xs">
                 <a href={`mailto:${b.email}`} className="text-accent hover:underline">{b.email}</a>

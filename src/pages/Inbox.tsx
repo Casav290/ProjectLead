@@ -2,7 +2,8 @@ import clsx from 'clsx'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, errorText } from '../lib/api'
-import { fmtDateTime, fmtRelative } from '../lib/format'
+import { fmtDateTime, fmtRelative, STATUS_LABEL } from '../lib/format'
+import { labels, useT } from '../i18n'
 import { useApp, useLoad } from '../lib/store'
 import type { Client, ProjectSummary } from '../lib/types'
 import { Badge, Button, Checkbox, Empty, ErrorNote, Field, Input, Modal, PageHeader, PeoplePicker, Select, Spinner, Tabs, Textarea,
@@ -14,9 +15,13 @@ type InboxItem = { id: string; from_email: string; from_name: string | null; to_
 type Message = { id: string; from_email: string; from_name: string | null; to_emails: string[]; subject: string; body: string | null
   received_at: string; status: InboxItem['status']; project_id: string | null; client_id: string | null }
 
-const FILTERS = [{ id: 'new', label: 'À trier' }, { id: 'linked', label: 'Rattachés' }, { id: 'ignored', label: 'Écartés' }, { id: 'all', label: 'Tous' }]
+// Les libellés sont lus à chaque accès (labels, getters) : ils suivent la langue en cours.
+const FILTER_LABEL = labels('inbox.filter', ['new', 'linked', 'ignored', 'all'])
+const STATUS_TEXT = labels('inbox.status', ['new', 'linked', 'ignored'])
+const FILTERS = (['new', 'linked', 'ignored', 'all'] as const).map((id) => ({ id, get label() { return FILTER_LABEL[id] } }))
 const STATUS: Record<string, { label: string; tone: 'accent' | 'ok' | 'muted' }> = {
-  new: { label: 'À trier', tone: 'accent' }, linked: { label: 'Rattaché', tone: 'ok' }, ignored: { label: 'Écarté', tone: 'muted' },
+  new: { get label() { return STATUS_TEXT.new }, tone: 'accent' }, linked: { get label() { return STATUS_TEXT.linked }, tone: 'ok' },
+  ignored: { get label() { return STATUS_TEXT.ignored }, tone: 'muted' },
 }
 const sender = (m: { from_name: string | null; from_email: string }) => m.from_name || m.from_email
 
@@ -25,13 +30,14 @@ const sender = (m: { from_name: string | null; from_email: string }) => m.from_n
  * projet existant (éventuellement en tâche), ou être écarté.
  */
 export default function Inbox() {
+  const t = useT()
   const { refresh } = useApp()
   const [params, setParams] = useSearchParams()
   const status = params.get('filtre') ?? 'new'
   const selected = params.get('m')
   const [q, setQ] = useState('')
   const [debounced, setDebounced] = useState('')
-  useEffect(() => { const t = setTimeout(() => setDebounced(q.trim()), 250); return () => clearTimeout(t) }, [q])
+  useEffect(() => { const h = setTimeout(() => setDebounced(q.trim()), 250); return () => clearTimeout(h) }, [q])
   const { data, error, loading, reload } = useLoad<InboxItem[]>(`/mail/inbox?status=${status}&q=${encodeURIComponent(debounced)}`)
   const { data: boxes } = useLoad<{ mailboxes: unknown[] }>('/mail/mailboxes')
 
@@ -45,16 +51,16 @@ export default function Inbox() {
 
   return (
     <div>
-      <PageHeader title="Emails" subtitle="Chaque demande reçue peut devenir un projet en deux clics." />
+      <PageHeader title={t('inbox.title')} subtitle={t('inbox.subtitle')} />
       {boxes && boxes.mailboxes.length === 0 && <CaptureHelp />}
       <div className={clsx('grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]')}>
         <div className={clsx('min-w-0', selected && 'hidden lg:block')}>
           <Tabs active={status} onChange={(id) => go({ filtre: id === 'new' ? null : id, m: null })} tabs={FILTERS} />
-          <Input type="search" placeholder="Rechercher un objet, un expéditeur…" value={q} onChange={(e) => setQ(e.target.value)} className="mb-3" aria-label="Rechercher" />
+          <Input type="search" placeholder={t('inbox.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} className="mb-3" aria-label={t('common.search')} />
           <ErrorNote error={error} />
           {loading && !data ? <Spinner /> : !data?.length ? (
-            <Empty title={debounced ? 'Aucun email ne correspond' : status === 'new' ? 'Rien à trier' : 'Aucun email ici'}>
-              {status === 'new' && !debounced && 'Les nouveaux emails reçus arriveront ici.'}
+            <Empty title={debounced ? t('inbox.empty.noMatch') : status === 'new' ? t('inbox.empty.nothingToSort') : t('inbox.empty.none')}>
+              {status === 'new' && !debounced && t('inbox.empty.hint')}
             </Empty>
           ) : (
             <ul className="border border-border bg-card">
@@ -67,13 +73,13 @@ export default function Inbox() {
                       <span className={clsx('min-w-0 flex-1 truncate text-sm', m.status === 'new' ? 'font-extrabold' : 'font-semibold')}>{sender(m)}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">{fmtRelative(m.received_at)}</span>
                     </div>
-                    <div className="truncate text-sm">{m.subject || '(sans objet)'}</div>
+                    <div className="truncate text-sm">{m.subject || t('inbox.noSubject')}</div>
                     <div className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">{m.snippet}</div>
                     {(m.project_name || m.known_client || status === 'all') && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {status === 'all' && <Badge tone={STATUS[m.status].tone}>{STATUS[m.status].label}</Badge>}
                         {m.project_name ? <Badge tone="ok" className="max-w-full truncate">{m.project_name}</Badge>
-                          : m.known_client && <Badge tone="info" className="max-w-full truncate">Client : {m.known_client.name}</Badge>}
+                          : m.known_client && <Badge tone="info" className="max-w-full truncate">{t('inbox.clientBadge', { name: m.known_client.name })}</Badge>}
                       </div>
                     )}
                   </button>
@@ -85,7 +91,7 @@ export default function Inbox() {
         <div className={clsx('min-w-0', !selected && 'hidden lg:block')}>
           {selected ? <Reader key={selected} id={selected} item={item} onBack={() => go({ m: null })} onChanged={changed} />
             : <div className="hidden h-full min-h-[300px] place-items-center border border-dashed border-input bg-card p-8 text-center text-sm text-muted-foreground lg:grid">
-                Choisissez un email pour le lire.</div>}
+                {t('inbox.choose')}</div>}
         </div>
       </div>
     </div>
@@ -93,29 +99,29 @@ export default function Inbox() {
 }
 
 function CaptureHelp() {
+  const t = useT()
   const { me } = useApp()
-  const copy = async (s: string) => { try { await navigator.clipboard.writeText(s); toast('Copié') } catch { toast('Copie impossible') } }
+  const copy = async (s: string) => { try { await navigator.clipboard.writeText(s); toast(t('inbox.copied')) } catch { toast(t('inbox.copyFailed')) } }
   if (!me) return null
   return (
     <div className="mb-5 border border-border border-l-[3px] border-l-accent bg-card px-4 py-3 text-sm">
-      <p className="font-bold">Aucune boîte mail n'est encore branchée</p>
+      <p className="font-bold">{t('inbox.capture.title')}</p>
       <p className="mt-1 text-muted-foreground">
-        Branchez votre messagerie (Gmail, Microsoft 365 ou IMAP) dans <Link to="/reglages/emails" className="font-semibold text-accent hover:underline">Réglages → Emails</Link>
-        {me.inboundAddress ? ", ou transférez vos demandes à l'adresse de capture de l'entreprise" : ''} : les demandes de vos clients arriveront ici,
-        prêtes à devenir des projets.
+        {t('inbox.capture.before')} <Link to="/reglages/emails" className="font-semibold text-accent hover:underline">{t('inbox.capture.link')}</Link>
+        {me.inboundAddress ? t('inbox.capture.orForward') : ''}{t('inbox.capture.after')}
       </p>
       {me.inboundAddress && (
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
           <code className="min-w-0 max-w-full truncate bg-muted px-2 py-1 font-mono text-xs">{me.inboundAddress}</code>
-          <Button size="sm" onClick={() => copy(me.inboundAddress!)}>Copier l'adresse</Button>
+          <Button size="sm" onClick={() => copy(me.inboundAddress!)}>{t('inbox.capture.copyAddress')}</Button>
         </div>
       )}
       <details className="mt-2 text-xs text-muted-foreground">
-        <summary className="cursor-pointer font-semibold">Pour un script ou un relais de messagerie</summary>
-        <p className="mt-1">Envoyez le message (JSON ou brut) en POST à :</p>
+        <summary className="cursor-pointer font-semibold">{t('inbox.capture.script')}</summary>
+        <p className="mt-1">{t('inbox.capture.postTo')}</p>
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
           <code className="min-w-0 max-w-full truncate bg-muted px-2 py-1 font-mono">{me.inboundUrl}</code>
-          <Button size="sm" onClick={() => copy(me.inboundUrl)}>Copier</Button>
+          <Button size="sm" onClick={() => copy(me.inboundUrl)}>{t('inbox.capture.copy')}</Button>
         </div>
       </details>
     </div>
@@ -123,18 +129,19 @@ function CaptureHelp() {
 }
 
 function Reader({ id, item, onBack, onChanged }: { id: string; item: InboxItem | null; onBack: () => void; onChanged: () => void }) {
+  const t = useT()
   const { data: m, error, loading, reload } = useLoad<Message>(`/mail/messages/${id}`)
   const [modal, setModal] = useState<'project' | 'link' | 'reply' | null>(null)
   const [busy, setBusy] = useState(false)
 
   if (loading && !m) return <Spinner />
-  if (error || !m) return <div className="space-y-3"><Button size="sm" onClick={onBack}>← Retour</Button><ErrorNote error={error ?? 'not_found'} /></div>
+  if (error || !m) return <div className="space-y-3"><Button size="sm" onClick={onBack}>← {t('common.back')}</Button><ErrorNote error={error ?? 'not_found'} /></div>
 
   const setStatus = async (status: 'new' | 'ignored') => {
     setBusy(true)
     try {
       await api.post(`/mail/messages/${m.id}/status`, { status })
-      toast(status === 'ignored' ? 'Email écarté' : 'Remis à trier')
+      toast(status === 'ignored' ? t('inbox.reader.ignoredToast') : t('inbox.reader.resortedToast'))
       await reload(); onChanged()
     } catch (e) { toast(errorText(e)) } finally { setBusy(false) }
   }
@@ -144,32 +151,33 @@ function Reader({ id, item, onBack, onChanged }: { id: string; item: InboxItem |
   return (
     <article className="border border-border bg-card">
       <header className="space-y-3 border-b border-border px-4 py-4 sm:px-5">
-        <Button size="sm" className="lg:hidden" onClick={onBack}>← Retour à la liste</Button>
+        <Button size="sm" className="lg:hidden" onClick={onBack}>{t('inbox.reader.backToList')}</Button>
         <div className="flex flex-wrap items-start gap-2">
-          <h2 className="min-w-0 flex-1 font-display text-xl [overflow-wrap:anywhere]">{m.subject || '(sans objet)'}</h2>
+          <h2 className="min-w-0 flex-1 font-display text-xl [overflow-wrap:anywhere]">{m.subject || t('inbox.noSubject')}</h2>
           <Badge tone={STATUS[m.status].tone}>{STATUS[m.status].label}</Badge>
         </div>
         <div className="text-sm">
+          {/* i18n-ok : chevrons de l'adresse */}
           <div className="[overflow-wrap:anywhere]"><span className="font-bold">{sender(m)}</span>{m.from_name && <span className="text-muted-foreground"> &lt;{m.from_email}&gt;</span>}</div>
           <div className="text-xs text-muted-foreground">
-            {fmtDateTime(m.received_at)}{m.to_emails?.length ? ` · à ${m.to_emails.join(', ')}` : ''}{item?.mailbox_email ? ` · boîte ${item.mailbox_email}` : ''}
+            {fmtDateTime(m.received_at)}{m.to_emails?.length ? ` · ${t('inbox.reader.to', { list: m.to_emails.join(', ') })}` : ''}{item?.mailbox_email ? ` · ${t('inbox.reader.mailbox', { email: item.mailbox_email })}` : ''}
           </div>
           {m.project_id && (
-            <p className="mt-2 text-sm">Rattaché au projet <Link to={`/projets/${m.project_id}`} className="font-bold text-accent hover:underline">{projectName ?? 'ouvrir le projet'}</Link></p>
+            <p className="mt-2 text-sm">{t('inbox.reader.linkedTo')} <Link to={`/projets/${m.project_id}`} className="font-bold text-accent hover:underline">{projectName ?? t('inbox.reader.openProject')}</Link></p>
           )}
-          {!m.project_id && item?.known_client && <p className="mt-2 text-xs text-muted-foreground">Expéditeur connu : client <b className="text-foreground">{item.known_client.name}</b>.</p>}
+          {!m.project_id && item?.known_client && <p className="mt-2 text-xs text-muted-foreground">{t('inbox.reader.knownSender')} <b className="text-foreground">{item.known_client.name}</b>.</p>}
         </div>
         <div className="flex flex-wrap gap-2">
-          {m.status !== 'linked' && <Button variant="primary" onClick={() => setModal('project')}>Créer un projet</Button>}
-          {m.status !== 'linked' && <Button onClick={() => setModal('link')}>Rattacher à un projet</Button>}
-          <Button onClick={() => setModal('reply')}>Répondre</Button>
-          {m.status === 'new' && <Button variant="ghost" disabled={busy} onClick={() => setStatus('ignored')}>Écarter</Button>}
-          {m.status !== 'new' && <Button variant="ghost" disabled={busy} onClick={() => setStatus('new')}>Remettre à trier</Button>}
+          {m.status !== 'linked' && <Button variant="primary" onClick={() => setModal('project')}>{t('inbox.reader.createProject')}</Button>}
+          {m.status !== 'linked' && <Button onClick={() => setModal('link')}>{t('inbox.reader.linkProject')}</Button>}
+          <Button onClick={() => setModal('reply')}>{t('inbox.reader.reply')}</Button>
+          {m.status === 'new' && <Button variant="ghost" disabled={busy} onClick={() => setStatus('ignored')}>{t('inbox.reader.ignore')}</Button>}
+          {m.status !== 'new' && <Button variant="ghost" disabled={busy} onClick={() => setStatus('new')}>{t('inbox.reader.resort')}</Button>}
         </div>
       </header>
       <div className="px-4 py-4 sm:px-5">
         {m.body ? <div className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">{m.body}</div>
-          : <p className="text-sm text-muted-foreground">Le texte de cet email n'a pas pu être relu chez le fournisseur.</p>}
+          : <p className="text-sm text-muted-foreground">{t('inbox.reader.noBody')}</p>}
       </div>
       {modal === 'project' && <CreateProject m={m} item={item} onClose={() => setModal(null)} onDone={onChanged} />}
       {modal === 'link' && <LinkProject m={m} onClose={() => setModal(null)} onDone={done} />}
@@ -179,13 +187,14 @@ function Reader({ id, item, onBack, onChanged }: { id: string; item: InboxItem |
 }
 
 function CreateProject({ m, item, onClose, onDone }: { m: Message; item: InboxItem | null; onClose: () => void; onDone: () => void }) {
+  const t = useT()
   const { me, team } = useApp()
   const navigate = useNavigate()
   const { data: clients } = useLoad<Client[]>('/clients')
   const { data: templates } = useLoad<ProjectSummary[]>('/projects?template=1')
   const known = item?.known_client ?? null
   const [f, setF] = useState({
-    name: m.subject || `Demande de ${sender(m)}`, client: m.client_id ?? known?.id ?? 'auto', client_name: '', template_id: '',
+    name: m.subject || t('inbox.create.defaultName', { name: sender(m) }), client: m.client_id ?? known?.id ?? 'auto', client_name: '', template_id: '',
     member_ids: me ? [me.user.id] : [], status: 'lead' as 'lead' | 'planned' | 'active', first_task: true,
   })
   const [error, setError] = useState<string | null>(null)
@@ -199,52 +208,52 @@ function CreateProject({ m, item, onClose, onDone }: { m: Message; item: InboxIt
         name: f.name, template_id: f.template_id || null, member_ids: f.member_ids, status: f.status, first_task: f.first_task,
         ...(f.client === 'auto' ? (f.client_name.trim() ? { client_name: f.client_name.trim() } : {}) : { client_id: f.client }),
       })
-      toast('Projet créé')
+      toast(t('inbox.create.toast'))
       onDone()
       navigate(`/projets/${r.id}`)
     } catch (err) { setError(errorText(err)); setBusy(false) }
   }
 
   return (
-    <Modal open onClose={onClose} wide title="Créer un projet depuis cet email"
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant="primary" type="submit" form="mail-project" disabled={busy || !f.name.trim()}>
-        {busy ? 'Création…' : 'Créer le projet'}</Button></>}>
+    <Modal open onClose={onClose} wide title={t('inbox.create.title')}
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant="primary" type="submit" form="mail-project" disabled={busy || !f.name.trim()}>
+        {busy ? t('inbox.create.creating') : t('inbox.create.submit')}</Button></>}>
       <form id="mail-project" onSubmit={submit} className="space-y-3">
-        <Field label="Nom du projet"><Input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <Field label="Client" hint={f.client === 'auto' ? `Un client sera créé d'après l'expéditeur (${m.from_email}).` : undefined}>
+        <Field label={t('inbox.create.name')}><Input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <Field label={t('inbox.create.client')} hint={f.client === 'auto' ? t('inbox.create.clientHint', { email: m.from_email }) : undefined}>
           <Select value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })}>
-            {known && <option value={known.id}>{known.name} (reconnu)</option>}
-            <option value="auto">Nouveau client depuis l'expéditeur</option>
+            {known && <option value={known.id}>{t('inbox.create.recognized', { name: known.name })}</option>}
+            <option value="auto">{t('inbox.create.newClient')}</option>
             {(clients ?? []).filter((c) => c.id !== known?.id).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
         </Field>
         {f.client === 'auto' && (
-          <Field label="Nom du nouveau client (facultatif)" hint="Laissé vide : le nom de domaine de l'entreprise, ou le nom de la personne.">
+          <Field label={t('inbox.create.newClientName')} hint={t('inbox.create.newClientHint')}>
             <Input value={f.client_name} onChange={(e) => setF({ ...f, client_name: e.target.value })} placeholder={m.from_name ?? ''} />
           </Field>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Modèle">
+          <Field label={t('inbox.create.template')}>
             <Select value={f.template_id} onChange={(e) => setF({ ...f, template_id: e.target.value })}>
-              <option value="">Projet vierge</option>
-              {(templates ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              <option value="">{t('inbox.create.blank')}</option>
+              {(templates ?? []).map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
             </Select>
           </Field>
-          <Field label="Statut">
+          <Field label={t('inbox.create.status')}>
             <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as typeof f.status })}>
-              <option value="lead">À qualifier</option>
-              <option value="planned">Planifié</option>
-              <option value="active">En cours</option>
+              <option value="lead">{STATUS_LABEL.lead}</option>
+              <option value="planned">{STATUS_LABEL.planned}</option>
+              <option value="active">{STATUS_LABEL.active}</option>
             </Select>
           </Field>
         </div>
         <div className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground">Intervenants</span>
-          <PeoplePicker people={team.filter((t) => t.active)} value={f.member_ids} onChange={(member_ids) => setF({ ...f, member_ids })} />
+          <span className="block text-xs font-medium text-muted-foreground">{t('inbox.create.members')}</span>
+          <PeoplePicker people={team.filter((p) => p.active)} value={f.member_ids} onChange={(member_ids) => setF({ ...f, member_ids })} />
         </div>
         <Checkbox checked={f.first_task} onChange={(v) => setF({ ...f, first_task: v })}
-          label={<>Créer la tâche « Répondre à {sender(m)} » <span className="text-muted-foreground">(pour demain, à mon nom)</span></>} />
-        <p className="text-xs text-muted-foreground">Le texte de l'email devient la description du projet.</p>
+          label={<>{t('inbox.create.firstTask', { name: sender(m) })} <span className="text-muted-foreground">{t('inbox.create.firstTaskNote')}</span></>} />
+        <p className="text-xs text-muted-foreground">{t('inbox.create.bodyNote')}</p>
         {error && <p role="alert" className="text-sm text-late">{error}</p>}
       </form>
     </Modal>
@@ -252,6 +261,7 @@ function CreateProject({ m, item, onClose, onDone }: { m: Message; item: InboxIt
 }
 
 function LinkProject({ m, onClose, onDone }: { m: Message; onClose: () => void; onDone: () => void }) {
+  const t = useT()
   const { data: projects } = useLoad<ProjectSummary[]>('/projects')
   const open = (projects ?? []).filter((p) => !['done', 'cancelled'].includes(p.status))
   const [projectId, setProjectId] = useState('')
@@ -270,21 +280,21 @@ function LinkProject({ m, onClose, onDone }: { m: Message; onClose: () => void; 
     setBusy(true); setError(null)
     try {
       const r = await api.post<{ task_id: string | null }>(`/mail/messages/${m.id}/link`, { project_id: projectId, as_task: asTask })
-      toast(r.task_id ? 'Rattaché, tâche créée' : 'Email rattaché au projet')
+      toast(r.task_id ? t('inbox.link.toastTask') : t('inbox.link.toast'))
       onDone()
     } catch (err) { setError(errorText(err)); setBusy(false) }
   }
   return (
-    <Modal open onClose={onClose} title="Rattacher à un projet"
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant="primary" type="submit" form="mail-link" disabled={busy || !projectId}>Rattacher</Button></>}>
+    <Modal open onClose={onClose} title={t('inbox.reader.linkProject')}
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant="primary" type="submit" form="mail-link" disabled={busy || !projectId}>{t('inbox.link.submit')}</Button></>}>
       <form id="mail-link" onSubmit={submit} className="space-y-3">
-        <Field label="Projet">
+        <Field label={t('inbox.link.project')}>
           <Select required value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-            <option value="">Choisir un projet…</option>
+            <option value="">{t('inbox.link.choose')}</option>
             {open.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} — ${p.client_name}` : p.name}</option>)}
           </Select>
         </Field>
-        <Checkbox checked={asTask} onChange={setAsTask} label="En faire une tâche (l'objet devient le titre, le texte la description)" />
+        <Checkbox checked={asTask} onChange={setAsTask} label={t('inbox.link.asTask')} />
         {error && <p role="alert" className="text-sm text-late">{error}</p>}
       </form>
     </Modal>
@@ -292,7 +302,8 @@ function LinkProject({ m, onClose, onDone }: { m: Message; onClose: () => void; 
 }
 
 function Reply({ m, onClose, onDone }: { m: Message; onClose: () => void; onDone: () => void }) {
-  const [body, setBody] = useState(`Bonjour${m.from_name ? ` ${m.from_name.split(' ')[0]}` : ''},\n\n`)
+  const t = useT()
+  const [body, setBody] = useState(`${t('inbox.reply.greeting')}${m.from_name ? ` ${m.from_name.split(' ')[0]}` : ''},\n\n`)
   const [cc, setCc] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -300,22 +311,23 @@ function Reply({ m, onClose, onDone }: { m: Message; onClose: () => void; onDone
     e.preventDefault()
     const list = cc.split(/[\s,;]+/).filter(Boolean)
     const bad = list.find((x) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))
-    if (bad) { setError(`Adresse non valable : ${bad}`); return }
+    if (bad) { setError(t('inbox.reply.invalidEmail', { email: bad })); return }
     setBusy(true); setError(null)
     try {
       await api.post(`/mail/messages/${m.id}/reply`, { body, cc: list })
-      toast('Réponse envoyée')
+      toast(t('inbox.reply.sent'))
       onDone()
     } catch (err) { setError(errorText(err)); setBusy(false) }
   }
   return (
-    <Modal open onClose={onClose} wide title={`Répondre à ${sender(m)}`}
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant="primary" type="submit" form="mail-reply" disabled={busy || !body.trim()}>
-        {busy ? 'Envoi…' : 'Envoyer'}</Button></>}>
+    <Modal open onClose={onClose} wide title={t('inbox.reply.title', { name: sender(m) })}
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant="primary" type="submit" form="mail-reply" disabled={busy || !body.trim()}>
+        {busy ? t('inbox.reply.sending') : t('inbox.reply.send')}</Button></>}>
       <form id="mail-reply" onSubmit={submit} className="space-y-3">
-        <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">À : {m.from_email} · Objet : {/^re\s*:/i.test(m.subject) ? m.subject : `Re: ${m.subject}`}</p>
-        <Field label="Copie à (facultatif)"><Input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="collegue@exemple.ch" /></Field>
-        <Field label="Message" hint="Le message d'origine est cité à la suite."><Textarea rows={10} required value={body} onChange={(e) => setBody(e.target.value)} /></Field>
+        <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{t('inbox.reply.header', { email: m.from_email, subject: /^re\s*:/i.test(m.subject) ? m.subject : `Re: ${m.subject}` })}</p>
+        <Field label={t('inbox.reply.cc')}><Input value={cc} onChange={(e) => setCc(e.target.value)} placeholder={t('inbox.reply.ccPlaceholder')} /></Field>
+        <Field label={t('inbox.reply.message')} hint={t('inbox.reply.messageHint')}>
+<Textarea rows={10} required value={body} onChange={(e) => setBody(e.target.value)} /></Field>
         {error && <p role="alert" className="text-sm text-late">{error}</p>}
       </form>
     </Modal>

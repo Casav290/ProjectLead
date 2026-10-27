@@ -37,7 +37,7 @@ app.patch('/settings', async (c) => {
   requireRole(c, 'admin', 'manager')
   const b = await body(c, z.object({
     monthly_billing_auto: z.boolean().optional(), monthly_billing_day: z.number().int().min(1).max(28).optional(),
-    invoice_language: z.enum(['fr', 'de', 'it', 'en']).optional(), client_update_signature: z.string().max(2000).optional(),
+    invoice_language: z.enum(['fr', 'de', 'it', 'en', 'es']).optional(), client_update_signature: z.string().max(2000).optional(),
   }))
   await tx(c, async (db, ctx) => {
     await db.query('insert into account_settings (account_id) values ($1) on conflict do nothing', [ctx.accountId])

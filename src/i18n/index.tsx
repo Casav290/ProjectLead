@@ -63,6 +63,12 @@ function remember(l: Locale) {
 export const initialLocale = (): Locale => readChosen() ?? fromUrl() ?? fromBrowser()
 export const hasChosenLocale = () => readChosen() !== null
 
+/** Hors navigateur (scripts de contrôle sous Node, sans import.meta.glob) : le dictionnaire est donné tel quel. */
+export function setDict(l: Locale, d: Record<string, string>, use = true) {
+  dicts[l] = d
+  if (use) current = l
+}
+
 export async function loadLocale(l: Locale): Promise<void> {
   if (!dicts[l]) dicts[l] = (await loaders[l]()).default
 }

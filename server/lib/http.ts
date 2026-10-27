@@ -2,8 +2,9 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { z, type ZodTypeAny } from 'zod'
 import { type Ctx, type Db, withTenant } from '../db.js'
+import type { Locale } from './i18n.js'
 
-export type Env = { Variables: { ctx: Ctx; name: string; email: string; sessionHash: string } }
+export type Env = { Variables: { ctx: Ctx; name: string; email: string; sessionHash: string; locale: Locale; accountLocale: Locale } }
 
 export const router = () => new Hono<Env>()
 

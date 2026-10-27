@@ -2,7 +2,8 @@ import clsx from 'clsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, errorText } from '../lib/api'
-import { addDays, fmtDate, fmtMinutes, hours, mondayOf, parseDuration, today } from '../lib/format'
+import { getLocale, intlLocale, useT } from '../i18n'
+import { addDays, fmtDate, fmtMinutes, fmtTime, hours, mondayOf, parseDuration, today } from '../lib/format'
 import { useApp, useLoad } from '../lib/store'
 import type { ProjectSummary, Task, TimeEntry } from '../lib/types'
 import { Badge, Button, Card, Checkbox, ColorDot, Confirm, Empty, ErrorNote, Field, Input, Modal, PageHeader, Select, Spinner, TableStack, Tabs,
@@ -13,9 +14,9 @@ type Line = { key: string; project_id: string; project_name: string; project_col
 
 /** 90 → « 1:30 », 0 → vide. */
 const hm = (m?: number) => (m ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}` : '')
-const dayHead = (d: string) => new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric' }).format(new Date(d + 'T12:00:00'))
+const dayHead = (d: string) => new Intl.DateTimeFormat(intlLocale(), { weekday: 'short', day: 'numeric' }).format(new Date(d + 'T12:00:00'))
 const rangeLabel = (a: string, b: string) => {
-  const f = new Intl.DateTimeFormat('fr-CH', { day: 'numeric', month: 'short' })
+  const f = new Intl.DateTimeFormat(intlLocale(), { day: 'numeric', month: 'short' })
   return `${f.format(new Date(a + 'T12:00:00'))} – ${f.format(new Date(b + 'T12:00:00'))} ${b.slice(0, 4)}`
 }
 const firstOfMonth = () => today().slice(0, 8) + '01'
@@ -40,20 +41,21 @@ function useTasks(projectId: string) {
 function ProjectTaskFields({ projects, projectId, taskId, onProject, onTask, extraTask }:
   { projects: ProjectSummary[]; projectId: string; taskId: string; onProject: (id: string) => void; onTask: (id: string) => void
     extraTask?: { id: string; title: string } | null }) {
+  const t = useT()
   const tasks = useTasks(projectId)
-  const list = extraTask && !tasks.some((t) => t.id === extraTask.id) ? [{ id: extraTask.id, title: extraTask.title }, ...tasks] : tasks
+  const list = extraTask && !tasks.some((x) => x.id === extraTask.id) ? [{ id: extraTask.id, title: extraTask.title }, ...tasks] : tasks
   return (
     <>
-      <Field label="Projet">
+      <Field label={t('time.project')}>
         <Select required value={projectId} onChange={(e) => { onProject(e.target.value); onTask('') }}>
-          <option value="">Choisir un projet…</option>
+          <option value="">{t('time.chooseProject')}</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} — ${p.client_name}` : p.name}</option>)}
         </Select>
       </Field>
-      <Field label="Tâche (facultatif)">
+      <Field label={t('time.taskOptional')}>
         <Select value={taskId} disabled={!projectId} onChange={(e) => onTask(e.target.value)}>
-          <option value="">Sans tâche</option>
-          {list.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+          <option value="">{t('time.noTask')}</option>
+          {list.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
         </Select>
       </Field>
     </>
@@ -61,16 +63,17 @@ function ProjectTaskFields({ projects, projectId, taskId, onProject, onTask, ext
 }
 
 export default function Time() {
+  const t = useT()
   const [params, setParams] = useSearchParams()
   const tab = params.get('vue') ?? 'semaine'
   const [from, to] = [firstOfMonth(), today()]
   return (
     <div>
-      <PageHeader title="Temps" subtitle="Feuille de temps, saisies et chronomètre."
+      <PageHeader title={t('time.title')} subtitle={t('time.subtitle')}
         actions={<a className="inline-flex items-center border border-input bg-card px-3 py-2 text-[13px] font-bold hover:bg-[#f4f2ef]"
-                    href={`/api/time/export.csv?from=${from}&to=${to}`} download>Exporter le mois (CSV)</a>} />
+                    href={`/api/time/export.csv?from=${from}&to=${to}&lang=${getLocale()}`} download>{t('time.exportMonth')}</a>} />
       <Tabs active={tab} onChange={(id) => setParams(id === 'semaine' ? {} : { vue: id }, { replace: true })}
-        tabs={[{ id: 'semaine', label: 'Semaine' }, { id: 'saisies', label: 'Saisies' }, { id: 'chrono', label: 'Chronomètre' }]} />
+        tabs={[{ id: 'semaine', label: t('time.tabWeek') }, { id: 'saisies', label: t('time.tabEntries') }, { id: 'chrono', label: t('time.stopwatch') }]} />
       {tab === 'semaine' && <WeekSheet />}
       {tab === 'saisies' && <Entries />}
       {tab === 'chrono' && <Stopwatch />}
@@ -81,6 +84,7 @@ export default function Time() {
 // ------------------------------------------------------------------ semaine
 
 function WeekSheet() {
+  const t = useT()
   const [start, setStart] = useState(() => mondayOf(today()))
   const { data, error, loading, reload } = useLoad<{ rows: WeekRow[]; capacity_minutes: number }>(`/time/week?start=${start}`)
   const [added, setAdded] = useState<Line[]>([])
@@ -119,14 +123,14 @@ function WeekSheet() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex">
-          <Button aria-label="Semaine précédente" onClick={() => setStart(addDays(start, -7))}>←</Button>
-          <Button className="-ml-px" disabled={isThisWeek} onClick={() => setStart(mondayOf(today()))}>Cette semaine</Button>
-          <Button className="-ml-px" aria-label="Semaine suivante" onClick={() => setStart(addDays(start, 7))}>→</Button>
+          <Button aria-label={t('time.prevWeek')} onClick={() => setStart(addDays(start, -7))}>←</Button>
+          <Button className="-ml-px" disabled={isThisWeek} onClick={() => setStart(mondayOf(today()))}>{t('time.thisWeek')}</Button>
+          <Button className="-ml-px" aria-label={t('time.nextWeek')} onClick={() => setStart(addDays(start, 7))}>→</Button>
         </div>
         <span className="text-sm font-bold">{rangeLabel(days[0], days[6])}</span>
         <span className="ml-auto text-sm">
           <span className={clsx('font-extrabold tabular-nums', total > capacity && 'text-soon')}>{hours(total)} h</span>
-          <span className="text-muted-foreground"> sur {hours(capacity)} h de capacité</span>
+          <span className="text-muted-foreground"> {t('time.ofCapacity', { h: hours(capacity) })}</span>
         </span>
       </div>
       <ErrorNote error={error} />
@@ -135,20 +139,20 @@ function WeekSheet() {
           <table className="w-full min-w-[680px] text-sm">
             <thead className="bg-head text-xs text-muted-foreground">
               <tr>
-                <th className="sticky left-0 z-10 bg-head px-3 py-2 text-left font-semibold">Projet / tâche</th>
+                <th className="sticky left-0 z-10 bg-head px-3 py-2 text-left font-semibold">{t('time.projectTask')}</th>
                 {days.map((d) => <th key={d} className={clsx('w-[74px] px-1 py-2 text-center font-semibold first-letter:uppercase', d === today() && 'text-accent-dark')}>{dayHead(d)}</th>)}
-                <th className="w-[70px] px-3 py-2 text-right font-semibold">Total</th>
+                <th className="w-[70px] px-3 py-2 text-right font-semibold">{t('time.total')}</th>
               </tr>
             </thead>
             <tbody>
               {lines.length === 0 && (
-                <tr><td colSpan={9} className="px-3 py-8 text-center text-sm text-muted-foreground">Aucune heure cette semaine. Ajoutez une ligne pour commencer.</td></tr>
+                <tr><td colSpan={9} className="px-3 py-8 text-center text-sm text-muted-foreground">{t('time.emptyWeek')}</td></tr>
               )}
               {lines.map((l) => (
                 <tr key={l.key} className="border-t border-border">
                   <td className="sticky left-0 z-10 w-[140px] max-w-[140px] border-r border-border bg-card px-3 py-1.5 sm:w-auto sm:max-w-[260px] sm:border-r-0">
                     <div className="flex min-w-0 items-center gap-1.5 font-semibold"><ColorDot color={l.project_color} /><span className="truncate">{l.project_name}</span></div>
-                    <div className="truncate pl-4 text-xs text-muted-foreground">{l.task_title ?? 'Sans tâche'}</div>
+                    <div className="truncate pl-4 text-xs text-muted-foreground">{l.task_title ?? t('time.noTask')}</div>
                   </td>
                   {days.map((d) => <td key={d} className={clsx('px-1 py-1', d === today() && 'bg-accent-veil/60')}>
                     <Cell value={l.days[d] ?? 0} label={`${l.project_name}, ${dayHead(d)}`} onSave={(m) => save(l, d, m)} /></td>)}
@@ -158,11 +162,11 @@ function WeekSheet() {
             </tbody>
             <tfoot className="border-t border-input bg-head text-xs">
               <tr>
-                <td className="sticky left-0 z-10 bg-head px-3 py-2 font-bold">Total du jour</td>
+                <td className="sticky left-0 z-10 bg-head px-3 py-2 font-bold">{t('time.dayTotal')}</td>
                 {days.map((d) => {
-                  const t = dayTotal(d), weekend = new Date(d + 'T12:00:00').getDay() % 6 === 0
-                  return <td key={d} className={clsx('px-1 py-2 text-center font-bold tabular-nums', !weekend && t > perDay && 'text-soon')}>
-                    {hm(t) || '–'}{!weekend && <div className="font-normal text-muted-foreground">/ {hm(perDay)}</div>}</td>
+                  const dt = dayTotal(d), weekend = new Date(d + 'T12:00:00').getDay() % 6 === 0
+                  return <td key={d} className={clsx('px-1 py-2 text-center font-bold tabular-nums', !weekend && dt > perDay && 'text-soon')}>
+                    {hm(dt) || '–'}{!weekend && <div className="font-normal text-muted-foreground">/ {hm(perDay)}</div>}</td>
                 })}
                 <td className="px-3 py-2 text-right font-extrabold tabular-nums">{hm(total) || '0:00'}</td>
               </tr>
@@ -171,8 +175,8 @@ function WeekSheet() {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={() => setAdding(true)}>+ Ajouter une ligne</Button>
-        <p className="text-xs text-muted-foreground">Saisissez « 1:30 », « 1.5 » ou « 90m ». Une cellule vide efface le temps du jour.</p>
+        <Button onClick={() => setAdding(true)}>+ {t('time.addLine')}</Button>
+        <p className="text-xs text-muted-foreground">{t('time.cellHint')}</p>
       </div>
       {adding && <AddLine onClose={() => setAdding(false)} onAdd={(l) => { setAdded((a) => [...a, l]); setAdding(false) }} />}
     </div>
@@ -180,11 +184,12 @@ function WeekSheet() {
 }
 
 function Cell({ value, onSave, label }: { value: number; onSave: (m: number) => void; label: string }) {
+  const t = useT()
   const [text, setText] = useState(hm(value))
   useEffect(() => setText(hm(value)), [value])
   const commit = () => {
     const m = text.trim() ? parseDuration(text) : 0
-    if (m === null || m > 1440) { toast('Durée non reconnue : écrivez par exemple 1:30.'); setText(hm(value)); return }
+    if (m === null || m > 1440) { toast(t('time.badDuration')); setText(hm(value)); return }
     if (m !== value) onSave(m)
     else setText(hm(value))
   }
@@ -197,6 +202,7 @@ function Cell({ value, onSave, label }: { value: number; onSave: (m: number) => 
 }
 
 function AddLine({ onClose, onAdd }: { onClose: () => void; onAdd: (l: Line) => void }) {
+  const t = useT()
   const projects = useProjects()
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
@@ -204,12 +210,12 @@ function AddLine({ onClose, onAdd }: { onClose: () => void; onAdd: (l: Line) => 
   const add = () => {
     const p = projects.find((x) => x.id === projectId)
     if (!p) return
-    const t = tasks.find((x) => x.id === taskId)
-    onAdd({ key: `${p.id}:${taskId}`, project_id: p.id, project_name: p.name, project_color: p.color, task_id: taskId || null, task_title: t?.title ?? null, days: {} })
+    const task = tasks.find((x) => x.id === taskId)
+    onAdd({ key: `${p.id}:${taskId}`, project_id: p.id, project_name: p.name, project_color: p.color, task_id: taskId || null, task_title: task?.title ?? null, days: {} })
   }
   return (
-    <Modal open onClose={onClose} title="Ajouter une ligne"
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant="primary" disabled={!projectId} onClick={add}>Ajouter</Button></>}>
+    <Modal open onClose={onClose} title={t('time.addLine')}
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant="primary" disabled={!projectId} onClick={add}>{t('common.add')}</Button></>}>
       <div className="space-y-3">
         <ProjectTaskFields projects={projects} projectId={projectId} taskId={taskId} onProject={setProjectId} onTask={setTaskId} />
       </div>
@@ -220,6 +226,7 @@ function AddLine({ onClose, onAdd }: { onClose: () => void; onAdd: (l: Line) => 
 // ------------------------------------------------------------------ saisies
 
 function Entries() {
+  const t = useT()
   const { me, team } = useApp()
   const [f, setF] = useState({ from: firstOfMonth(), to: today(), project: '', user: 'me' })
   const qs = new URLSearchParams({ from: f.from, to: f.to, user: f.user, ...(f.project ? { project: f.project } : {}) })
@@ -234,56 +241,56 @@ function Entries() {
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
 
   const remove = async (e: TimeEntry) => {
-    try { await api.del(`/time/entries/${e.id}`); toast('Saisie supprimée'); reload() } catch (err) { toast(errorText(err)) }
+    try { await api.del(`/time/entries/${e.id}`); toast(t('time.entryDeleted')); reload() } catch (err) { toast(errorText(err)) }
   }
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
-        <Field label="Du"><Input type="date" value={f.from} onChange={set('from')} className="w-full sm:w-40" /></Field>
-        <Field label="Au"><Input type="date" value={f.to} onChange={set('to')} className="w-full sm:w-40" /></Field>
-        <Field label="Projet" className="col-span-2 sm:col-span-1">
+        <Field label={t('time.from')}><Input type="date" value={f.from} onChange={set('from')} className="w-full sm:w-40" /></Field>
+        <Field label={t('time.to')}><Input type="date" value={f.to} onChange={set('to')} className="w-full sm:w-40" /></Field>
+        <Field label={t('time.project')} className="col-span-2 sm:col-span-1">
           <Select value={f.project} onChange={set('project')} className="w-full sm:w-56">
-            <option value="">Tous les projets</option>
+            <option value="">{t('time.allProjects')}</option>
             {(allProjects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
         {manager && (
-          <Field label="Personne" className="col-span-2 sm:col-span-1">
+          <Field label={t('time.person')} className="col-span-2 sm:col-span-1">
             <Select value={f.user} onChange={set('user')} className="w-full sm:w-48">
-              <option value="me">Moi</option>
-              <option value="all">Toute l'équipe</option>
+              <option value="me">{t('time.me')}</option>
+              <option value="all">{t('time.wholeTeam')}</option>
               {team.filter((m) => m.id !== me?.user.id).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
           </Field>
         )}
         <div className="col-span-2 flex gap-2 sm:ml-auto">
           <a className="inline-flex items-center border border-input bg-card px-3 py-2 text-[13px] font-bold hover:bg-[#f4f2ef]"
-             href={`/api/time/export.csv?from=${f.from}&to=${f.to}`} download>CSV</a>
-          <Button variant="primary" className="flex-1 sm:flex-none" onClick={() => setEditing('new')}>+ Saisir du temps</Button>
+             href={`/api/time/export.csv?from=${f.from}&to=${f.to}&lang=${getLocale()}`} download>CSV</a>
+          <Button variant="primary" className="flex-1 sm:flex-none" onClick={() => setEditing('new')}>+ {t('time.logTime')}</Button>
         </div>
       </div>
       <ErrorNote error={error} />
       <p className="text-sm text-muted-foreground">
-        <span className="font-bold text-foreground">{fmtMinutes(total)}</span> sur la période, dont {fmtMinutes(billable)} facturables · {rows.length} saisie{rows.length > 1 ? 's' : ''}
+        <span className="font-bold text-foreground">{fmtMinutes(total)}</span> {t('time.periodSummary', { billable: fmtMinutes(billable), n: rows.length })}
       </p>
       {loading && !data ? <Spinner /> : rows.length === 0 ? (
-        <Empty title="Aucune saisie sur cette période" action={<Button variant="primary" onClick={() => setEditing('new')}>Saisir du temps</Button>}>
-          Changez la période ou ajoutez une saisie.
+        <Empty title={t('time.emptyEntries')} action={<Button variant="primary" onClick={() => setEditing('new')}>{t('time.logTime')}</Button>}>
+          {t('time.emptyEntriesHint')}
         </Empty>
       ) : (
         <TableStack>
           <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-head text-xs text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 text-left font-semibold">Date</th>
-                {f.user !== 'me' && <th className="px-3 py-2 text-left font-semibold">Personne</th>}
-                <th className="px-3 py-2 text-left font-semibold">Projet</th>
-                <th className="px-3 py-2 text-left font-semibold">Tâche</th>
-                <th className="px-3 py-2 text-left font-semibold">Note</th>
-                <th className="px-3 py-2 text-right font-semibold">Durée</th>
-                <th className="px-3 py-2 text-left font-semibold">Statut</th>
-                <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
+                <th className="px-3 py-2 text-left font-semibold">{t('time.date')}</th>
+                {f.user !== 'me' && <th className="px-3 py-2 text-left font-semibold">{t('time.person')}</th>}
+                <th className="px-3 py-2 text-left font-semibold">{t('time.project')}</th>
+                <th className="px-3 py-2 text-left font-semibold">{t('time.task')}</th>
+                <th className="px-3 py-2 text-left font-semibold">{t('time.note')}</th>
+                <th className="px-3 py-2 text-right font-semibold">{t('time.duration')}</th>
+                <th className="px-3 py-2 text-left font-semibold">{t('time.status')}</th>
+                <th className="px-3 py-2"><span className="sr-only">{t('time.actions')}</span></th>
               </tr>
             </thead>
             <tbody>
@@ -301,14 +308,14 @@ function Entries() {
                   <td className="max-w-[240px] px-3 py-2 text-muted-foreground [overflow-wrap:anywhere]">{e.note || '–'}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-right font-bold tabular-nums">{hm(e.minutes ?? 0)}</td>
                   <td className="px-3 py-2">
-                    {e.invoiced_at ? <Badge tone="ok">Facturé{e.invoice_ref ? ` · ${e.invoice_ref}` : ''}</Badge>
-                      : e.billable ? <Badge tone="accent">Facturable</Badge> : <Badge>Non facturable</Badge>}
+                    {e.invoiced_at ? <Badge tone="ok">{t('time.invoiced')}{e.invoice_ref ? ` · ${e.invoice_ref}` : ''}</Badge>
+                      : e.billable ? <Badge tone="accent">{t('time.billable')}</Badge> : <Badge>{t('time.nonBillable')}</Badge>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-right">
                     {!e.invoiced_at && (manager || e.user_id === me?.user.id) && (
                       <span className="inline-flex gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(e)}>Modifier</Button>
-                        <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(e)}>Supprimer</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(e)}>{t('common.edit')}</Button>
+                        <Button size="sm" variant="ghost" className="text-late" onClick={() => setRemoving(e)}>{t('common.delete')}</Button>
                       </span>
                     )}
                   </td>
@@ -319,14 +326,15 @@ function Entries() {
         </TableStack>
       )}
       {editing && <EntryForm entry={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload() }} />}
-      <Confirm open={!!removing} title="Supprimer la saisie" danger confirmLabel="Supprimer" onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)}>
-        {removing && <>Supprimer {fmtMinutes(removing.minutes)} du {fmtDate(removing.entry_date)} sur « {removing.project_name} » ?</>}
+      <Confirm open={!!removing} title={t('time.deleteEntry')} danger confirmLabel={t('common.delete')} onClose={() => setRemoving(null)} onConfirm={() => removing && remove(removing)}>
+        {removing && t('time.deleteConfirm', { duration: fmtMinutes(removing.minutes), date: fmtDate(removing.entry_date), project: removing.project_name })}
       </Confirm>
     </div>
   )
 }
 
 function EntryForm({ entry, onClose, onSaved }: { entry: TimeEntry | null; onClose: () => void; onSaved: () => void }) {
+  const t = useT()
   const { me, team } = useApp()
   const projects = useProjects()
   const [f, setF] = useState({
@@ -344,26 +352,26 @@ function EntryForm({ entry, onClose, onSaved }: { entry: TimeEntry | null; onClo
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const minutes = parseDuration(f.duration)
-    if (!minutes || minutes > 1440) { setError('Indiquez une durée, par exemple 1:30 ou 2.'); return }
+    if (!minutes || minutes > 1440) { setError(t('time.durationRequired')); return }
     setBusy(true); setError(null)
     const body = { project_id: f.project_id, task_id: f.task_id || null, entry_date: f.entry_date, minutes, billable: nonBillable ? false : f.billable, note: f.note }
     try {
       if (entry) await api.patch(`/time/entries/${entry.id}`, body)
       else await api.post('/time/entries', { ...body, ...(f.user_id && f.user_id !== me?.user.id ? { user_id: f.user_id } : {}) })
-      toast(entry ? 'Saisie modifiée' : 'Temps enregistré')
+      toast(entry ? t('time.entryUpdated') : t('time.timeSaved'))
       onSaved()
     } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
 
   return (
-    <Modal open onClose={onClose} title={entry ? 'Modifier la saisie' : 'Saisir du temps'}
-      footer={<><Button onClick={onClose}>Annuler</Button><Button variant="primary" type="submit" form="entry-form" disabled={busy || !f.project_id}>
-        {busy ? 'Enregistrement…' : 'Enregistrer'}</Button></>}>
+    <Modal open onClose={onClose} title={entry ? t('time.editEntry') : t('time.logTime')}
+      footer={<><Button onClick={onClose}>{t('common.cancel')}</Button><Button variant="primary" type="submit" form="entry-form" disabled={busy || !f.project_id}>
+        {busy ? t('time.saving') : t('common.save')}</Button></>}>
       <form id="entry-form" onSubmit={submit} className="space-y-3">
         {!entry && me?.user.role !== 'member' && team.length > 1 && (
-          <Field label="Pour">
+          <Field label={t('time.for')}>
             <Select value={f.user_id} onChange={(e) => setF({ ...f, user_id: e.target.value })}>
-              {team.filter((m) => m.active).map((m) => <option key={m.id} value={m.id}>{m.id === me?.user.id ? `${m.name} (moi)` : m.name}</option>)}
+              {team.filter((m) => m.active).map((m) => <option key={m.id} value={m.id}>{m.id === me?.user.id ? t('time.meSuffix', { name: m.name }) : m.name}</option>)}
             </Select>
           </Field>
         )}
@@ -371,12 +379,12 @@ function EntryForm({ entry, onClose, onSaved }: { entry: TimeEntry | null; onClo
           extraTask={entry?.task_id && entry.task_id === f.task_id ? { id: entry.task_id, title: entry.task_title ?? '' } : null}
           onProject={(id) => setF((x) => ({ ...x, project_id: id }))} onTask={(id) => setF((x) => ({ ...x, task_id: id }))} />
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Date"><Input type="date" required value={f.entry_date} onChange={(e) => setF({ ...f, entry_date: e.target.value })} /></Field>
-          <Field label="Durée"><Input required placeholder="1:30" inputMode="decimal" value={f.duration} onChange={(e) => setF({ ...f, duration: e.target.value })} /></Field>
+          <Field label={t('time.date')}><Input type="date" required value={f.entry_date} onChange={(e) => setF({ ...f, entry_date: e.target.value })} /></Field>
+          <Field label={t('time.duration')}><Input required placeholder="1:30" inputMode="decimal" value={f.duration} onChange={(e) => setF({ ...f, duration: e.target.value })} /></Field>
         </div>
-        <Field label="Note"><Textarea rows={3} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="Ce qui a été fait" /></Field>
-        {nonBillable ? <p className="text-xs text-muted-foreground">Ce projet n'est pas facturable : le temps est noté sans montant.</p>
-          : <Checkbox label="Facturable" checked={f.billable} onChange={(v) => setF({ ...f, billable: v })} />}
+        <Field label={t('time.note')}><Textarea rows={3} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder={t('time.notePlaceholder')} /></Field>
+        {nonBillable ? <p className="text-xs text-muted-foreground">{t('time.projectNotBillable')}</p>
+          : <Checkbox label={t('time.billable')} checked={f.billable} onChange={(v) => setF({ ...f, billable: v })} />}
         {error && <p role="alert" className="text-sm text-late">{error}</p>}
       </form>
     </Modal>
@@ -386,6 +394,7 @@ function EntryForm({ entry, onClose, onSaved }: { entry: TimeEntry | null; onClo
 // ------------------------------------------------------------------ chronomètre
 
 function Stopwatch() {
+  const t = useT()
   const { me, refresh } = useApp()
   const projects = useProjects()
   const [f, setF] = useState({ project_id: '', task_id: '', note: '' })
@@ -393,7 +402,7 @@ function Stopwatch() {
   const [now, setNow] = useState(Date.now())
   const running = me?.running ?? null
   const { data: todays, reload } = useLoad<TimeEntry[]>(`/time/entries?from=${today()}&to=${today()}`)
-  useEffect(() => { if (!running) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [running])
+  useEffect(() => { if (!running) return; const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv) }, [running])
 
   const start = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -405,7 +414,7 @@ function Stopwatch() {
     setBusy(true)
     try {
       const r = await api.post<{ minutes?: number }>('/time/timer/stop')
-      if (r.minutes) toast(`${fmtMinutes(r.minutes)} enregistrées`)
+      if (r.minutes) toast(t('time.minutesSaved', { duration: fmtMinutes(r.minutes) }))
       await refresh(); reload()
     } catch (err) { toast(errorText(err)) } finally { setBusy(false) }
   }
@@ -416,40 +425,40 @@ function Stopwatch() {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <Card title="Chronomètre">
+      <Card title={t('time.stopwatch')}>
         <div className="p-4">
           {running ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[.06em] text-accent">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />En cours depuis {new Intl.DateTimeFormat('fr-CH', { hour: '2-digit', minute: '2-digit' }).format(new Date(running.started_at))}
+                <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />{t('time.runningSince', { time: fmtTime(running.started_at) })}
               </div>
               <div className="font-display text-5xl font-extrabold tabular-nums">{clock}</div>
               <div className="text-sm">
                 <div className="font-bold">{running.project_name}</div>
-                <div className="text-muted-foreground">{running.task_title ?? 'Sans tâche'}</div>
+                <div className="text-muted-foreground">{running.task_title ?? t('time.noTask')}</div>
               </div>
-              <Button variant="primary" className="w-full sm:w-auto" disabled={busy} onClick={stop}>Arrêter et enregistrer</Button>
+              <Button variant="primary" className="w-full sm:w-auto" disabled={busy} onClick={stop}>{t('time.stopAndSave')}</Button>
             </div>
           ) : (
             <form onSubmit={start} className="space-y-3">
               <ProjectTaskFields projects={projects} projectId={f.project_id} taskId={f.task_id}
                 onProject={(id) => setF((x) => ({ ...x, project_id: id }))} onTask={(id) => setF((x) => ({ ...x, task_id: id }))} />
-              <Field label="Note"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="Sur quoi travaillez-vous ?" /></Field>
-              <Button type="submit" variant="primary" className="w-full sm:w-auto" disabled={busy || !f.project_id}>Démarrer</Button>
-              <p className="text-xs text-muted-foreground">Le chronomètre continue même si vous fermez la page. Il s'affiche en haut de l'écran.</p>
+              <Field label={t('time.note')}><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder={t('time.notePrompt')} /></Field>
+              <Button type="submit" variant="primary" className="w-full sm:w-auto" disabled={busy || !f.project_id}>{t('time.start')}</Button>
+              <p className="text-xs text-muted-foreground">{t('time.stopwatchHint')}</p>
             </form>
           )}
         </div>
       </Card>
-      <Card title="Aujourd'hui" action={<span className="text-sm font-bold tabular-nums">{fmtMinutes(done.reduce((s, e) => s + (e.minutes ?? 0), 0))}</span>}>
-        {done.length === 0 ? <p className="px-4 py-6 text-sm text-muted-foreground">Rien d'enregistré aujourd'hui.</p> : (
+      <Card title={t('time.today')} action={<span className="text-sm font-bold tabular-nums">{fmtMinutes(done.reduce((s, e) => s + (e.minutes ?? 0), 0))}</span>}>
+        {done.length === 0 ? <p className="px-4 py-6 text-sm text-muted-foreground">{t('time.nothingToday')}</p> : (
           <ul>
             {done.map((e) => (
               <li key={e.id} className="flex items-start gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0">
                 <ColorDot color={e.project_color} className="mt-1.5" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-semibold">{e.project_name}</div>
-                  <div className="truncate text-xs text-muted-foreground">{[e.task_title, e.note].filter(Boolean).join(' · ') || 'Sans tâche'}</div>
+                  <div className="truncate text-xs text-muted-foreground">{[e.task_title, e.note].filter(Boolean).join(' · ') || t('time.noTask')}</div>
                 </div>
                 <span className="font-bold tabular-nums">{hm(e.minutes ?? 0)}</span>
               </li>

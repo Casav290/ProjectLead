@@ -4,6 +4,7 @@ import { logActivity, mentionedUsers, notify } from '../lib/activity.js'
 import { runAutomations } from '../lib/automations.js'
 import { body, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
 import { assertInProject } from '../lib/visibility.js'
+import { tr } from '../lib/i18n.js'
 
 /** Les tâches : tableau, liste, Gantt, calendrier et « Mes tâches » lisent tous ici. */
 const app = router()
@@ -108,7 +109,7 @@ async function setAssignees(db: Db, ctx: Ctx, taskId: string, ids: string[], tit
     await db.query('insert into project_members (project_id, user_id, account_id) values ($1,$2,$3) on conflict do nothing', [projectId, u, ctx.accountId])
   }
   const added = ids.filter((u) => !before.has(u))
-  await notify(db, ctx, added, { kind: 'assigned', title: `${name} vous a confié « ${title} »`, link: `/projets/${projectId}?tache=${taskId}` })
+  await notify(db, ctx, added, { kind: 'assigned', title: (l) => tr(l, 'notif.assigned', { who: name, title }), link: `/projets/${projectId}?tache=${taskId}` })
 }
 
 /** Terminer ou rouvrir une tâche, avec tout ce qui s'ensuit. */
@@ -128,7 +129,7 @@ async function setCompletion(db: Db, ctx: Ctx, taskId: string, done: boolean, na
          join task_assignees ta on ta.task_id = k.id where d.depends_on_id = $1 and k.completed_at is null
           and not exists (select 1 from task_dependencies d2 join tasks o on o.id = d2.depends_on_id
                           where d2.task_id = k.id and o.completed_at is null and o.id <> $1)`, [taskId])).rows
-    for (const w of waiting) await notify(db, ctx, [w.user_id], { kind: 'unblocked', title: `« ${w.title} » peut commencer`, link: `/projets/${t.project_id}?tache=${w.id}` })
+    for (const w of waiting) await notify(db, ctx, [w.user_id], { kind: 'unblocked', title: (l) => tr(l, 'notif.unblocked', { title: w.title }), link: `/projets/${t.project_id}?tache=${w.id}` })
     // Tâche récurrente : la suivante naît quand celle-ci se termine.
     if (t.recurrence !== 'none') {
       const step = { daily: '1 day', weekly: '7 days', monthly: '1 month' }[t.recurrence as 'daily']
@@ -312,9 +313,9 @@ app.post('/:id/comments', async (c) => {
     const r = (await db.query('insert into comments (account_id, project_id, task_id, author_id, body, mentions) values ($1,$2,$3,$4,$5,$6) returning id',
       [ctx.accountId, t.project_id, t.id, ctx.userId, b.body, mentions])).rows[0]
     const assignees = (await db.query('select user_id from task_assignees where task_id = $1', [t.id])).rows.map((x) => x.user_id)
-    await notify(db, ctx, mentions, { kind: 'mention', title: `${c.get('name')} vous cite sur « ${t.title} »`, body: b.body.slice(0, 300), link: `/projets/${t.project_id}?tache=${t.id}` })
+    await notify(db, ctx, mentions, { kind: 'mention', title: (l) => tr(l, 'notif.mentionTask', { who: c.get('name'), title: t.title }), body: b.body.slice(0, 300), link: `/projets/${t.project_id}?tache=${t.id}` })
     await notify(db, ctx, [...assignees, t.created_by].filter((u) => !mentions.includes(u)),
-      { kind: 'comment', title: `Commentaire sur « ${t.title} »`, body: b.body.slice(0, 300), link: `/projets/${t.project_id}?tache=${t.id}` })
+      { kind: 'comment', title: (l) => tr(l, 'notif.comment', { title: t.title }), body: b.body.slice(0, 300), link: `/projets/${t.project_id}?tache=${t.id}` })
     return r.id
   })
   return c.json({ id }, 201)

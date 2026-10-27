@@ -1,3 +1,4 @@
+import { useT } from '../i18n'
 import { leadStart, placesRefusal, REFUSED, type Formule } from '../lib/arrival'
 import { leadEntry } from '../lib/leadFamily'
 import { isNativeApp } from '../lib/native'
@@ -13,20 +14,21 @@ import { AuthShell, AuthSwitch, authLink } from './AuthShell'
  * - « Retour à mon Compte Lead » : https://erplead.io/account.
  */
 export function RefusedScreen({ reason, formule, next }: { reason: 'places' | 'desactive'; formule: Formule | null; next: string | null }) {
+  const t = useT()
   const r = reason === 'places' ? placesRefusal(formule) : REFUSED.desactive
   return (
     <AuthShell title={r.title}>
       <p role="alert" className="mb-6 text-sm text-muted-foreground">{r.text}</p>
       <a href={leadStart(next, false, true)} data-switch-account="" data-testid="lead-switch"
         className="flex h-10 w-full items-center justify-center bg-primary px-3 text-sm font-bold text-primary-foreground hover:bg-accent-dark">
-        Changer de compte</a>
-      <p className="mt-3 text-center text-sm text-muted-foreground">Le Compte Lead vous redemande votre adresse e-mail et votre mot de passe.</p>
+        {t('shell.refused.switch')}</a>
+      <p className="mt-3 text-center text-sm text-muted-foreground">{t('shell.refused.switchHint')}</p>
       {r.upgrade && !isNativeApp && (
         <a href="/formules" data-upgrade=""
           className="mt-4 flex h-10 w-full items-center justify-center border border-input bg-card px-3 text-sm font-bold hover:bg-[#f4f2ef]">
-          Voir les formules</a>
+          {t('shell.refused.seePlans')}</a>
       )}
-      <AuthSwitch><a href={leadEntry('erplead')} className={authLink}>Retour à mon Compte Lead</a></AuthSwitch>
+      <AuthSwitch><a href={leadEntry('erplead')} className={authLink}>{t('shell.refused.backToLead')}</a></AuthSwitch>
     </AuthShell>
   )
 }

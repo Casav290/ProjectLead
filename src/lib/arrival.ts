@@ -10,6 +10,8 @@
  * Mêmes règles que le serveur (`safeNext`, server/routes/auth.ts) pour la page demandée.
  */
 
+import { t } from '../i18n'
+
 /** Un chemin de ProjectLead seulement : ni « //autre.site », ni « /\autre.site », ni caractère de contrôle. */
 export function sameSitePath(v: string | null | undefined): string | undefined {
   return typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') && !/[\\\u0000-\u001f\u007f]/.test(v) && v.length <= 2048
@@ -27,12 +29,14 @@ export function requestedPage(pathname: string, search: string): string | null {
  * L'adresse de départ vers le Compte Lead, avec la page demandée pour y revenir ensuite. `switchAccount` (« Changer de
  * compte » d'un écran de refus) : le Compte Lead redemande l'identifiant (prompt=login), jamais la même session reprise.
  */
-export function leadStart(next: string | null, signup = false, switchAccount = false) {
+export function leadStart(next: string | null, signup = false, switchAccount = false, locale?: string | null) {
   const q = new URLSearchParams()
   if (signup) q.set('signup', '1')
   else if (switchAccount) q.set('switch', '1')
   const page = sameSitePath(next)
   if (page && !/^\/(login|signup)\b/.test(page)) q.set('next', page)
+  // La langue de l'écran : le serveur la passe à ERPlead (ui_locales), qui montre sa connexion dans la même langue.
+  if (locale) q.set('locale', locale)
   const s = q.toString()
   return `/auth/lead/start${s ? `?${s}` : ''}`
 }
@@ -101,19 +105,14 @@ export const formuleOf = (v: string | null | undefined): Formule | null => (v ==
  * `upgrade` : l'écran offre « Voir les formules » (une formule avec plus de places existe).
  */
 export type Refusal = { title: string; text: string; upgrade: boolean }
-const PLACES_TITLE = 'Toutes les places ProjectLead de votre entreprise sont prises'
+// Les textes suivent la langue : lus au rendu (getters), jamais figés au chargement (clés shell.refused.*).
+const refusal = (title: string, text: string, upgrade: boolean): Refusal => ({
+  get title() { return t(`shell.refused.${title}`) }, get text() { return t(`shell.refused.${text}`) }, upgrade,
+})
 export const REFUSED: Record<'places' | 'desactive', Refusal> = {
   // Formule inconnue (ancienne adresse sans « formule ») : les deux remèdes.
-  places: {
-    title: PLACES_TITLE,
-    text: 'Votre entreprise a déjà autant de personnes dans ProjectLead que sa formule le permet. Demandez à un administrateur de votre entreprise de libérer une place (Réglages → Équipe) ou, si elle n\'est pas encore en Pro+, de passer à Pro+, jusqu\'à 5 places (Réglages → Entreprise).',
-    upgrade: true,
-  },
-  desactive: {
-    title: 'Votre accès à ProjectLead est désactivé',
-    text: 'Votre accès à l\'espace ProjectLead de votre entreprise est désactivé. Un administrateur de votre entreprise peut le rétablir (Réglages → Équipe).',
-    upgrade: false,
-  },
+  places: refusal('placesTitle', 'placesText', true),
+  desactive: refusal('disabledTitle', 'disabledText', false),
 }
 
 /**
@@ -123,9 +122,8 @@ export const REFUSED: Record<'places' | 'desactive', Refusal> = {
  * c'est à lui de le faire.
  */
 export function placesRefusal(formule: Formule | null): Refusal {
-  if (formule === 'proplus') return { title: PLACES_TITLE, upgrade: false,
-    text: 'Votre entreprise utilise déjà les 5 places de sa formule Pro+ dans ProjectLead, la plus grande. Demandez à un administrateur de votre entreprise de libérer une place (Réglages → Équipe) : il peut toujours se connecter.' }
-  if (formule === 'free' || formule === 'pro') return { title: PLACES_TITLE, upgrade: true,
-    text: `Votre entreprise est en formule ${formule === 'free' ? 'Gratuite' : 'Pro'} dans ProjectLead : 1 place, déjà prise. Pro+ donne jusqu'à 5 places. Demandez à un administrateur de votre entreprise de passer à Pro+ (Réglages → Entreprise) ou de libérer la place (Réglages → Équipe) : il peut toujours se connecter.` }
+  if (formule === 'proplus') return refusal('placesTitle', 'placesProPlusText', false)
+  if (formule === 'free') return refusal('placesTitle', 'placesFreeText', true)
+  if (formule === 'pro') return refusal('placesTitle', 'placesProText', true)
   return REFUSED.places
 }

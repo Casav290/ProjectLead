@@ -4,6 +4,8 @@ import { createDefaultColumns } from '../lib/defaults.js'
 import { appUrl, checkEnvelope, incomingExchange, orgSenders, parseEnvelope, sameOrigin, type IncomingExchange } from '../lib/leadId.js'
 import { planOf } from '../lib/plans.js'
 import { receiveClient } from './exchangeClient.js'
+import { tr } from '../lib/i18n.js'
+import { userLocale } from '../lib/locales.js'
 
 /**
  * L'échange de la famille Lead (crmlead/docs/LEAD-ID.md, étape 9 ; liaison sans clé du 26.10.2026). ProjectLead reçoit,
@@ -43,9 +45,10 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
   const d = e.data ?? {}
 
   const out = await anonTx(async (db) => {
-    const acc = (await db.query('select id from accounts where lead_org = $1', [e.org])).rows[0]
+    const acc = (await db.query('select id, currency, locale from accounts where lead_org = $1', [e.org])).rows[0]
     if (!acc) return { status: 404 as const }
     const owner = e.sub ? (await db.query(
+      // i18n-ok
       `select u.id from users u join account_users au on au.user_id = u.id and au.account_id = $2 where u.lead_sub = $1`, [e.sub, acc.id])).rows[0]?.id : null
     const fallbackOwner = owner ?? (await db.query(`select user_id from account_users where account_id = $1 and role = 'admin' and active order by joined_at limit 1`, [acc.id])).rows[0]?.user_id
     const link = (await db.query('select project_id, client_id from exchange_links where account_id = $1 and app = $2 and type = $3 and source_id = $4',
@@ -55,7 +58,7 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
     const contacts: any[] = Array.isArray(d.contacts) ? d.contacts : d.email ? [d] : []
     const primary = contacts.find((x) => x.is_primary) ?? contacts[0]
     const person = primary ? [primary.first_name, primary.last_name].filter(Boolean).join(' ') : null
-    const clientName = String(d.company || person || d.title || 'Client').slice(0, 200)
+    const clientName = String(d.company || person || d.title || tr(acc.locale, 'exchange.client')).slice(0, 200)
     let clientId = link?.client_id ?? null
     if (!clientId && primary?.email) clientId = (await db.query('select id from clients where account_id = $1 and lower(email) = lower($2) limit 1', [acc.id, primary.email])).rows[0]?.id ?? null
     if (!clientId) clientId = (await db.query('select id from clients where account_id = $1 and lower(name) = lower($2) and archived_at is null limit 1', [acc.id, clientName])).rows[0]?.id ?? null
@@ -101,14 +104,18 @@ app.post('/api/lead-exchange/v1/inbox', async (c) => {
           `insert into projects (account_id, name, description, client_id, owner_id, status, source, source_ref, budget_cents,
                                  fixed_cents, billing_mode, currency, created_by)
            values ($1,$2,$3,$4,$5,$10,'crmlead',$6,$7,$7,$8,$9,$5) returning id`,
-          [acc.id, String(d.title || `Projet ${clientName}`).slice(0, 200), d.description ?? '', clientId, fallbackOwner,
-           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', currency ?? 'CHF', projectStatus])).rows[0].id
+          [acc.id, String(d.title || tr(acc.locale, 'exchange.project', { name: clientName })).slice(0, 200), d.description ?? '', clientId, fallbackOwner,
+           `${from}:${e.source.id}`, amount, amount ? 'fixed' : 'hourly', currency ?? acc.currency ?? 'CHF', projectStatus])).rows[0].id
         await createDefaultColumns(db, acc.id, projectId!)
         if (fallbackOwner) {
           await db.query(`insert into project_members (project_id, user_id, account_id, role) values ($1,$2,$3,'lead') on conflict do nothing`, [projectId, fallbackOwner, acc.id])
           await db.query(`insert into notifications (account_id, user_id, kind, title, link) values ($1,$2,'deal',$3,$4)`,
-            [acc.id, fallbackOwner, `Affaire gagnée dans CRMlead : ${d.title ?? clientName}${planFull
-              ? ` (arrivée « à qualifier » : la formule ${p.name} a déjà ${p.projectLimit} projets en cours)` : ''}`, `/projets/${projectId}`])
+            [acc.id, fallbackOwner, await (async () => {
+              // Dans la langue du responsable.
+              const l = await userLocale(db, fallbackOwner)
+              return tr(l, 'notif.dealWon', { title: d.title ?? clientName })
+                + (planFull ? tr(l, 'notif.dealWonFull', { plan: p.name, n: p.projectLimit }) : '')
+            })(), `/projets/${projectId}`])
         }
         await db.query(`insert into activities (account_id, project_id, kind, data) values ($1,$2,'from_crmlead',$3)`,
           [acc.id, projectId, JSON.stringify({ url: e.source.url ?? null })])

@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useMemo, useState } from 'react'
+import { intlLocale, useT } from '../../i18n'
 import { api, errorText } from '../../lib/api'
 import { fmtMinutes, PRIORITY_LABEL } from '../../lib/format'
 import { useApp } from '../../lib/store'
@@ -15,7 +16,7 @@ type Status = 'open' | 'done' | 'all'
 const SORTS: Record<SortKey, (a: Task, b: Task) => number> = {
   position: (a, b) => a.position - b.position || a.number - b.number,
   number: (a, b) => a.number - b.number,
-  title: (a, b) => a.title.localeCompare(b.title, 'fr'),
+  title: (a, b) => a.title.localeCompare(b.title, intlLocale()),
   due: (a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'),
   priority: (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority],
   estimate: (a, b) => (a.estimate_minutes ?? -1) - (b.estimate_minutes ?? -1),
@@ -23,6 +24,7 @@ const SORTS: Record<SortKey, (a: Task, b: Task) => number> = {
 }
 
 export default function ListView({ project, onChanged }: { project: ProjectDetail; onChanged: () => void }) {
+  const t = useT()
   const { data, setData, error, loading, reload } = useProjectTasks(project.id)
   const { me, team } = useApp()
   const openTask = useOpenTask()
@@ -47,9 +49,9 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
     const known = new Set(project.stages.map((s) => s.id))
     return [
       ...project.stages.map((s) => ({ id: s.id, name: s.name, stage: s, tasks: visible.filter((t) => t.stage_id === s.id) })),
-      { id: '', name: 'Sans étape', stage: null, tasks: visible.filter((t) => !t.stage_id || !known.has(t.stage_id)) },
+      { id: '', name: t('tasks.field.noStage'), stage: null, tasks: visible.filter((t) => !t.stage_id || !known.has(t.stage_id)) },
     ].filter((g) => g.stage || g.tasks.length)
-  }, [project.stages, visible])
+  }, [project.stages, visible, t])
 
   const changed = async () => { await reload(); onChanged() }
   const patch = async (t: Task, p: Partial<Task>) => {
@@ -66,7 +68,7 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
     const ids = [...selected]
     try {
       await api.post('/tasks/bulk', { ids, patch: p })
-      toast(`${label} : ${ids.length} tâche${ids.length > 1 ? 's' : ''}`)
+      toast(t('tasks.list.bulkDone', { label, n: ids.length }))
       if (p.delete) setSelected(new Set())
     } catch (e) { toast(errorText(e)) }
     await changed()
@@ -89,38 +91,38 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rechercher une tâche" aria-label="Rechercher une tâche"
+        <Input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('tasks.list.search')} aria-label={t('tasks.list.search')}
           className="w-full px-2 py-1.5 text-sm sm:w-56" />
-        <Select aria-label="État" value={status} onChange={(e) => setStatus(e.target.value as Status)} className="w-auto px-2 py-1.5 text-sm">
-          <option value="open">Ouvertes</option>
-          <option value="done">Terminées</option>
-          <option value="all">Toutes</option>
+        <Select aria-label={t('tasks.list.status')} value={status} onChange={(e) => setStatus(e.target.value as Status)} className="w-auto px-2 py-1.5 text-sm">
+          <option value="open">{t('tasks.list.open')}</option>
+          <option value="done">{t('tasks.list.done')}</option>
+          <option value="all">{t('tasks.list.all')}</option>
         </Select>
-        <Button size="sm" variant={mine ? 'primary' : 'outline'} aria-pressed={mine} onClick={() => setMine((v) => !v)}>Mes tâches</Button>
-        <span className="ml-auto text-xs text-muted-foreground">{visible.length} tâche{visible.length > 1 ? 's' : ''}</span>
+        <Button size="sm" variant={mine ? 'primary' : 'outline'} aria-pressed={mine} onClick={() => setMine((v) => !v)}>{t('tasks.list.mine')}</Button>
+        <span className="ml-auto text-xs text-muted-foreground">{t('tasks.list.count', { n: visible.length })}</span>
       </div>
 
       {selected.size > 0 && (
-        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border border-accent bg-accent-veil px-3 py-2 text-sm" role="toolbar" aria-label="Actions groupées">
-          <b>{selected.size} sélectionnée{selected.size > 1 ? 's' : ''}</b>
-          <Button size="sm" onClick={() => bulk({ completed: true }, 'Terminées')}>Terminer</Button>
-          <Select aria-label="Priorité des tâches sélectionnées" value="" onChange={(e) => e.target.value && bulk({ priority: e.target.value }, 'Priorité changée')}
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border border-accent bg-accent-veil px-3 py-2 text-sm" role="toolbar" aria-label={t('tasks.list.bulkActions')}>
+          <b>{t('tasks.list.selected', { n: selected.size })}</b>
+          <Button size="sm" onClick={() => bulk({ completed: true }, t('tasks.list.bulkCompleted'))}>{t('tasks.drawer.complete')}</Button>
+          <Select aria-label={t('tasks.list.bulkPriority')} value="" onChange={(e) => e.target.value && bulk({ priority: e.target.value }, t('tasks.list.priorityChanged'))}
             className="w-auto px-2 py-1 text-xs">
-            <option value="">Priorité…</option>
+            <option value="">{t('tasks.list.priorityPick')}</option>
             {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </Select>
           <label className="inline-flex items-center gap-1 text-xs">
-            Échéance
-            <input type="date" className="border border-input bg-card px-2 py-1 text-xs" aria-label="Échéance des tâches sélectionnées"
-              onChange={(e) => e.target.value && bulk({ due_date: e.target.value }, 'Échéance fixée')} />
+            {t('tasks.field.due')}
+            <input type="date" className="border border-input bg-card px-2 py-1 text-xs" aria-label={t('tasks.list.bulkDue')}
+              onChange={(e) => e.target.value && bulk({ due_date: e.target.value }, t('tasks.list.dueSet'))} />
           </label>
-          <Select aria-label="Assigner les tâches sélectionnées" value="" onChange={(e) => e.target.value && bulk({ add_assignee: e.target.value }, 'Assignées')}
+          <Select aria-label={t('tasks.list.bulkAssign')} value="" onChange={(e) => e.target.value && bulk({ add_assignee: e.target.value }, t('tasks.list.assigned'))}
             className="w-auto px-2 py-1 text-xs">
-            <option value="">Assigner à…</option>
+            <option value="">{t('tasks.list.assignTo')}</option>
             {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
-          <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>Supprimer</Button>
-          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected(new Set())}>Désélectionner</Button>
+          <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>{t('common.delete')}</Button>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected(new Set())}>{t('tasks.list.deselect')}</Button>
         </div>
       )}
 
@@ -128,16 +130,16 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
         <table className="w-full border-collapse text-sm max-sm:block sm:min-w-[980px]">
           <thead className="max-sm:hidden bg-head text-[10.5px] font-extrabold tracking-[.08em] text-muted-foreground">
             <tr className="border-b border-input">
-              <th className="w-9 px-2 py-2"><span className="sr-only">Sélection</span></th>
-              <th className="w-8 px-1 py-2"><span className="sr-only">Terminée</span></th>
-              {header('number', 'N°', 'w-14')}
-              {header('title', 'Titre')}
-              <th className="w-28 px-2 py-2 text-left uppercase">Assignés</th>
-              {header('due', 'Échéance', 'w-36')}
-              {header('priority', 'Priorité', 'w-28')}
-              {header('estimate', 'Estim.', 'w-20')}
-              {header('spent', 'Passé', 'w-20')}
-              <th className="w-32 px-2 py-2 text-left uppercase">Colonne</th>
+              <th className="w-9 px-2 py-2"><span className="sr-only">{t('tasks.list.selection')}</span></th>
+              <th className="w-8 px-1 py-2"><span className="sr-only">{t('tasks.drawer.doneLabel')}</span></th>
+              {header('number', t('tasks.list.colNumber'), 'w-14')}
+              {header('title', t('tasks.list.colTitle'))}
+              <th className="w-28 px-2 py-2 text-left uppercase">{t('tasks.field.assignees')}</th>
+              {header('due', t('tasks.field.due'), 'w-36')}
+              {header('priority', t('tasks.field.priority'), 'w-28')}
+              {header('estimate', t('tasks.list.colEstimate'), 'w-20')}
+              {header('spent', t('tasks.list.colSpent'), 'w-20')}
+              <th className="w-32 px-2 py-2 text-left uppercase">{t('tasks.field.column')}</th>
             </tr>
           </thead>
           {groups.map((g) => {
@@ -147,7 +149,7 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
               <tbody key={g.id || 'none'} className="max-sm:block">
                 <tr className="border-b border-border bg-[#faf9f7] max-sm:flex max-sm:items-center">
                   <td className="px-2 py-2">
-                    <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" aria-label={`Sélectionner les tâches de ${g.name}`}
+                    <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" aria-label={t('tasks.list.selectGroup', { name: g.name })}
                       checked={allSel} disabled={!g.tasks.length}
                       onChange={() => setSelected((s) => { const n = new Set(s); g.tasks.forEach((t) => (allSel ? n.delete(t.id) : n.add(t.id))); return n })} />
                   </td>
@@ -181,51 +183,52 @@ export default function ListView({ project, onChanged }: { project: ProjectDetai
         </table>
       </div>
 
-      <Confirm open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Supprimer les tâches" confirmLabel="Supprimer" danger
-        onConfirm={() => bulk({ delete: true }, 'Supprimées')}>
-        {selected.size} tâche{selected.size > 1 ? 's seront supprimées' : ' sera supprimée'}, avec leurs sous-tâches et commentaires.
+      <Confirm open={confirmDelete} onClose={() => setConfirmDelete(false)} title={t('tasks.list.deleteTitle')} confirmLabel={t('common.delete')} danger
+        onConfirm={() => bulk({ delete: true }, t('tasks.list.deleted'))}>
+        {t('tasks.list.deleteBody', { n: selected.size })}
       </Confirm>
     </div>
   )
 }
 
-function Row({ task: t, selected, onSelect, onOpen, onDone, onPatch }:
+function Row({ task, selected, onSelect, onOpen, onDone, onPatch }:
   { task: Task; selected: boolean; onSelect: () => void; onOpen: () => void; onDone: (v: boolean) => void; onPatch: (p: Partial<Task>) => void }) {
-  const done = Boolean(t.completed_at)
-  const late = isOverdue(t)
+  const t = useT()
+  const done = Boolean(task.completed_at)
+  const late = isOverdue(task)
   return (
     <tr className={clsx('border-b border-[#eeebe7] hover:bg-accent-veil max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:pb-1', selected && 'bg-accent-veil')}>
       <td className="px-2 py-1.5">
-        <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={selected} onChange={onSelect} aria-label={`Sélectionner « ${t.title} »`} />
+        <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={selected} onChange={onSelect} aria-label={t('tasks.list.selectTask', { title: task.title })} />
       </td>
-      <td className="px-1 py-1.5"><DoneToggle done={done} onChange={onDone} label={`Terminée : ${t.title}`} /></td>
-      <td className="px-2 py-1.5 text-xs text-muted-foreground max-sm:hidden">{t.number}</td>
+      <td className="px-1 py-1.5"><DoneToggle done={done} onChange={onDone} label={t('tasks.list.doneTask', { title: task.title })} /></td>
+      <td className="px-2 py-1.5 text-xs text-muted-foreground max-sm:hidden">{task.number}</td>
       <td className="px-2 py-1.5 max-sm:min-w-0 max-sm:grow max-sm:basis-[calc(100%-4.5rem)] sm:max-w-0">
         <button type="button" onClick={onOpen} className="flex w-full min-w-0 items-center gap-2 text-left hover:text-accent">
-          {t.is_milestone && <MilestoneMark />}
-          <span className={clsx('truncate font-semibold max-sm:whitespace-normal', done && 'text-muted-foreground line-through')}>{t.title}</span>
-          {t.blocked && !done && <Badge tone="warn">Bloquée</Badge>}
-          {t.subtasks_total > 0 && <span className="shrink-0 text-xs text-muted-foreground">{t.subtasks_done}/{t.subtasks_total}</span>}
+          {task.is_milestone && <MilestoneMark />}
+          <span className={clsx('truncate font-semibold max-sm:whitespace-normal', done && 'text-muted-foreground line-through')}>{task.title}</span>
+          {task.blocked && !done && <Badge tone="warn">{t('tasks.drawer.blocked')}</Badge>}
+          {task.subtasks_total > 0 && <span className="shrink-0 text-xs text-muted-foreground">{task.subtasks_done}/{task.subtasks_total}</span>}
         </button>
       </td>
-      <td className="px-2 py-1.5 max-sm:ml-[3.75rem] max-sm:px-0">{t.assignees.length ? <AvatarStack people={t.assignees} size={22} max={3} /> : <span className="text-muted-foreground">—</span>}</td>
+      <td className="px-2 py-1.5 max-sm:ml-[3.75rem] max-sm:px-0">{task.assignees.length ? <AvatarStack people={task.assignees} size={22} max={3} /> : <span className="text-muted-foreground">—</span>}</td>
       <td className="px-2 py-1 max-sm:w-40">
-        <input type="date" value={t.due_date ?? ''} aria-label={`Échéance de « ${t.title} »`} onChange={(e) => onPatch({ due_date: e.target.value || null })}
+        <input type="date" value={task.due_date ?? ''} aria-label={t('tasks.list.dueOf', { title: task.title })} onChange={(e) => onPatch({ due_date: e.target.value || null })}
           className={clsx('w-full border border-transparent bg-transparent px-1 py-0.5 text-[13px] hover:border-input focus:border-accent focus:outline-none',
-            late ? 'font-bold text-late' : !t.due_date && 'text-muted-foreground')} />
+            late ? 'font-bold text-late' : !task.due_date && 'text-muted-foreground')} />
       </td>
       <td className="px-2 py-1 max-sm:w-28">
-        <select value={t.priority} aria-label={`Priorité de « ${t.title} »`} onChange={(e) => onPatch({ priority: e.target.value as Task['priority'] })}
+        <select value={task.priority} aria-label={t('tasks.list.priorityOf', { title: task.title })} onChange={(e) => onPatch({ priority: e.target.value as Task['priority'] })}
           className={clsx('w-full border border-transparent bg-transparent px-1 py-0.5 text-[13px] hover:border-input focus:border-accent focus:outline-none',
-            t.priority === 'urgent' && 'font-bold text-late', t.priority === 'high' && 'font-bold text-soon', t.priority === 'low' && 'text-muted-foreground')}>
+            task.priority === 'urgent' && 'font-bold text-late', task.priority === 'high' && 'font-bold text-soon', task.priority === 'low' && 'text-muted-foreground')}>
           {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </td>
-      <td className="px-2 py-1.5 text-[13px] text-muted-foreground max-sm:hidden">{t.estimate_minutes ? fmtMinutes(t.estimate_minutes) : '—'}</td>
-      <td className={clsx('px-2 py-1.5 text-[13px] max-sm:hidden', t.estimate_minutes && t.minutes_spent > t.estimate_minutes ? 'font-bold text-late' : 'text-muted-foreground')}>
-        {t.minutes_spent ? fmtMinutes(t.minutes_spent) : '—'}
+      <td className="px-2 py-1.5 text-[13px] text-muted-foreground max-sm:hidden">{task.estimate_minutes ? fmtMinutes(task.estimate_minutes) : '—'}</td>
+      <td className={clsx('px-2 py-1.5 text-[13px] max-sm:hidden', task.estimate_minutes && task.minutes_spent > task.estimate_minutes ? 'font-bold text-late' : 'text-muted-foreground')}>
+        {task.minutes_spent ? fmtMinutes(task.minutes_spent) : '—'}
       </td>
-      <td className="truncate px-2 py-1.5 text-[13px] max-sm:hidden">{t.column_name ?? '—'}</td>
+      <td className="truncate px-2 py-1.5 text-[13px] max-sm:hidden">{task.column_name ?? '—'}</td>
     </tr>
   )
 }

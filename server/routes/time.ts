@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { logActivity } from '../lib/activity.js'
 import { body, date, forbidden, HttpError, notFound, router, setClause, tx, uuid } from '../lib/http.js'
 import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
+import { isLocale, tr } from '../lib/i18n.js'
 
 /** Le temps : saisie, chronomètre, feuille de temps de la semaine, rapports, charge de travail. */
 const app = router()
@@ -155,10 +156,15 @@ app.put('/week/cell', async (c) => {
 
 app.get('/report', async (c) => tx(c, async (db) => {
   const q = c.req.query()
-  const group = ({ project: 'p.name', user: 'u.name', client: `coalesce(cl.name, '(sans client)')`,
-                   month: `to_char(te.entry_date, 'YYYY-MM')`, task: `coalesce(k.title, '(sans tâche)')` } as Record<string, string>)[q.group ?? 'project']
+  // Les libellés « sans client » / « sans tâche » dans la langue de la personne ($5).
+  const l = isLocale(q.lang) ? q.lang : c.get('locale')
+  const g = q.group ?? 'project'
+  const group = ({ project: 'p.name', user: 'u.name', client: `coalesce(cl.name, $5::text)`,
+                   month: `to_char(te.entry_date, 'YYYY-MM')`, task: `coalesce(k.title, $5::text)` } as Record<string, string>)[g]
+  const empty = g === 'client' ? [tr(l, 'time.noClient')] : g === 'task' ? [tr(l, 'time.noTask')] : []
   if (!group) throw new HttpError(400, 'invalid_group')
   const rows = (await db.query(
+    // i18n-ok
     `select ${group} as label, sum(te.minutes)::int as minutes,
             sum(case when te.billable then te.minutes else 0 end)::int as billable_minutes,
             sum(case when te.billable then te.minutes * coalesce(te.rate_cents, pm.hourly_rate_cents, p.hourly_rate_cents, au.hourly_rate_cents, 0) / 60 else 0 end)::bigint as billable_cents,
@@ -170,7 +176,7 @@ app.get('/report', async (c) => tx(c, async (db) => {
        left join account_users au on au.account_id = te.account_id and au.user_id = te.user_id
       where te.minutes is not null and ($1::date is null or te.entry_date >= $1) and ($2::date is null or te.entry_date <= $2)
         and ($3::uuid is null or te.project_id = $3) and ($4::uuid is null or te.user_id = $4)
-      group by 1 order by 2 desc`, [q.from ?? null, q.to ?? null, q.project ?? null, q.user ?? null])).rows
+      group by 1 order by 2 desc`, [q.from ?? null, q.to ?? null, q.project ?? null, q.user ?? null, ...empty])).rows
   return c.json(rows)
 }))
 
@@ -178,6 +184,7 @@ app.get('/report', async (c) => tx(c, async (db) => {
 app.get('/export.csv', async (c) => {
   const q = c.req.query()
   const rows = await tx(c, async (db) => (await db.query(
+    // i18n-ok
     `select te.entry_date, u.name as person, p.code, p.name as project, coalesce(cl.name,'') as client, coalesce(k.title,'') as task,
             te.minutes, te.billable, te.note, te.invoice_ref
        from time_entries te join projects p on p.id = te.project_id join users u on u.id = te.user_id
@@ -185,10 +192,18 @@ app.get('/export.csv', async (c) => {
       where te.minutes is not null and ($1::date is null or te.entry_date >= $1) and ($2::date is null or te.entry_date <= $2)
       order by te.entry_date`, [q.from ?? null, q.to ?? null])).rows)
   const cell = (v: unknown) => { const s = v === null || v === undefined ? '' : String(v); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-  const csv = ['Date;Personne;Code;Projet;Client;Tâche;Heures;Facturable;Note;Facture',
-    ...rows.map((r) => [r.entry_date, r.person, r.code, r.project, r.client, r.task, (r.minutes / 60).toFixed(2).replace('.', ','),
-                        r.billable ? 'oui' : 'non', r.note, r.invoice_ref].map(cell).join(';'))].join('\r\n')
-  return new Response('﻿' + csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="temps.csv"' } })
+  // En-têtes, « oui » / « non » et nom du fichier dans la langue demandée (?lang=), sinon celle de la personne.
+  const l = isLocale(q.lang) ? q.lang : c.get('locale')
+  const head = ['date', 'person', 'code', 'project', 'client', 'task', 'hours', 'billable', 'note', 'invoice'].map((k) => tr(l, `time.csv.${k}`))
+  // tr(l, 'time.csv.date') tr(l, 'time.csv.person') tr(l, 'time.csv.code') tr(l, 'time.csv.project') tr(l, 'time.csv.client')
+  // tr(l, 'time.csv.task') tr(l, 'time.csv.hours') tr(l, 'time.csv.billable') tr(l, 'time.csv.note') tr(l, 'time.csv.invoice')
+  // Le séparateur décimal du pays : virgule, sauf en anglais.
+  const dec = l === 'en' ? '.' : ','
+  const csv = [head.map(cell).join(';'),
+    ...rows.map((r) => [r.entry_date, r.person, r.code, r.project, r.client, r.task, (r.minutes / 60).toFixed(2).replace('.', dec),
+                        tr(l, r.billable ? 'time.csv.yes' : 'time.csv.no'), r.note, r.invoice_ref].map(cell).join(';'))].join('\r\n')
+  const file = `${tr(l, 'time.csv.file')}.csv`
+  return new Response('﻿' + csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${file}"` } })
 })
 
 /**
@@ -200,6 +215,7 @@ app.get('/workload', async (c) => tx(c, async (db) => {
   const weeks = Math.min(12, Math.max(1, Number(c.req.query('weeks') ?? 6)))
   if (!from || !/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new HttpError(400, 'from_required')
   const people = (await db.query(
+    // i18n-ok
     `select u.id, u.name, u.color, au.capacity_minutes from account_users au join users u on u.id = au.user_id
       where au.account_id = app_account() and au.active order by u.name`)).rows
   const load = (await db.query(

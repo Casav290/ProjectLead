@@ -6,6 +6,7 @@ import { PRIORITY_LABEL } from '../../lib/format'
 import { useApp, useLoad } from '../../lib/store'
 import type { Member, ProjectDetail } from '../../lib/types'
 import { ReadOnlyNote, SettingsHeader, useRole } from './kit'
+import { labels, t, useT } from '../../i18n'
 
 type Trigger = 'task_completed' | 'task_moved' | 'stage_completed' | 'task_created' | 'project_completed'
 type Action = 'notify' | 'assign' | 'set_priority' | 'move_column' | 'complete_stage' | 'send_client_update' | 'create_task'
@@ -15,33 +16,35 @@ type Conditions = { column_id?: string; stage_id?: string }
 type Automation = { id: string; name: string; project_id: string | null; project_name: string | null; trigger: Trigger
   conditions: Conditions; action: Action; params: Params; active: boolean; runs: number }
 
-const TRIGGERS: Record<Trigger, string> = {
-  task_completed: 'une tâche est terminée', task_moved: 'une tâche est déplacée', stage_completed: 'une étape est terminée',
-  task_created: 'une tâche est créée', project_completed: 'le projet est terminé',
-}
-const ACTIONS: Record<Action, string> = {
-  notify: 'prévenir', assign: 'assigner la tâche', set_priority: 'changer la priorité', move_column: 'déplacer la tâche dans la colonne',
-  complete_stage: 'terminer l\'étape si toutes ses tâches le sont', send_client_update: 'envoyer le suivi au client', create_task: 'créer une tâche',
-}
-const TO: Record<NonNullable<Params['to']>, string> = { owner: 'le chef de projet', members: 'les intervenants', assignees: 'les personnes assignées' }
+const TRIGGER_KEYS: Trigger[] = ['task_completed', 'task_moved', 'stage_completed', 'task_created', 'project_completed']
+const ACTION_KEYS: Action[] = ['notify', 'assign', 'set_priority', 'move_column', 'complete_stage', 'send_client_update', 'create_task']
+const TO_KEYS: NonNullable<Params['to']>[] = ['owner', 'members', 'assignees']
+/** Fragments de phrase (« quand … alors … ») et libellés des listes, qui suivent la langue. */
+const TRIGGERS = labels('settings2.auto.trigger', TRIGGER_KEYS)
+const TRIGGER_OPTIONS = labels('settings2.auto.triggerOption', TRIGGER_KEYS)
+const ACTIONS = labels('settings2.auto.action', ACTION_KEYS)
+const ACTION_OPTIONS = labels('settings2.auto.actionOption', ACTION_KEYS)
+const TO = labels('settings2.auto.to', TO_KEYS)
+const TO_OPTIONS = labels('settings2.auto.toOption', TO_KEYS)
 /** Les actions qui portent sur une tâche n'ont pas de sens quand l'événement n'en a pas. */
 const TASK_ACTIONS: Action[] = ['assign', 'set_priority', 'move_column']
-const hasTask = (t: Trigger) => t.startsWith('task_')
+const hasTask = (tg: Trigger) => tg.startsWith('task_')
 
 function sentence(a: Pick<Automation, 'trigger' | 'action' | 'params' | 'project_name'>, team: Member[], columnName?: string) {
-  const where = a.project_name ? ` dans « ${a.project_name} »` : ''
-  const when = `Quand ${TRIGGERS[a.trigger]}${columnName ? ` vers « ${columnName} »` : ''}${where}`
+  const where = a.project_name ? t('settings2.auto.whenProject', { name: a.project_name }) : ''
+  const when = t('settings2.auto.when', { trigger: TRIGGERS[a.trigger], column: columnName ? t('settings2.auto.whenColumn', { name: columnName }) : '', project: where })
   const p = a.params
   let then: string = ACTIONS[a.action]
-  if (a.action === 'notify') then = `prévenir ${p.to ? TO[p.to] : 'l\'équipe'}`
-  if (a.action === 'assign') then = `assigner la tâche à ${team.find((m) => m.id === p.user_id)?.name ?? '…'}`
-  if (a.action === 'set_priority') then = `passer la tâche en priorité ${(PRIORITY_LABEL[p.priority ?? ''] ?? '…').toLowerCase()}`
-  if (a.action === 'move_column') then = `déplacer la tâche dans « ${p.column_name || '…'} »`
-  if (a.action === 'create_task') then = `créer la tâche « ${p.title || '…'} »${p.due_in_days != null ? `, à faire dans ${p.due_in_days} jour${p.due_in_days > 1 ? 's' : ''}` : ''}`
+  if (a.action === 'notify') then = t('settings2.auto.then.notify', { to: p.to ? TO[p.to] : t('settings2.auto.toTeam') })
+  if (a.action === 'assign') then = t('settings2.auto.then.assign', { name: team.find((m) => m.id === p.user_id)?.name ?? '…' })
+  if (a.action === 'set_priority') then = t('settings2.auto.then.setPriority', { priority: (PRIORITY_LABEL[p.priority ?? ''] ?? '…').toLowerCase() })
+  if (a.action === 'move_column') then = t('settings2.auto.then.moveColumn', { name: p.column_name || '…' })
+  if (a.action === 'create_task') then = t('settings2.auto.then.createTask', { title: p.title || '…' }) + (p.due_in_days != null ? t('settings2.auto.then.createTaskDue', { n: p.due_in_days }) : '')
   return { when, then }
 }
 
 export default function Automations() {
+  const t = useT()
   const { team } = useApp()
   const { canManage } = useRole()
   const { data, error, loading, reload } = useLoad<Automation[]>('/automations')
@@ -53,14 +56,13 @@ export default function Automations() {
 
   return (
     <>
-      <SettingsHeader title="Automatisations" action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>Nouvelle automatisation</Button>}>
-        Des règles « quand … alors … » qui font le travail répétitif à votre place. Une règle sans projet vaut pour tous les projets ;
-        une règle ne déclenche jamais une autre règle.
+      <SettingsHeader title={t('settings2.auto.title')} action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>{t('settings2.auto.new')}</Button>}>
+        {t('settings2.auto.intro')}
       </SettingsHeader>
       {!canManage && <ReadOnlyNote />}
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : data!.length === 0 ? (
-        <Empty title="Aucune automatisation" action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>Créer la première</Button>}>
-          Par exemple : quand une tâche est terminée, terminer l'étape si toutes ses tâches le sont.
+        <Empty title={t('settings2.auto.emptyTitle')} action={canManage && <Button variant="primary" onClick={() => setEditing('new')}>{t('settings2.auto.createFirst')}</Button>}>
+          {t('settings2.auto.emptyText')}
         </Empty>
       ) : (
         <ul className="max-w-3xl space-y-3">
@@ -73,16 +75,16 @@ export default function Automations() {
                     <div className="min-w-0 flex-1">
                       <p className="font-bold break-words">{a.name}</p>
                       <p className="mt-1 text-sm">
-                        <span className="font-semibold text-accent-dark">{s.when}</span>{a.conditions?.column_id && ' (colonne choisie)'}, alors {s.then}.
+                        <span className="font-semibold text-accent-dark">{s.when}</span>{a.conditions?.column_id && t('settings2.auto.columnChosen')}{t('settings2.auto.thenSuffix', { then: s.then })}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {a.runs ? `Exécutée ${a.runs} fois` : 'Pas encore exécutée'}{!a.active && ' · en pause'}
+                        {a.runs ? t('settings2.auto.runs', { n: a.runs }) : t('settings2.auto.notRun')}{!a.active && t('settings2.auto.paused')}
                       </p>
                     </div>
                     {canManage && (
                       <div className="flex items-center gap-2">
-                        <Checkbox label="Active" checked={a.active} onChange={() => toggle(a)} className="text-xs" />
-                        <Button size="sm" onClick={() => setEditing(a)}>Modifier</Button>
+                        <Checkbox label={t('settings2.auto.active')} checked={a.active} onChange={() => toggle(a)} className="text-xs" />
+                        <Button size="sm" onClick={() => setEditing(a)}>{t('common.edit')}</Button>
                       </div>
                     )}
                   </div>
@@ -102,6 +104,7 @@ const blank = (): Draft => ({ name: '', project_id: '', trigger: 'task_completed
   params: { to: 'owner', message: '' }, active: true })
 
 function AutomationDialog({ automation, onClose, onSaved }: { automation: Automation | 'new' | null; onClose: () => void; onSaved: () => void }) {
+  const t = useT()
   const { team } = useApp()
   const open = Boolean(automation)
   const { data: projects } = useLoad<{ id: string; name: string }[]>(open ? '/projects' : null, [open])
@@ -128,7 +131,7 @@ function AutomationDialog({ automation, onClose, onSaved }: { automation: Automa
     params: action === 'notify' ? { to: 'owner', message: '' } : action === 'set_priority' ? { priority: 'high' }
       : action === 'create_task' ? { title: '', due_in_days: 3 } : {} }))
 
-  const actions = (Object.keys(ACTIONS) as Action[]).filter((a) => hasTask(d.trigger) || !TASK_ACTIONS.includes(a))
+  const actions = ACTION_KEYS.filter((a) => hasTask(d.trigger) || !TASK_ACTIONS.includes(a))
   const projectName = projects?.find((p) => p.id === d.project_id)?.name ?? null
   const columnName = d.trigger === 'task_moved' ? project?.columns.find((c) => c.id === d.column_id)?.name : undefined
   const s = sentence({ trigger: d.trigger, action: d.action, params: d.params, project_name: projectName }, team, columnName)
@@ -144,56 +147,56 @@ function AutomationDialog({ automation, onClose, onSaved }: { automation: Automa
     if (d.project_id && d.stage_id && d.trigger !== 'project_completed') conditions.stage_id = d.stage_id
     const params: Params = { ...d.params }
     if (params.message !== undefined) params.message = params.message.trim()
-    const body = { name: d.name.trim() || `${s.when}, alors ${s.then}`.slice(0, 120), project_id: d.project_id || null, trigger: d.trigger,
+    const body = { name: d.name.trim() || t('settings2.auto.ruleName', { when: s.when, then: s.then }).slice(0, 120), project_id: d.project_id || null, trigger: d.trigger,
                    conditions, action: d.action, params, active: d.active }
     try {
       if (automation === 'new') await api.post('/automations', body)
       else if (automation) await api.patch(`/automations/${automation.id}`, body)
-      toast('Automatisation enregistrée'); onSaved(); onClose()
+      toast(t('settings2.auto.savedToast')); onSaved(); onClose()
     } catch (err) { setError(err) } finally { setBusy(false) }
   }
   const remove = async () => {
     if (!automation || automation === 'new') return
-    try { await api.del(`/automations/${automation.id}`); toast('Automatisation supprimée'); onSaved(); onClose() } catch (err) { setError(err) }
+    try { await api.del(`/automations/${automation.id}`); toast(t('settings2.auto.deletedToast')); onSaved(); onClose() } catch (err) { setError(err) }
   }
 
   return (
-    <Modal open={open} onClose={onClose} wide title={automation === 'new' ? 'Nouvelle automatisation' : 'Modifier l\'automatisation'}
+    <Modal open={open} onClose={onClose} wide title={automation === 'new' ? t('settings2.auto.new') : t('settings2.auto.editTitle')}
       footer={<>
-        {automation && automation !== 'new' && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>Supprimer</Button>}
-        <Button onClick={onClose}>Annuler</Button>
-        <Button variant="primary" type="submit" form="automation-form" disabled={busy || missing}>Enregistrer</Button>
+        {automation && automation !== 'new' && <Button variant="danger" className="mr-auto" onClick={() => setRemoving(true)}>{t('common.delete')}</Button>}
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
+        <Button variant="primary" type="submit" form="automation-form" disabled={busy || missing}>{t('common.save')}</Button>
       </>}>
       <form id="automation-form" onSubmit={save} className="space-y-5">
         <fieldset className="space-y-3 border-l-[3px] border-accent pl-4">
-          <legend className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-accent-dark">Quand</legend>
+          <legend className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-accent-dark">{t('settings2.auto.whenLegend')}</legend>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Événement">
+            <Field label={t('settings2.auto.event')}>
               <Select value={d.trigger} onChange={(e) => {
-                const t = e.target.value as Trigger
-                setD((x) => ({ ...x, trigger: t, column_id: '', ...(!hasTask(t) && TASK_ACTIONS.includes(x.action) ? { action: 'notify' as Action, params: { to: 'owner' as const, message: '' } } : {}) }))
+                const tg = e.target.value as Trigger
+                setD((x) => ({ ...x, trigger: tg, column_id: '', ...(!hasTask(tg) && TASK_ACTIONS.includes(x.action) ? { action: 'notify' as Action, params: { to: 'owner' as const, message: '' } } : {}) }))
               }}>
-                {(Object.keys(TRIGGERS) as Trigger[]).map((t) => <option key={t} value={t}>{TRIGGERS[t][0].toUpperCase() + TRIGGERS[t].slice(1)}</option>)}
+                {TRIGGER_KEYS.map((tg) => <option key={tg} value={tg}>{TRIGGER_OPTIONS[tg]}</option>)}
               </Select>
             </Field>
-            <Field label="Projet" hint="Facultatif : sinon, tous les projets.">
+            <Field label={t('settings2.auto.project')} hint={t('settings2.auto.projectHint')}>
               <Select value={d.project_id} onChange={(e) => setD((x) => ({ ...x, project_id: e.target.value, column_id: '', stage_id: '' }))}>
-                <option value="">Tous les projets</option>
+                <option value="">{t('settings2.auto.allProjects')}</option>
                 {projects?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
             </Field>
             {d.trigger === 'task_moved' && (
-              <Field label="Vers la colonne" hint={d.project_id ? undefined : 'Choisissez un projet pour filtrer par colonne.'}>
+              <Field label={t('settings2.auto.toColumn')} hint={d.project_id ? undefined : t('settings2.auto.toColumnHint')}>
                 <Select value={d.column_id} disabled={!project} onChange={(e) => set('column_id', e.target.value)}>
-                  <option value="">N'importe quelle colonne</option>
+                  <option value="">{t('settings2.auto.anyColumn')}</option>
                   {project?.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </Field>
             )}
             {d.project_id && d.trigger !== 'project_completed' && (project?.stages.length ?? 0) > 0 && (
-              <Field label="Dans l'étape">
+              <Field label={t('settings2.auto.inStage')}>
                 <Select value={d.stage_id} onChange={(e) => set('stage_id', e.target.value)}>
-                  <option value="">N'importe quelle étape</option>
+                  <option value="">{t('settings2.auto.anyStage')}</option>
                   {project!.stages.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
                 </Select>
               </Field>
@@ -202,56 +205,56 @@ function AutomationDialog({ automation, onClose, onSaved }: { automation: Automa
         </fieldset>
 
         <fieldset className="space-y-3 border-l-[3px] border-won pl-4">
-          <legend className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-won">Alors</legend>
-          <Field label="Action">
+          <legend className="mb-2 text-sm font-extrabold uppercase tracking-[.06em] text-won">{t('settings2.auto.thenLegend')}</legend>
+          <Field label={t('settings2.auto.actionLabel')}>
             <Select value={d.action} onChange={(e) => setAction(e.target.value as Action)}>
-              {actions.map((a) => <option key={a} value={a}>{ACTIONS[a][0].toUpperCase() + ACTIONS[a].slice(1)}</option>)}
+              {actions.map((a) => <option key={a} value={a}>{ACTION_OPTIONS[a]}</option>)}
             </Select>
           </Field>
           {d.action === 'notify' && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Qui prévenir">
+              <Field label={t('settings2.auto.whoNotify')}>
                 <Select value={d.params.to ?? 'owner'} onChange={(e) => setParam('to', e.target.value as Params['to'])}>
-                  {(Object.keys(TO) as NonNullable<Params['to']>[]).filter((k) => k !== 'assignees' || hasTask(d.trigger))
-                    .map((k) => <option key={k} value={k}>{TO[k][0].toUpperCase() + TO[k].slice(1)}</option>)}
+                  {TO_KEYS.filter((k) => k !== 'assignees' || hasTask(d.trigger))
+                    .map((k) => <option key={k} value={k}>{TO_OPTIONS[k]}</option>)}
                 </Select>
               </Field>
-              <Field label="Message" hint="Facultatif : sinon, le nom de la règle et de la tâche.">
+              <Field label={t('settings2.auto.message')} hint={t('settings2.auto.messageHint')}>
                 <Input value={d.params.message ?? ''} onChange={(e) => setParam('message', e.target.value)} maxLength={300} />
               </Field>
             </div>
           )}
           {d.action === 'assign' && (
-            <Field label="Assigner à">
+            <Field label={t('settings2.auto.assignTo')}>
               <Select value={d.params.user_id ?? ''} onChange={(e) => setParam('user_id', e.target.value)}>
-                <option value="">Choisir une personne…</option>
+                <option value="">{t('settings2.auto.choosePerson')}</option>
                 {team.filter((m) => m.active).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </Select>
             </Field>
           )}
           {d.action === 'set_priority' && (
-            <Field label="Nouvelle priorité">
+            <Field label={t('settings2.auto.newPriority')}>
               <Select value={d.params.priority ?? 'high'} onChange={(e) => setParam('priority', e.target.value)}>
                 {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
             </Field>
           )}
           {d.action === 'move_column' && (
-            <Field label="Nom de la colonne" hint="Le nom exact, sans tenir compte des majuscules. Sans colonne de ce nom, rien ne bouge.">
+            <Field label={t('settings2.auto.columnName')} hint={t('settings2.auto.columnNameHint')}>
               <Input value={d.params.column_name ?? ''} onChange={(e) => setParam('column_name', e.target.value)} maxLength={100}
-                list="automation-columns" placeholder="À valider" />
+                list="automation-columns" placeholder={t('settings2.auto.columnPlaceholder')} />
               {project && <datalist id="automation-columns">{project.columns.map((c) => <option key={c.id} value={c.name} />)}</datalist>}
             </Field>
           )}
           {d.action === 'send_client_update' && (
-            <Field label="Mot d'accompagnement" hint="Facultatif. Le suivi part aux contacts du client qui le reçoivent.">
+            <Field label={t('settings2.auto.coverNote')} hint={t('settings2.auto.coverNoteHint')}>
               <Textarea rows={2} value={d.params.message ?? ''} onChange={(e) => setParam('message', e.target.value)} maxLength={2000} />
             </Field>
           )}
           {d.action === 'create_task' && (
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
-              <Field label="Titre de la tâche"><Input value={d.params.title ?? ''} onChange={(e) => setParam('title', e.target.value)} maxLength={500} /></Field>
-              <Field label="Échéance dans (jours)" hint="Vide : sans échéance.">
+              <Field label={t('settings2.auto.taskTitle')}><Input value={d.params.title ?? ''} onChange={(e) => setParam('title', e.target.value)} maxLength={500} /></Field>
+              <Field label={t('settings2.auto.dueIn')} hint={t('settings2.auto.dueInHint')}>
                 <Input inputMode="numeric" value={d.params.due_in_days ?? ''}
                   onChange={(e) => setParam('due_in_days', e.target.value === '' ? null : Number(e.target.value.replace(/\D/g, '')))} />
               </Field>
@@ -259,18 +262,18 @@ function AutomationDialog({ automation, onClose, onSaved }: { automation: Automa
           )}
         </fieldset>
 
-        <p className="bg-muted px-3 py-2 text-sm"><strong>{s.when}</strong>, alors {s.then}.</p>
+        <p className="bg-muted px-3 py-2 text-sm"><strong>{s.when}</strong>{t('settings2.auto.thenSuffix', { then: s.then })}</p>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Nom de la règle" hint="Facultatif : la phrase ci-dessus sinon.">
+          <Field label={t('settings2.auto.ruleNameLabel')} hint={t('settings2.auto.ruleNameHint')}>
             <Input value={d.name} onChange={(e) => set('name', e.target.value)} maxLength={120} />
           </Field>
-          <div className="flex items-end pb-2"><Checkbox label="Active" checked={d.active} onChange={(v) => set('active', v)} /></div>
+          <div className="flex items-end pb-2"><Checkbox label={t('settings2.auto.active')} checked={d.active} onChange={(v) => set('active', v)} /></div>
         </div>
         <ErrorNote error={error} />
       </form>
-      <Confirm open={removing} onClose={() => setRemoving(false)} title="Supprimer cette automatisation ?" danger confirmLabel="Supprimer" onConfirm={remove}>
-        La règle cesse de s'appliquer. Pour la suspendre, désactivez-la plutôt.
+      <Confirm open={removing} onClose={() => setRemoving(false)} title={t('settings2.auto.deleteTitle')} danger confirmLabel={t('common.delete')} onConfirm={remove}>
+        {t('settings2.auto.deleteText')}
       </Confirm>
     </Modal>
   )

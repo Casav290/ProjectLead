@@ -13,7 +13,7 @@ import { exchangeFailure, type Reader } from './crmlead.js'
  */
 
 const IL_COUNTRIES = new Set(['CH', 'LI', 'DE', 'FR', 'IT', 'AT'])
-const IL_LANGUAGES = new Set(['de', 'fr', 'it', 'en'])
+const IL_LANGUAGES = new Set(['de', 'fr', 'it', 'en', 'es'])
 
 const invoicelead = () => ({ app: 'invoicelead', url: appUrl('invoicelead') })
 
