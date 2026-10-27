@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import Layout from './components/Layout'
 import { Spinner, Toaster } from './components/ui'
+import { useI18n } from './i18n'
 import { alreadyInTarget } from './lib/arrival'
 import { AppProvider, useApp } from './lib/store'
 import Login from './pages/Login'
@@ -33,15 +34,15 @@ const Plans = lazy(() => import('./pages/Plans'))
 
 /** Les pages publiques s'ouvrent avec ou sans session : le client n'a pas de compte. */
 const PUBLIC = [
-  { path: '/suivi/:token', el: <Portal /> },
-  { path: '/rdv/gerer/:token', el: <BookingManage /> },
-  { path: '/rdv/:slug', el: <Booking /> },
-  { path: '/demande/:slug', el: <IntakeForm /> },
-  { path: '/invitation/:token', el: <Invitation /> },
-  { path: '/confidentialite', el: <Legal kind="privacy" /> },
-  { path: '/conditions', el: <Legal kind="terms" /> },
+  { path: '/suivi/:token', el: () => <Portal /> },
+  { path: '/rdv/gerer/:token', el: () => <BookingManage /> },
+  { path: '/rdv/:slug', el: () => <Booking /> },
+  { path: '/demande/:slug', el: () => <IntakeForm /> },
+  { path: '/invitation/:token', el: () => <Invitation /> },
+  { path: '/confidentialite', el: () => <Legal kind="privacy" /> },
+  { path: '/conditions', el: () => <Legal kind="terms" /> },
   // Les formules (« Voir les formules » d'un écran de refus « places ») : sans session aussi.
-  { path: '/formules', el: <Plans /> },
+  { path: '/formules', el: () => <Plans /> },
 ]
 
 /** /login (adresse d'entrée du lanceur) avec une session déjà ouverte : la page demandée (?next=), sinon l'accueil de l'espace. */
@@ -52,9 +53,12 @@ function AlreadyIn() {
 
 function Routed() {
   const { me, loading } = useApp()
+  const { adoptLocale } = useI18n()
+  // La langue du profil (reprise du Compte Lead) tant que la personne n'a rien choisi dans ce navigateur.
+  useEffect(() => { adoptLocale(me?.user.locale) }, [me?.user.locale, adoptLocale])
   const loc = useLocation()
   const isPublic = /^\/(suivi|rdv|demande|invitation)\/|^\/(confidentialite|conditions|formules)$/.test(loc.pathname)
-  if (isPublic) return <Routes>{PUBLIC.map((p) => <Route key={p.path} path={p.path} element={p.el} />)}</Routes>
+  if (isPublic) return <Routes>{PUBLIC.map((p) => <Route key={p.path} path={p.path} element={p.el()} />)}</Routes>
   if (loading) return <Spinner />
   if (!me) {
     return (
@@ -94,6 +98,8 @@ function Routed() {
 }
 
 export default function App() {
+  // Lire la langue ici redessine tout l'arbre à son changement, sans rien démonter : la saisie en cours reste.
+  useI18n()
   return (
     <AppProvider>
       <Suspense fallback={<Spinner />}>
