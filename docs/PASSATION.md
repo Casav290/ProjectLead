@@ -289,6 +289,18 @@ portes : `GATES-billing-followups.md` (L4 en local).
 - **Mise en ligne** : la migration 011 est additive et rejouable ; l'ancien code ignore `last_seen_at` (retour arrière :
   revenir au commit précédent de `vercel`).
 
+## Assistant IA : périmètre du logiciel et limite de la formule gratuite (29.10.2026, branche `ia-limites`)
+
+Demande d'Ève : l'assistant ne sert que ProjectLead (consigne du bloc stable : une phrase polie et une proposition,
+aucun outil, pour tout le reste) ; en formule gratuite, 200 000 jetons pondérés par mois civil et par entreprise,
+« l'équivalent de 10 demandes » (`server/lib/assistant/budget.ts`, seule source ; qui est limité : `planOf`). Budget
+atteint : 402 `free_limit` avant tout appel au modèle, la bulle dit quand il revient (« Voir les formules ») ; un
+compteur « il vous reste environ N demandes » pour les entreprises gratuites. Aucune migration (journal
+`assistant_usage` existant). Détail, tableau P1–P3 / L1–L8 et preuves : `docs/ASSISTANT-ACTIONS.md`, « Périmètre et
+limite gratuite (29.10.2026) ». Contrôles : `scripts/assistant-limites-check.ts`, portes `scripts/ia-limites-gates.mjs`
+(aperçu : `scripts/apercu-vercel.mjs --env-file ~/.projectlead-ia-limites-apercu.env`). Retour arrière : revenir au
+commit précédent de `vercel` (rien à remettre en base).
+
 ## Assistant IA : tout ce qu'il propose s'applique (27.10.2026, branche `assistant-actions`)
 
 Demande d'Ève (capture du 27.10, projet réel) : l'assistant répondait « Je ne peux pas créer d'étapes moi-même » puis

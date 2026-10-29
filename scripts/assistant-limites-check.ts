@@ -4,7 +4,7 @@
  * service de modèle local (scripts/assistant-fake.ts : aucune clé réelle, aucun appel extérieur), puis la vraie bulle
  * dans un navigateur sans tête (Playwright, lancé ici ; jamais un Chrome existant) sur l'application construite.
  *
- *   TEST_DATABASE_URL=… npx tsx scripts/assistant-limites-check.ts [--no-build]
+ *   TEST_DATABASE_URL=… npx tsx scripts/assistant-limites-check.ts [--no-build] [--sans-navigateur]
  *
  * 1. Constantes et calcul (sans base) : une seule source (budget.ts), jetons pondérés, compteur, mois civil UTC.
  * 2. Consigne (P1, P3 statique) : le périmètre dans le bloc STABLE mis en cache, rien dans le bloc variable.
@@ -15,6 +15,7 @@
  *
  * Chaque contrôle porte un libellé FIXE, cité dans docs/ASSISTANT-ACTIONS.md (« Périmètre et limite gratuite ») ; la
  * porte G1 de scripts/ia-limites-gates.mjs vérifie qu'il est imprimé « ✓ ». Dernière ligne : ASSISTANT_LIMITES_CHECK_OK.
+ * `--sans-navigateur` (contre-épreuves de G1 sur des copies fautives) : sans la partie 4, sans construire.
  */
 process.env.NO_LISTEN = '1'
 process.env.JOBS_DISABLED = '1'
@@ -96,7 +97,8 @@ check('P1 consigne : rien du périmètre dans le bloc variable (le cache du bloc
 
 // ================================================================== 3. le serveur
 console.log('3. Serveur')
-if (!process.argv.includes('--no-build')) {
+const NO_BROWSER = process.argv.includes('--sans-navigateur')
+if (!process.argv.includes('--no-build') && !NO_BROWSER) {
   const b = spawnSync('npx', ['vite', 'build', '--logLevel', 'error'], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 })
   check('application construite (vite build → dist/)', b.status === 0, (b.stdout + b.stderr).slice(-400))
 }
@@ -305,10 +307,10 @@ check('L7 ligne des formules « Assistant IA : l’équivalent de 10 demandes pa
   && LANGS.every((l) => (shell(l)['shell.plan.feature.assistant10'] ?? '').includes(` ${FREE_REQUESTS} `)) && new Set(LANGS.map((l) => shell(l)['shell.plan.feature.assistant10'])).size === 5)
 
 const { chromium } = createRequire('/usr/lib/node_modules/')('playwright')
-const browser = await chromium.launch()
+const browser = NO_BROWSER ? null : await chromium.launch()
 const errors: string[] = []
 async function open(cl: Client, lang = 'fr', ua?: string) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: 'fr-CH', ...(ua ? { userAgent: ua } : {}) })
+  const ctx = await browser!.newContext({ viewport: { width: 1280, height: 860 }, locale: 'fr-CH', ...(ua ? { userAgent: ua } : {}) })
   await ctx.addInitScript('window.__name = (f) => f')
   if (cl.cookie) await ctx.addCookies([{ name: 'projectlead_session', value: cl.cookie.split('=')[1], url: BASE }])
   await ctx.addInitScript((l: string) => { try { localStorage.setItem('pl.lang', l) } catch { /* */ } }, lang)
@@ -331,7 +333,7 @@ async function askUi(page: any, text: string) {
 }
 const textOf = async (page: any, sel: string) => (await page.locator(sel).count()) ? (await page.locator(sel).first().innerText()).trim() : null
 
-try {
+if (browser) try {
   // Une entreprise gratuite neuve, vue dans la bulle.
   const K = await company('Kim')
   await pose(K.id, 45_000)
@@ -432,7 +434,7 @@ try {
 } finally {
   await browser.close()
 }
-check('bulle et formules : aucune erreur JavaScript', !errors.length, errors)
+if (browser) check('bulle et formules : aucune erreur JavaScript', !errors.length, errors)
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
 fake.close()

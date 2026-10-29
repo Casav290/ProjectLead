@@ -11,7 +11,10 @@
  * ~/projets/.unlazy/audit-suite-20261021/projectlead-deploy.lock est pris pendant le déploiement. L'adresse obtenue est
  * écrite dans le même fichier (PL_PREVIEW_URL) et le commit dans les métadonnées du déploiement (meta.commit).
  *
- *   node scripts/apercu-vercel.mjs
+ *   node scripts/apercu-vercel.mjs [--env-file <fichier>]
+ *
+ * `--env-file` : un autre fichier du même genre, pour un autre chantier (périmètre et limite gratuite de l'assistant,
+ * 29.10.2026 : ~/.projectlead-ia-limites-apercu.env, même base d'aperçu) ; son adresse y est écrite, pas dans celui-ci.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -20,7 +23,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const ENV_FILE = join(homedir(), '.projectlead-actions-apercu.env')
+const flag = process.argv.indexOf('--env-file')
+const ENV_FILE = flag > 0 ? process.argv[flag + 1].replace(/^~(?=\/)/, homedir()) : join(homedir(), '.projectlead-actions-apercu.env')
 const LOCK = join(homedir(), 'projets/.unlazy/audit-suite-20261021/projectlead-deploy.lock')
 const TEAM = 'team_mRhlABdvm1jvEPoDzuDDgpon', PROJECT = 'prj_RZassmsoXK1Q7DuHZQAEsOh06kif'
 
@@ -37,7 +41,7 @@ const commit = git('rev-parse', 'HEAD'), branch = git('rev-parse', '--abbrev-ref
 mkdirSync(dirname(LOCK), { recursive: true })
 let fd
 try { fd = openSync(LOCK, 'wx') } catch { throw new Error(`verrou pris : ${LOCK} (${readFileSync(LOCK, 'utf8').trim()})`) }
-writeFileSync(fd, `aperçu assistant-actions ${commit.slice(0, 7)} ${new Date().toISOString()} pid ${process.pid}\n`)
+writeFileSync(fd, `aperçu ${branch} ${commit.slice(0, 7)} ${new Date().toISOString()} pid ${process.pid}\n`)
 closeSync(fd)
 
 const dir = mkdtempSync(join(tmpdir(), 'pl-apercu-'))
