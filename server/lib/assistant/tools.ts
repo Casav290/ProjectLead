@@ -30,7 +30,9 @@ export type ConfirmAction = { type: 'confirm'; token: string; summary: Summary }
 export type NavigateAction = { type: 'navigate'; path: string }
 export type AssistantAction = ConfirmAction | NavigateAction
 
-export type ToolScope = { cookie: string; ctx: Ctx; actions: AssistantAction[]; used: string[]; today: string; locale?: Locale }
+export type ToolScope = { cookie: string; ctx: Ctx; actions: AssistantAction[]; used: string[]; today: string; locale?: Locale
+  /** Le fuseau de l'entreprise (heures des rendez-vous sur la carte). */
+  timezone?: string }
 
 const MAX_ROWS = 50
 const UUID = z.string().uuid()
@@ -58,6 +60,10 @@ const TRIGGER_K: Record<string, string> = { task_completed: 'assistant.card.trig
   stage_completed: 'assistant.card.trigger.stage_completed', task_created: 'assistant.card.trigger.task_created', project_completed: 'assistant.card.trigger.project_completed' }
 const ACTION_K: Record<string, string> = { notify: 'assistant.card.action.notify', assign: 'assistant.card.action.assign', set_priority: 'assistant.card.action.set_priority',
   move_column: 'assistant.card.action.move_column', complete_stage: 'assistant.card.action.complete_stage', create_task: 'assistant.card.action.create_task' }
+const VAT_K: Record<string, string> = { normal: 'assistant.card.vatCode.normal', reduced: 'assistant.card.vatCode.reduced', lodging: 'assistant.card.vatCode.lodging',
+  exempt: 'assistant.card.vatCode.exempt', export: 'assistant.card.vatCode.export' }
+const AUTO_TO_K: Record<string, string> = { owner: 'assistant.card.autoTo.owner', members: 'assistant.card.autoTo.members', assignees: 'assistant.card.autoTo.assignees' }
+const KIND_K: Record<string, string> = { company: 'assistant.card.kind.company', person: 'assistant.card.kind.person' }
 const DAY_K = ['assistant.card.day.1', 'assistant.card.day.2', 'assistant.card.day.3', 'assistant.card.day.4', 'assistant.card.day.5', 'assistant.card.day.6', 'assistant.card.day.7']
 const CLIENT_FIELD_K: Record<string, string> = { name: 'assistant.card.clientField.name', kind: 'assistant.card.clientField.kind',
   contact_person: 'assistant.card.clientField.contact_person', email: 'assistant.card.clientField.email', phone: 'assistant.card.clientField.phone',
@@ -173,7 +179,22 @@ export function buildTools(s: ToolScope) {
     return (iso.slice(0, 4) === year ? fmtShort : fmtYear).format(d)
   }
   const span = (a: string, b: string) => (a === b ? D(a) : `${D(a)} → ${D(b)}`)
-  const when = (iso: string) => new Intl.DateTimeFormat(INTL[l], { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Zurich' }).format(new Date(iso))
+  // L'heure d'un rendez-vous dans le fuseau de l'entreprise (comme l'Agenda), la date dans le format de la langue.
+  const when = (iso: string) => {
+    const opts = { dateStyle: 'medium', timeStyle: 'short' } as const
+    try { return new Intl.DateTimeFormat(INTL[l], { ...opts, timeZone: s.timezone || 'Europe/Zurich' }).format(new Date(iso)) }
+    catch { return new Intl.DateTimeFormat(INTL[l], { ...opts, timeZone: 'Europe/Zurich' }).format(new Date(iso)) }
+  }
+  /** Un pays en toutes lettres dans la langue de la personne (CH → Suisse, Schweiz, Switzerland…). */
+  const region = (code: unknown) => {
+    if (typeof code !== 'string' || !code) return '—'
+    try { return new Intl.DisplayNames([INTL[l]], { type: 'region' }).of(code) ?? code } catch { return code }
+  }
+  /** La valeur d'un champ d'une fiche client, lisible (genre, pays, langue en toutes lettres). */
+  const clientValue = (field: string, v: unknown) => (v == null || v === '' ? '—'
+    : field === 'kind' && KIND_K[String(v)] ? L(KIND_K[String(v)])
+      : field === 'country' ? region(v)
+        : field === 'language' && LANG_K[String(v)] ? L(LANG_K[String(v)]) : clip(String(v), 120))
   const money = (cents: number | null | undefined, cur = 'CHF') => (cents == null ? L('assistant.card.none')
     : `${cur} ${(cents / 100).toLocaleString(INTL[l], { minimumFractionDigits: cents % 100 ? 2 : 0 })}`)
   const noun = (key: string, n: number) => L(key, { n })
@@ -468,7 +489,7 @@ export function buildTools(s: ToolScope) {
     a.retainer_cents !== undefined && L('assistant.card.retainer', { value: money(a.retainer_cents, cur) }),
     a.fixed_cents !== undefined && L('assistant.card.fixed', { value: money(a.fixed_cents, cur) }),
     a.budget_cents !== undefined && L('assistant.card.budgetAmount', { value: money(a.budget_cents, cur) }),
-    a.currency && L('assistant.card.currency', { value: a.currency }), a.vat_code && L('assistant.card.vat', { value: a.vat_code }),
+    a.currency && L('assistant.card.currency', { value: a.currency }), a.vat_code && L('assistant.card.vat', { value: L(VAT_K[a.vat_code]) }),
     a.doc_locale !== undefined && L('assistant.card.docLocale', { value: a.doc_locale ? L(LANG_K[a.doc_locale]) : L('assistant.card.companyLanguage') })]
 
   write({
@@ -805,7 +826,8 @@ export function buildTools(s: ToolScope) {
       lines: [L('assistant.card.clientKind', { name: a.name, kind: L(a.kind === 'person' ? 'assistant.card.kind.person' : 'assistant.card.kind.company') }),
         a.contact_person && L('assistant.card.contactPerson', { name: a.contact_person }),
         a.email && L('assistant.card.email', { value: a.email }), a.phone && L('assistant.card.phone', { value: a.phone }), addressLine(a),
-        L('assistant.card.country', { value: a.country }), a.vat_number && L('assistant.card.vatNumber', { value: a.vat_number })],
+        L('assistant.card.country', { value: region(a.country) }), L('assistant.card.clientLanguage', { value: L(LANG_K[a.language]) }),
+        a.vat_number && L('assistant.card.vatNumber', { value: a.vat_number })],
       short: a.name, open: '/clients/@client',
     }),
   })
@@ -821,7 +843,7 @@ export function buildTools(s: ToolScope) {
       if (!c) return { error: 'client_not_found' }
       return { title: L('assistant.card.title.updateClient'), ops: [{ method: 'PATCH', path: `/api/clients/${client_id}`, body: patch }],
         lines: [L('assistant.card.clientName', { name: c.name }), ...Object.entries(patch).map(([k, v]) => L('assistant.card.fieldChanged', {
-          field: CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k, value: clip(String(v), 120), old: clip(String(c[k] ?? '—'), 60) }))],
+          field: CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k, value: clientValue(k, v), old: clip(String(clientValue(k, c[k])), 60) }))],
         short: `${c.name} : ${Object.keys(patch).map((k) => (CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k)).join(', ')}`, open: `/clients/${client_id}` }
     },
   })
@@ -1037,22 +1059,38 @@ export function buildTools(s: ToolScope) {
       params: z.record(z.string(), z.unknown()).optional(), active: z.boolean().optional(),
     }),
     build: async ({ automation_id, ...a }) => {
+      // Une modification : l'automatisation telle qu'elle est (jamais une qui écrit au client).
+      let au: any = null
+      if (automation_id) {
+        const r = await get('/api/automations')
+        au = r.status === 200 ? r.body.find((x: any) => x.id === automation_id) : null
+        if (!au) return { error: 'automation_not_found' }
+        if (au.action === 'send_client_update') return { error: 'forbidden_category', hint: 'automatisation qui écrit au client : à régler dans l’écran' }
+        if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      } else if (!a.name || !a.trigger || !a.action) return { error: 'name_trigger_action_required' }
       let pName: string | null = null
       if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
+      // « Alors … » : la même phrase que l'écran Réglages → Automatisations, dans la langue de la personne.
+      const action: string = a.action ?? au?.action
+      const p: Record<string, any> = a.params ?? (a.action ? {} : au?.params ?? {})
+      const people = [...(Array.isArray(p.user_ids) ? p.user_ids : []), ...(typeof p.user_id === 'string' ? [p.user_id] : [])]
+      if (people.some((id) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) || (await unknownPeople(people)).length) return { error: 'unknown_person', hint: 'ids de list_team, personnes actives' }
+      const then = async () => {
+        if (action === 'notify') return L('assistant.card.autoThen.notify', { to: p.to && AUTO_TO_K[p.to] ? L(AUTO_TO_K[p.to])
+          : people.length ? await peopleNames(people) : L('assistant.card.autoTo.team') })
+        if (action === 'assign') return L('assistant.card.autoThen.assign', { name: (await peopleNames(people)) || '…' })
+        if (action === 'set_priority') return L('assistant.card.autoThen.setPriority', { priority: PRIORITY_K[p.priority] ? L(PRIORITY_K[p.priority]).toLowerCase() : '…' })
+        if (action === 'move_column') return L('assistant.card.autoThen.moveColumn', { name: p.column_name || '…' })
+        if (action === 'create_task') return L('assistant.card.autoThen.createTask', { title: p.title || '…' })
+          + (p.due_in_days != null ? L('assistant.card.autoThen.createTaskDue', { n: p.due_in_days }) : '')
+        return ACTION_K[action] ? L(ACTION_K[action]) : action
+      }
       const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.trigger && L('assistant.card.when', { value: L(TRIGGER_K[a.trigger]) }),
-        a.action && L('assistant.card.then', { value: L(ACTION_K[a.action]) }),
-        a.params && Object.keys(a.params).length && L('assistant.card.params', { value: clip(JSON.stringify(a.params), 160) }),
+        (a.action || a.params) && L('assistant.card.then', { value: await then() }),
+        action === 'notify' && typeof p.message === 'string' && p.message && L('assistant.card.autoMessage', { text: clip(p.message, 160) }),
         a.project_id !== undefined && L('assistant.card.project', { name: pName ?? L('assistant.card.allProjects') }),
         a.active !== undefined && L('assistant.card.active', { value: yesNo(a.active) })]
-      if (!automation_id) {
-        if (!a.name || !a.trigger || !a.action) return { error: 'name_trigger_action_required' }
-        return { title: L('assistant.card.title.createAutomation'), ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, short: q(a.name), open: '/reglages/automatisations' }
-      }
-      const r = await get('/api/automations')
-      const au = r.status === 200 ? r.body.find((x: any) => x.id === automation_id) : null
-      if (!au) return { error: 'automation_not_found' }
-      if (au.action === 'send_client_update') return { error: 'forbidden_category', hint: 'automatisation qui écrit au client : à régler dans l’écran' }
-      if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      if (!au) return { title: L('assistant.card.title.createAutomation'), ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, short: q(a.name), open: '/reglages/automatisations' }
       return { title: L('assistant.card.title.updateAutomation'), ops: [{ method: 'PATCH', path: `/api/automations/${automation_id}`, body: a }],
         lines: [L('assistant.card.automation', { name: au.name }), ...lines], short: q(au.name), open: '/reglages/automatisations' }
     },

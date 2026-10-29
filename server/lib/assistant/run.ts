@@ -85,6 +85,33 @@ const NOUNS: [RegExp, string][] = [
   [/^POST \/api\/calendar\/events$/, 'assistant.noun.event'],
 ]
 
+/**
+ * Ce qu'une écriture seule sur sa carte (mode `route` : une autre application, une synchronisation) a VRAIMENT fait. Ces
+ * routes répondent 200 même quand rien n'a abouti (facturation : un résultat par projet ; synchronisation : `ok: false`) :
+ * la carte ne dit « fait » que si quelque chose a été fait, et dit quoi. `ok: false` : rien n'a abouti.
+ */
+export function routeOutcome(op: WriteOp, body: any, l: string = 'fr'): { ok: boolean; line: string | null; code?: string } {
+  const label = opLabel(op)
+  const sep = l === 'fr' ? ' ; ' : '; '
+  if (label === 'POST /api/integrations/billing/run') {
+    const res: any[] = Array.isArray(body?.results) ? body.results : []
+    if (!res.length) return { ok: true, line: tr(l, 'assistant.outcome.billingNone') }
+    const count = (s: string) => res.filter((x) => x?.status === s).length
+    const created = count('created'), skipped = count('skipped'), empty = count('empty'), errors = count('error')
+    if (!created && errors) return { ok: false, line: tr(l, 'assistant.outcome.billingFailed', { n: errors }), code: 'billing_failed' }
+    const parts = [created && tr(l, 'assistant.outcome.billingCreated', { n: created }), skipped && tr(l, 'assistant.outcome.billingSkipped', { n: skipped }),
+      empty && tr(l, 'assistant.outcome.billingEmpty', { n: empty }), errors && tr(l, 'assistant.outcome.billingErrors', { n: errors })].filter(Boolean)
+    return { ok: true, line: `${parts.join(sep)}.` }
+  }
+  if (label === 'POST /api/calendar/feeds/:id/sync' || label === 'POST /api/mail/mailboxes/:id/sync') {
+    if (body?.ok === false || (typeof body?.error === 'string' && body.error)) return { ok: false, line: tr(l, 'assistant.outcome.syncFailed'), code: 'sync_failed' }
+    const n = label.includes('calendar') ? body?.count : body?.imported
+    if (typeof n !== 'number') return { ok: true, line: null }
+    return { ok: true, line: `${tr(l, label.includes('calendar') ? 'assistant.outcome.syncEvents' : 'assistant.outcome.syncEmails', { n })}.` }
+  }
+  return { ok: true, line: null }
+}
+
 /** « Créé : 7 étapes, 24 tâches (dont 2 jalons), 18 dépendances ; dates du projet posées. », dans la langue `l`. */
 export function doneLine(ops: WriteOp[], l: string = 'fr'): string {
   const counts = new Map<string, number>()

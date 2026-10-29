@@ -8,7 +8,7 @@ import { localDay } from '../lib/time.js'
 import { asLocale, isLocale, tr } from '../lib/i18n.js'
 import { dynamicSystem, STABLE_SYSTEM } from '../lib/assistant/prompt.js'
 import { completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
-import { doneLine, OpFailure, runOps } from '../lib/assistant/run.js'
+import { doneLine, OpFailure, routeOutcome, runOps } from '../lib/assistant/run.js'
 import { buildTools, pageAllowed, type AssistantAction } from '../lib/assistant/tools.js'
 import { MAX_TOKEN_CHARS, opAllowed, opLabel, verifyConfirm } from '../lib/assistant/token.js'
 
@@ -79,7 +79,7 @@ app.post('/', async (c) => {
 
   const actions: AssistantAction[] = []
   const used: string[] = []
-  const tools = buildTools({ cookie: sessionCookie(c), ctx, actions, used, today: day.date, locale: l })
+  const tools = buildTools({ cookie: sessionCookie(c), ctx, actions, used, today: day.date, locale: l, timezone: tz })
   const history: Anthropic.Beta.BetaMessageParam[] = clean(b.messages as Anthropic.Beta.BetaMessageParam[])
   const started = Date.now()
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }
@@ -190,10 +190,14 @@ app.post('/confirm', async (c) => {
     [p.n, ctx.accountId, ctx.userId])).rowCount
   const used = () => new HttpError(403, 'token_used')
   let ids: Record<string, string> = {}
+  let outcome: ReturnType<typeof routeOutcome> = { ok: true, line: null }
   try {
     if (p.mode === 'route') {
       if (!(await withTenant(ctx, nonce))) throw used()
-      ids = (await runOps(sessionCookie(c), ctx, p.ops, 'route')).ids
+      const run = await runOps(sessionCookie(c), ctx, p.ops, 'route')
+      ids = run.ids
+      // La route a répondu 200 : a-t-elle vraiment abouti (facturation par projet, synchronisation) ?
+      outcome = routeOutcome(p.ops[0], run.results[0]?.body, l)
     } else {
       ids = (await runOps(sessionCookie(c), ctx, p.ops, 'tx', { first: async (db) => { if (!(await nonce(db))) throw used() } })).ids
     }
@@ -209,6 +213,11 @@ app.post('/confirm', async (c) => {
     await logConfirm(ctx, tool, String((e as Error)?.message ?? 'error').slice(0, 80))
     throw e
   }
+  if (!outcome.ok) {
+    // Le jeton est consommé (la route a été appelée) mais rien n'a abouti : la carte le dit, sans « fait ».
+    await logConfirm(ctx, tool, outcome.code ?? 'route_not_done')
+    return c.json({ ok: false, error: outcome.code ?? 'route_not_done', message: outcome.line }, 502)
+  }
   await logConfirm(ctx, tool, null)
   // La page à ouvrir et les liens de la carte, références remplacées par les identifiants créés.
   const at = (path: string | null | undefined) => {
@@ -218,7 +227,8 @@ app.post('/confirm', async (c) => {
   }
   const links = (p.links ?? []).map((l) => ({ label: l.label, path: at(l.path) })).filter((l): l is { label: string; path: string } => Boolean(l.path))
   const done = tr(l, 'assistant.confirmed', { title: p.summary.title })
-  const message = p.ops.length === 1 ? done : `${done} ${doneLine(p.ops, l)}`
+  const message = p.mode === 'route' ? (outcome.line ? `${done} ${outcome.line}` : done)
+    : p.ops.length === 1 ? done : `${done} ${doneLine(p.ops, l)}`
   // La langue de l'interface vient de changer : l'écran la prend sur place (comme le sélecteur de langue).
   const locale = p.ops.find((op) => op.method === 'POST' && op.path === '/api/me/locale')?.body.locale
   return c.json({ ok: true, message, path: at(p.open), links, ...(typeof locale === 'string' ? { locale } : {}) })
