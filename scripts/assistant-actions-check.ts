@@ -504,8 +504,8 @@ await cycle('propose_update_client', ann, 'propose_update_client', { client_id: 
   async () => { const c = await one('select town, postal_code from clients where id = $1', [cli]); return c?.town === 'Fribourg' && c.postal_code === '1700' })
 // Les cartes en toutes lettres, dans la langue de l'interface : pays, langue, genre, avant → après (jamais « DE », « de »).
 const cliFr = await ask(ann, 'propose_update_client', { client_id: cli, country: 'DE', language: 'de', kind: 'person' })
-check('carte client (fr) : pays, langue et genre en toutes lettres, avec l’avant', JSON.stringify(cliFr.card?.summary.lines.slice(1))
-  === JSON.stringify(['Genre : personne (avant : entreprise)', 'Pays : Allemagne (avant : Suisse)', 'Langue : allemand (avant : français)']), cliFr.card?.summary.lines)
+check('carte client (fr) : pays, langue et genre en toutes lettres, avant → après', JSON.stringify(cliFr.card?.summary.lines.slice(1))
+  === JSON.stringify(['Genre : entreprise → personne', 'Pays : Suisse → Allemagne', 'Langue : français → allemand']), cliFr.card?.summary.lines)
 const cliEn = await ask(ann, 'propose_create_client', { name: `Client EN ${stamp}`, country: 'AT', language: 'it' }, 'en')
 check('carte client (en) : « Country: Austria », « Language: Italian »', Boolean(cliEn.card?.summary.lines.includes('Country: Austria'))
   && Boolean(cliEn.card?.summary.lines.includes('Language: Italian')), cliEn.card?.summary.lines)

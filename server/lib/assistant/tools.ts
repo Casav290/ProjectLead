@@ -5,6 +5,7 @@ import { tr, type Locale } from '../i18n.js'
 import { callApi } from './internal.js'
 import { OpFailure, runOps } from './run.js'
 import { schedulePlan, workdayFrom, workdaysBetween } from './schedule.js'
+import { labelOf } from './pages.js'
 import { MAX_OPS, opAllowed, signConfirm, type Mode, type Summary, type SummaryGroup, type WriteOp } from './token.js'
 
 /**
@@ -27,7 +28,8 @@ import { MAX_OPS, opAllowed, signConfirm, type Mode, type Summary, type SummaryG
  */
 
 export type ConfirmAction = { type: 'confirm'; token: string; summary: Summary }
-export type NavigateAction = { type: 'navigate'; path: string }
+/** `label` : le nom de l'écran (« Réglages › Équipe ») ; la bulle écrit « Page ouverte : <label> », jamais le chemin. */
+export type NavigateAction = { type: 'navigate'; path: string; label: string }
 export type AssistantAction = ConfirmAction | NavigateAction
 
 export type ToolScope = { cookie: string; ctx: Ctx; actions: AssistantAction[]; used: string[]; today: string; locale?: Locale
@@ -178,7 +180,8 @@ export function buildTools(s: ToolScope) {
     const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`)
     return (iso.slice(0, 4) === year ? fmtShort : fmtYear).format(d)
   }
-  const span = (a: string, b: string) => (a === b ? D(a) : `${D(a)} → ${D(b)}`)
+  // Un intervalle en mots (« du … au … ») : sur une carte, la flèche « → » ne dit que « avant → après » (B7).
+  const span = (a: string, b: string) => (a === b ? D(a) : L('assistant.card.range', { start: D(a), due: D(b) }))
   // L'heure d'un rendez-vous dans le fuseau de l'entreprise (comme l'Agenda), la date dans le format de la langue.
   const when = (iso: string) => {
     const opts = { dateStyle: 'medium', timeStyle: 'short' } as const
@@ -325,7 +328,7 @@ export function buildTools(s: ToolScope) {
       if ((await unknownPeople(patch.assignee_ids)).length) return { error: 'unknown_person' }
       const nobody = L('assistant.card.nobody'), noStage = L('assistant.card.noStage')
       const changes: Line[] = [
-        patch.title && L('assistant.card.newTitle', { title: patch.title }),
+        patch.title && L('assistant.card.titleChanged', { value: q(patch.title), old: q(t.title) }),
         patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') }),
         patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(t.start_date) }),
         patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(t.due_date) }),
@@ -333,7 +336,8 @@ export function buildTools(s: ToolScope) {
         patch.assignee_ids && L('assistant.card.assigneesChanged', { value: (await peopleNames(patch.assignee_ids)) || nobody,
           old: t.assignees.map((x: any) => x.name).join(', ') || nobody }),
         patch.completed !== undefined && L(patch.completed ? 'assistant.card.complete' : 'assistant.card.reopen'),
-        patch.estimate_minutes !== undefined && L('assistant.card.estimate', { value: patch.estimate_minutes == null ? L('assistant.card.noneF') : hm(patch.estimate_minutes) }),
+        patch.estimate_minutes !== undefined && L('assistant.card.estimateChanged', { value: patch.estimate_minutes == null ? L('assistant.card.noneF') : hm(patch.estimate_minutes),
+          old: t.estimate_minutes == null ? L('assistant.card.noneF') : hm(t.estimate_minutes) }),
         patch.stage_id !== undefined && L('assistant.card.stageChanged', { value: stageName ?? noStage, old: t.stage_name ?? noStage }),
         colName && L('assistant.card.columnChanged', { value: colName, old: t.column_name ?? '—' }),
         patch.is_milestone !== undefined && L(patch.is_milestone ? 'assistant.card.becomesMilestone' : 'assistant.card.notMilestone'),
@@ -544,16 +548,17 @@ export function buildTools(s: ToolScope) {
       return {
         title: L(p.is_template ? 'assistant.card.title.updateTemplate' : 'assistant.card.title.updateProject'),
         ops: [{ method: 'PATCH', path: `/api/projects/${project_id}`, body: patch }],
-        lines: [L('assistant.card.project', { name: p.name }), patch.name && L('assistant.card.newName', { name: patch.name }),
+        lines: [L('assistant.card.project', { name: p.name }), patch.name && L('assistant.card.nameChanged', { value: q(patch.name), old: q(p.name) }),
           patch.code !== undefined && L('assistant.card.code', { value: patch.code ?? L('assistant.card.none') }),
           patch.color && L('assistant.card.color', { value: patch.color }),
           patch.client_id !== undefined && L('assistant.card.clientChanged', { value: cl ?? L('assistant.card.none'), old: p.client?.name ?? L('assistant.card.none') }),
           patch.status && L('assistant.card.statusChanged', { value: L(STATUS_K[patch.status]), old: STATUS_K[p.status] ? L(STATUS_K[p.status]) : p.status }),
           patch.health && L('assistant.card.healthChanged', { value: L(HEALTH_K[patch.health]), old: HEALTH_K[p.health] ? L(HEALTH_K[p.health]) : p.health }),
-          patch.priority && L('assistant.card.priority', { value: L(PRIORITY_K[patch.priority]) }),
+          patch.priority && L('assistant.card.priorityChanged', { value: L(PRIORITY_K[patch.priority]), old: PRIORITY_K[p.priority] ? L(PRIORITY_K[p.priority]) : p.priority }),
           patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(p.start_date) }),
           patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(p.due_date) }),
-          patch.budget_minutes !== undefined && L('assistant.card.budgetHoursSet', { value: patch.budget_minutes == null ? L('assistant.card.none') : hm(patch.budget_minutes) }),
+          patch.budget_minutes !== undefined && L('assistant.card.budgetHoursChanged', { value: patch.budget_minutes == null ? L('assistant.card.none') : hm(patch.budget_minutes),
+            old: p.budget_minutes == null ? L('assistant.card.none') : hm(p.budget_minutes) }),
           ...billingLines(patch, patch.currency ?? p.currency ?? 'CHF'),
           patch.portal_show_tasks !== undefined && L('assistant.card.portalTasks', { value: yesNo(patch.portal_show_tasks) }),
           patch.portal_show_time !== undefined && L('assistant.card.portalTime', { value: yesNo(patch.portal_show_time) }),
@@ -636,7 +641,7 @@ export function buildTools(s: ToolScope) {
       const p = await project(project_id)
       const st = p?.stages.find((x: any) => x.id === stage_id)
       if (!st) return { error: 'stage_not_found' }
-      const changes: Line[] = [patch.name && L('assistant.card.newName', { name: patch.name }),
+      const changes: Line[] = [patch.name && L('assistant.card.nameChanged', { value: q(patch.name), old: q(st.name) }),
         patch.status && L('assistant.card.stageStatusChanged', { value: L(STAGE_K[patch.status]), old: STAGE_K[st.status] ? L(STAGE_K[st.status]) : st.status }),
         patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(st.start_date) }),
         patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(st.due_date) }),
@@ -664,7 +669,7 @@ export function buildTools(s: ToolScope) {
       return { title: L(kind === 'stages' ? 'assistant.card.title.reorderStages' : 'assistant.card.title.reorderColumns'),
         ops: [{ method: 'POST', path: `/api/projects/${project_id}/${kind}/order`, body: { ids } }],
         lines: [L('assistant.card.project', { name: p.name }), ...names.map((x: string, i: number) => `${i + 1}. ${x}`)],
-        short: `${p.name} : ${names.join(' → ')}`, open: `/projets/${project_id}/${kind === 'stages' ? 'etapes' : 'tableau'}` }
+        short: `${p.name} : ${names.join(', ')}`, open: `/projets/${project_id}/${kind === 'stages' ? 'etapes' : 'tableau'}` }
     },
   })
 
@@ -687,7 +692,7 @@ export function buildTools(s: ToolScope) {
       if (!col) return { error: 'column_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
       return { title: L('assistant.card.title.updateColumn'), ops: [{ method: 'PATCH', path: `/api/projects/columns/${column_id}`, body: a }],
-        lines: [L('assistant.card.columnOf', { name: col.name, project: p.name }), a.name && L('assistant.card.newName', { name: a.name }),
+        lines: [L('assistant.card.columnOf', { name: col.name, project: p.name }), a.name && L('assistant.card.nameChanged', { value: q(a.name), old: q(col.name) }),
           a.is_done !== undefined && L('assistant.card.doneTasks', { value: yesNo(a.is_done) }),
           a.wip_limit !== undefined && L('assistant.card.wipChanged', { value: a.wip_limit ?? L('assistant.card.noneF') })],
         short: q(col.name), open: `/projets/${project_id}/tableau` }
@@ -1666,8 +1671,10 @@ export function buildTools(s: ToolScope) {
       run: async ({ path }) => {
         mark('open_page')
         if (!pageAllowed(path)) return out({ error: 'unknown_page' })
-        if (!s.actions.some((x) => x.type === 'navigate')) s.actions.push({ type: 'navigate', path })
-        return out({ opened: path })
+        // Le modèle reçoit le NOM de l'écran, jamais le chemin (alignement des bulles, B5) : il l'annonce tel quel.
+        const label = await labelOf(s.cookie, path, l)
+        if (!s.actions.some((x) => x.type === 'navigate')) s.actions.push({ type: 'navigate', path, label })
+        return out({ opened: label, note: 'Écran ouvert. Annonce-le en une courte phrase par ce nom, sans chemin ni adresse.' })
       },
     }),
   ]

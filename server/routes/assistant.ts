@@ -9,6 +9,7 @@ import { asLocale, isLocale, tr } from '../lib/i18n.js'
 import { dynamicSystem, STABLE_SYSTEM } from '../lib/assistant/prompt.js'
 import { completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
 import { doneLine, OpFailure, routeOutcome, runOps } from '../lib/assistant/run.js'
+import { labelOf, scrubPaths } from '../lib/assistant/pages.js'
 import { buildTools, pageAllowed, type AssistantAction } from '../lib/assistant/tools.js'
 import { MAX_TOKEN_CHARS, opAllowed, opLabel, verifyConfirm } from '../lib/assistant/token.js'
 
@@ -29,8 +30,15 @@ export const MODEL = 'claude-opus-5-5'
 // au plus (cahier du 27.10.2026, A6). Le tour reste sous la durée de la fonction Vercel (300 s, formule Hobby + Fluid).
 export const MAX_TOKENS = 16_000
 export const MAX_ITERATIONS = 10
-export const REQUEST_TIMEOUT_MS = 170_000
-export const TURN_TIMEOUT_MS = 250_000
+/**
+ * Délai global du tour (alignement des bulles, 28.10.2026, B1) : UN signal pour tout le tour (tous les appels au modèle
+ * et les outils), la durée de la fonction Vercel (maxDuration 300 s, scripts/vercel-build.mjs) moins 10 s pour répondre
+ * et journaliser. Le client du modèle : 1 nouvel essai au plus, délai d'un appel = celui du tour.
+ */
+export const MAX_DURATION_MS = 300_000
+export const TURN_TIMEOUT_MS = 290_000
+/** Les contrôles le raccourcissent (faux service lent) ; jamais au-delà de TURN_TIMEOUT_MS. */
+export const turnTimeoutMs = () => Math.min(TURN_TIMEOUT_MS, Number(process.env.ASSISTANT_TURN_TIMEOUT_MS) || TURN_TIMEOUT_MS)
 
 export const assistantConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY)
 
@@ -49,16 +57,77 @@ const chatSchema = z.object({
 
 const sessionCookie = (c: any) => `${SESSION_COOKIE}=${getCookie(c, SESSION_COOKIE) ?? ''}`
 
+/**
+ * Même origine (B13) : une page d'un autre site ne parle pas à l'assistant et ne confirme aucune carte. Le navigateur dit
+ * d'où vient la requête (`Origin`, `Sec-Fetch-Site`) ; on compare des HÔTES (derrière Vercel, l'adresse vue par la
+ * fonction n'a pas le bon schéma). Sans ces en-têtes (scripts, appels internes), rien à comparer.
+ */
+export function sameOrigin(c: any): boolean {
+  const site = c.req.header('sec-fetch-site')
+  if (site && site !== 'same-origin' && site !== 'none') return false
+  const origin = c.req.header('origin')
+  if (!origin) return true
+  let from: string
+  try { from = new URL(origin).host } catch { return false }
+  const here = c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host
+  if (from === here) return true
+  try { return Boolean(process.env.PUBLIC_URL) && new URL(process.env.PUBLIC_URL!).host === from } catch { return false }
+}
+app.use('*', async (c, next) => {
+  if (c.req.method === 'POST' && !sameOrigin(c)) {
+    throw new HttpError(403, 'origin', { message: tr(asLocale(c.get('locale')), 'assistant.error.origin') })
+  }
+  await next()
+})
+
+/**
+ * Ce qui a fait échouer le tour (B1, B3), par `instanceof` et par le signal du délai, jamais par le nom des classes (la
+ * minification le change) :
+ * - timeout : le délai du tour est passé (signal abandonné) ou un appel a dépassé le délai du client ;
+ * - history : le service refuse le fil (400) : seule une nouvelle conversation le débloque ;
+ * - busy : service saturé (429, 529) ;
+ * - upstream : toute autre panne.
+ */
+export function failureOf(e: unknown, deadline: AbortSignal): { kind: 'timeout' | 'history' | 'busy' | 'upstream'; code: string } {
+  if (deadline.aborted || e instanceof Anthropic.APIConnectionTimeoutError) return { kind: 'timeout', code: 'timeout' }
+  if (e instanceof Anthropic.BadRequestError) return { kind: 'history', code: 'api_400' }
+  if (e instanceof Anthropic.RateLimitError) return { kind: 'busy', code: 'rate_limited' }
+  if (e instanceof Anthropic.APIError && e.status === 529) return { kind: 'busy', code: 'api_529' }
+  if (e instanceof Anthropic.APIError) return { kind: 'upstream', code: `api_${e.status ?? 'error'}` }
+  return { kind: 'upstream', code: String((e as Error)?.message ?? 'error').slice(0, 80) }
+}
+const FAILURE: Record<ReturnType<typeof failureOf>['kind'], [number, string]> = {
+  timeout: [504, 'assistant_timeout'], history: [400, 'assistant_history'], busy: [503, 'assistant_busy'], upstream: [502, 'assistant_unavailable'],
+}
+
+/** Les textes de TOUS les messages du modèle pendant le tour, dans l'ordre, sans doublon (B4). */
+export function turnText(messages: { content: unknown[] }[]): string {
+  const texts: string[] = []
+  for (const m of messages) for (const b of m.content as any[]) {
+    const x = b?.type === 'text' && typeof b.text === 'string' ? b.text.trim() : ''
+    if (x && !texts.includes(x)) texts.push(x)
+  }
+  return texts.join('\n\n')
+}
+
 /** Les blocs « fallback » sont de simples marqueurs (modèle de repli) : on ne les renvoie pas au tour suivant. */
 const clean = (messages: Anthropic.Beta.BetaMessageParam[]) => messages.map((m) => (Array.isArray(m.content)
   ? { ...m, content: (m.content as any[]).filter((b) => b?.type !== 'fallback') }
   : m))
 
 app.post('/', async (c) => {
+  // Le délai du tour court dès l'arrivée de la demande (B1).
+  const deadline = AbortSignal.timeout(turnTimeoutMs())
   if (!assistantConfigured()) throw new HttpError(503, 'assistant_not_configured')
   if (!process.env.APP_SECRET) throw new HttpError(503, 'app_secret_missing')
-  const b = await body(c, chatSchema)
-  if (JSON.stringify(b.messages).length > MAX_HISTORY_BYTES) throw new HttpError(413, 'conversation_too_long')
+  // Un fil que le serveur ne peut pas reprendre (trop long, abîmé dans l'onglet) : « Nouvelle conversation » (B3).
+  const b = await body(c, chatSchema).catch((e) => {
+    if (e instanceof HttpError && e.code === 'invalid_input' && Object.keys((e.extra.fields ?? {}) as object).some((k) => k.startsWith('messages'))) {
+      throw new HttpError(400, 'assistant_history')
+    }
+    throw e
+  })
+  if (JSON.stringify(b.messages).length > MAX_HISTORY_BYTES) throw new HttpError(413, 'assistant_history')
   // Le tour demandé : un message de la personne, en texte (les notes de l'écran, « confirmé » / « annulé », sont du texte).
   const last = b.messages[b.messages.length - 1]
   const lastOk = last.role === 'user' && (typeof last.content === 'string'
@@ -85,7 +154,7 @@ app.post('/', async (c) => {
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }
 
   try {
-    const client = new Anthropic({ maxRetries: 1, timeout: REQUEST_TIMEOUT_MS })
+    const client = new Anthropic({ maxRetries: 1, timeout: turnTimeoutMs() })
     const runner = client.beta.messages.toolRunner({
       model: MODEL,
       max_tokens: MAX_TOKENS,
@@ -101,24 +170,29 @@ app.post('/', async (c) => {
       messages: history,
       max_iterations: MAX_ITERATIONS,
       thread: false,
-    }, { signal: AbortSignal.timeout(TURN_TIMEOUT_MS) })   // la fonction Vercel a 300 s ; 10 tours au plus
+      // Cache de l'historique (B2) : mise en cache automatique du dernier bloc, en plus du bloc stable du système.
+      // Deux marqueurs en tout (la limite est quatre).
+      cache_control: { type: 'ephemeral' },
+    }, { signal: deadline })   // la fonction Vercel a 300 s ; 10 tours au plus
     const turn: Anthropic.Beta.BetaMessageParam[] = []
+    const seen: Anthropic.Beta.BetaMessage[] = []
     let final: Anthropic.Beta.BetaMessage | null = null
-    const texts: string[] = []
     for await (const message of runner) {
       final = message
       usage.input_tokens += message.usage.input_tokens ?? 0
       usage.output_tokens += message.usage.output_tokens ?? 0
       usage.cache_read_tokens += message.usage.cache_read_input_tokens ?? 0
       usage.cache_write_tokens += message.usage.cache_creation_input_tokens ?? 0
+      // La raison d'arrêt d'abord, le texte ensuite (B4).
       if (message.stop_reason === 'refusal') break
-      for (const blk of message.content) if (blk.type === 'text' && blk.text.trim()) texts.push(blk.text.trim())
-      if (message.stop_reason === 'max_tokens') {
+      if (message.stop_reason === 'max_tokens' || message.stop_reason === 'pause_turn') {
         // Réponse coupée : un appel d'outil inachevé ne doit pas rester dans l'historique (le tour suivant serait refusé).
         const kept = message.content.filter((blk) => blk.type === 'text')
+        seen.push({ ...message, content: kept })
         turn.push({ role: 'assistant', content: kept.length ? kept : [{ type: 'text', text: '…' }] })
         break
       }
+      seen.push(message)
       turn.push({ role: 'assistant', content: message.content })
       if (message.stop_reason === 'tool_use') {
         // Les résultats des outils de ce tour (calculés une seule fois : le runner reprend la même réponse).
@@ -131,27 +205,30 @@ app.post('/', async (c) => {
     let messages: Anthropic.Beta.BetaMessageParam[]
     if (!final) throw new Error('no_message')
     if (final.stop_reason === 'refusal') {
+      // Refus (B4) : une phrase polie tout de suite ; le tour entier (la demande et ses étapes) sort de l'historique
+      // renvoyé, la conversation continue depuis le tour précédent ; aucune carte ni page ouverte.
       reply = tr(l, 'assistant.refusal')
-      // Le tour refusé n'est pas renvoyé : la demande et une réponse neutre seulement.
-      messages = [...history, { role: 'assistant', content: [{ type: 'text', text: reply }] }]
+      messages = history.slice(0, -1)
       actions.length = 0
     } else {
-      const lastText = final.content.filter((blk) => blk.type === 'text').map((blk: any) => blk.text.trim()).filter(Boolean).join('\n\n')
-      reply = lastText || texts.join('\n\n')
-      if (final.stop_reason === 'max_tokens') reply = `${reply}\n\n${tr(l, 'assistant.tooLong')}`.trim()
+      // Le texte de TOUT le tour (B4), chemins bruts remplacés par le nom de l'écran (B5).
+      reply = scrubPaths(turnText(seen), l)
+      if (final.stop_reason === 'max_tokens' || final.stop_reason === 'pause_turn') reply = `${reply}\n\n${tr(l, 'assistant.tooLong')}`.trim()
       else if (final.stop_reason === 'tool_use') reply = `${reply}\n\n${tr(l, 'assistant.tooManySteps')}`.trim()
-      if (!reply) reply = actions.some((a) => a.type === 'confirm') ? tr(l, 'assistant.proposal') : tr(l, 'assistant.done')
+      // Jamais muette : une carte se présente, un écran ouvert se dit dans le fil (« Page ouverte »), sinon une phrase.
+      if (!reply) reply = actions.some((a) => a.type === 'confirm') ? tr(l, 'assistant.proposal')
+        : actions.some((a) => a.type === 'navigate') ? '' : tr(l, 'assistant.empty')
       messages = [...history, ...turn]
     }
     await completeUsage(ctx, reservation.id, { ok: true, ...usage, tools: used, duration_ms: Date.now() - started,
       error: final.stop_reason === 'end_turn' ? null : final.stop_reason })
     return c.json({ messages, reply, actions })
   } catch (e: any) {
-    const code = e instanceof Anthropic.RateLimitError ? 'rate_limited'
-      : e instanceof Anthropic.APIError ? `api_${e.status ?? 'error'}` : String(e?.message ?? 'error').slice(0, 80)
-    console.error('[assistant]', code)
-    await completeUsage(ctx, reservation.id, { ok: false, ...usage, tools: used, error: code, duration_ms: Date.now() - started })
-    throw new HttpError(e instanceof Anthropic.RateLimitError ? 503 : 502, 'assistant_unavailable')
+    const f = failureOf(e, deadline)
+    console.error('[assistant]', f.code)
+    await completeUsage(ctx, reservation.id, { ok: false, ...usage, tools: used, error: f.code, duration_ms: Date.now() - started })
+    const [status, code] = FAILURE[f.kind]
+    throw new HttpError(status, code)
   }
 })
 
@@ -167,6 +244,8 @@ const CONFIRM_ERRORS = new Set(['forbidden', 'not_found', 'invalid_input', 'plan
 // tr(l, 'assistant.error.unknown_column') tr(l, 'assistant.error.end_before_start') tr(l, 'assistant.error.invalid_timezone')
 // tr(l, 'assistant.error.not_from_crmlead') tr(l, 'assistant.error.operation_not_allowed') tr(l, 'assistant.error.lead_required')
 // tr(l, 'assistant.error.person_proof') tr(l, 'assistant.error.not_opened') tr(l, 'assistant.error.no_seat') tr(l, 'assistant.error.not_linked')
+// Les refus du jeton, chacun avec son texte (B7) : falsifié, expiré, préparé pour une autre personne, déjà utilisé.
+// tr(l, 'assistant.error.token_invalid') tr(l, 'assistant.error.token_expired') tr(l, 'assistant.error.token_other_user') tr(l, 'assistant.error.token_used')
 
 /**
  * « Confirmer » : exécute les écritures de la carte, une seule fois.
@@ -180,15 +259,21 @@ app.post('/confirm', async (c) => {
   const ctx = c.get('ctx')
   const l = isLocale(b.locale) ? b.locale : asLocale(c.get('locale'))
   const v = verifyConfirm(b.token, ctx)
-  if (!v.ok) throw new HttpError(403, v.error)
+  if (!v.ok) throw new HttpError(403, v.error, { message: tr(l, `assistant.error.${v.error}`) })
   const p = v.payload
   const labels = [...new Set(p.ops.map(opLabel))].slice(0, 50)
   const tool = p.ops.length === 1 ? labels[0] : `${p.tool} ×${p.ops.length}`
-  if (!p.ops.every((op) => opAllowed(op, p.mode))) { await logConfirm(ctx, tool, 'operation_not_allowed'); throw new HttpError(403, 'operation_not_allowed') }
+  if (!p.ops.every((op) => opAllowed(op, p.mode))) {
+    await logConfirm(ctx, tool, 'operation_not_allowed')
+    throw new HttpError(403, 'operation_not_allowed', { message: tr(l, 'assistant.error.operation_not_allowed') })
+  }
+  // Usage unique (B13) : le numéro du jeton est noté AVANT d'écrire (`on conflict do nothing` : de deux « Confirmer »
+  // simultanés, un seul le note). En mode `tx`, il est noté dans la transaction même des écritures, dont chaque route
+  // relit les droits : un refus annule tout, numéro compris, et la carte n'est pas usée.
   const nonce = async (db: Db) => (await db.query(
     `insert into assistant_confirmations (nonce, account_id, user_id) values ($1, $2, $3) on conflict (nonce) do nothing`,
     [p.n, ctx.accountId, ctx.userId])).rowCount
-  const used = () => new HttpError(403, 'token_used')
+  const used = () => new HttpError(403, 'token_used', { message: tr(l, 'assistant.error.token_used') })
   let ids: Record<string, string> = {}
   let outcome: ReturnType<typeof routeOutcome> = { ok: true, line: null }
   try {
@@ -231,7 +316,10 @@ app.post('/confirm', async (c) => {
     : p.ops.length === 1 ? done : `${done} ${doneLine(p.ops, l)}`
   // La langue de l'interface vient de changer : l'écran la prend sur place (comme le sélecteur de langue).
   const locale = p.ops.find((op) => op.method === 'POST' && op.path === '/api/me/locale')?.body.locale
-  return c.json({ ok: true, message, path: at(p.open), links, ...(typeof locale === 'string' ? { locale } : {}) })
+  // La page à ouvrir, avec son nom (B5) : la bulle écrit « Page ouverte : <nom> » quand elle y va.
+  const path = at(p.open)
+  const label = path ? await labelOf(sessionCookie(c), path, isLocale(locale) ? locale : l) : null
+  return c.json({ ok: true, message, path, label, links, ...(typeof locale === 'string' ? { locale } : {}) })
 })
 
 export default app
