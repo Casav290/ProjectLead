@@ -284,19 +284,24 @@ function g3() {
 
 // ------------------------------------------------------------------ G4 / G5 / G6 : essais réels (navigateur sans tête)
 
-function e2e(args, token, label) {
+/**
+ * L'essai réel d'un scénario ; `min` = le nombre de contrôles que le scénario contient (tous doivent avoir été joués :
+ * plan 29 = bureau 15 + téléphone 13 + erreurs JS ; interdit 9 ; alignement 14 ; production 16 = bureau 15 + erreurs JS).
+ */
+function e2e(args, token, label, min) {
   console.log(label)
   const r = run('node', ['scripts/e2e-assistant-actions.mjs', ...args], {}, 1_200_000)
   process.stdout.write(r.out.split('\n').filter((l) => /^\s*[✓✗]|^Aperçu|^Production|^\s*Durée|^\s*Phrase|^—/.test(l)).map((l) => `${l}\n`).join(''))
   const verts = r.out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
-  expect(`essai réel : ${verts ? `${verts[1]} verts, ${verts[2]} rouges` : 'pas de bilan'}`, r.code === 0 && verts && verts[2] === '0' && Number(verts[1]) >= 10, lastLine(r.out))
+  expect(`essai réel : ${verts ? `${verts[1]} verts, ${verts[2]} rouges` : 'pas de bilan'} (au moins ${min} contrôles)`,
+    r.code === 0 && verts && verts[2] === '0' && Number(verts[1]) >= min, lastLine(r.out))
   expect('dernière ligne de l’essai', lastLine(r.out) === token.replace('ASSISTANT_ACTIONS_', 'E2E_ACTIONS_'), lastLine(r.out))
   return r.out
 }
 
 function g4() {
   const started = Date.now()
-  const out = e2e(['--scenario', 'plan'], 'ASSISTANT_ACTIONS_G4_OK', 'G4 — aperçu Vercel : le scénario d’Ève, vrai modèle, compte TEST')
+  const out = e2e(['--scenario', 'plan'], 'ASSISTANT_ACTIONS_G4_OK', 'G4 — aperçu Vercel : le scénario d’Ève, vrai modèle, compte TEST', 29)
   // Le scénario phare au bureau, la question de la capture d'Ève au téléphone : les deux phrases ont été jouées.
   expect('phrase du scénario phare jouée au bureau', out.includes('Phrase (bureau) : « Planifie toutes les étapes de ce projet pour un nouveau site Internet »'))
   expect('question de la capture d’Ève jouée au téléphone', /Phrase \(mobile\) : « Est-ce que tu peux planifier toutes les étapes/.test(out))
@@ -311,7 +316,7 @@ function g4() {
   finish('ASSISTANT_ACTIONS_G4_OK')
 }
 function g5() {
-  e2e(['--scenario', 'interdit'], 'ASSISTANT_ACTIONS_G5_OK', 'G5 — aperçu Vercel : demandes interdites refusées')
+  e2e(['--scenario', 'interdit'], 'ASSISTANT_ACTIONS_G5_OK', 'G5 — aperçu Vercel : demandes interdites refusées', 9)
   finish('ASSISTANT_ACTIONS_G5_OK')
 }
 function g6() {
@@ -321,7 +326,7 @@ function g6() {
     const t = readFileSync(prod, 'utf8')
     expect('PROD-projectlead.md : sauvegarde Neon, déploiement dpl_, retour arrière notés', /br-[a-z0-9-]+|LSN/.test(t) && /dpl_[A-Za-z0-9]+/.test(t) && /retour arrière/i.test(t))
   }
-  e2e(['--prod'], 'ASSISTANT_ACTIONS_G6_OK', 'G6 — production : le scénario d’Ève avec le compte TEST')
+  e2e(['--prod'], 'ASSISTANT_ACTIONS_G6_OK', 'G6 — production : le scénario d’Ève avec le compte TEST', 16)
   finish('ASSISTANT_ACTIONS_G6_OK')
 }
 
@@ -447,7 +452,7 @@ function g7() {
 
 function g8() {
   const started = Date.now()
-  const out = e2e(['--scenario', 'alignement'], 'ASSISTANT_ACTIONS_G8_OK', 'G8 — aperçu Vercel : alignement des bulles, vrai modèle, compte TEST')
+  const out = e2e(['--scenario', 'alignement'], 'ASSISTANT_ACTIONS_G8_OK', 'G8 — aperçu Vercel : alignement des bulles, vrai modèle, compte TEST', 14)
   // Chaque assertion G8 citée dans le tableau de la doc a été vue « ✓ » pendant cet essai.
   const cited = (parseAlignment(readFileSync(join(ROOT, ALIGN_DOC), 'utf8')) ?? []).flatMap((r) => r.g8)
   const unseen = cited.filter((label) => !out.includes(`  ✓ ${label}`))
