@@ -133,18 +133,22 @@ async function bubble(page, path = '/') {
   await page.waitForTimeout(1500)   // la formule gratuite est relue à l'ouverture
 }
 const LOG = '[data-assistant-log]'
-/** Une demande ; attend la fin du travail. Rend le dernier texte de l'assistant (ou null). */
+/**
+ * Une demande ; attend la fin du travail. Rend le texte de la réponse de l'assistant à CETTE demande (ou null : refus de
+ * la formule, erreur). Compte les messages de la personne et les réponses, pas les enfants du fil (le fil vide montre
+ * l'introduction et les suggestions).
+ */
 async function ask(page, text) {
-  const n = await page.locator(`${LOG} > *`).count()
+  const users = await page.locator(`${LOG} > [data-assistant-user]`).count()
+  const replies = await page.locator(`${LOG} > [data-item]`).count()
   await page.fill('[data-assistant-panel] textarea', text)
   await page.keyboard.press('Enter')
   await page.waitForSelector('[data-assistant-panel] [role=status]', { timeout: 10_000 }).catch(() => {})
-  await page.waitForFunction(({ sel, n }) => document.querySelectorAll(sel).length > n && !document.querySelector('[data-assistant-panel] [role=status]'),
-    { sel: `${LOG} > *`, n }, { timeout: LIMIT_MS }).catch(() => {})
+  await page.waitForFunction(({ sel, u }) => document.querySelectorAll(`${sel} > [data-assistant-user]`).length > u && !document.querySelector('[data-assistant-panel] [role=status]'),
+    { sel: LOG, u: users }, { timeout: LIMIT_MS }).catch(() => {})
   await page.waitForTimeout(800)
-  const items = await page.locator(`${LOG} > *`).count()
-  const last = page.locator(`${LOG} > [data-item]`).last()
-  return items > n + 1 && (await last.count()) ? (await last.innerText()).replace(/^Assistant IA :\s*/, '').trim() : null
+  const items = page.locator(`${LOG} > [data-item]`)
+  return (await items.count()) > replies ? (await items.last().innerText()).replace(/^Assistant IA :\s*/, '').trim() : null
 }
 /** La dernière ligne du journal de l'assistant pour cette personne, écrite après `since`. */
 async function usageAfter(user, since) {
