@@ -14,7 +14,9 @@
  * projet (~/projets/.unlazy/assistant-ia/projectlead-bypass.secret). Lecture des résultats : rôle LECTURE SEULE
  * lead_e2e_ro (~/.lead-e2e-ro.env), sur l'hôte de la branche pour l'aperçu.
  *
- * Scénario « plan » : dans un projet TEST vide (créé par l'API, comme à l'écran), la phrase d'Ève ; la PREMIÈRE réponse
+ * Scénario « plan » : dans un projet TEST vide (créé par l'API, comme à l'écran), la phrase d'Ève (au bureau et en
+ * production la phrase du scénario phare, « Planifie toutes les étapes de ce projet… » ; au téléphone la question de sa
+ * capture du 27.10, « Est-ce que tu peux planifier… ») ; la PREMIÈRE réponse
  * porte UNE carte « À confirmer » (pas de « je ne peux pas ») ; rien en base avant le clic ; « Confirmer » ; la base
  * (lecture seule) contient exactement ce que montre la carte (étapes, dates, tâches, estimations, jalons, dépendances,
  * points de contrôle, comptes) ; la page Gantt s'ouvre, Étapes et Liste montrent le plan ; durée du tour mesurée sous
@@ -49,7 +51,9 @@ const ORG = 'ea5a8085-b868-4d7f-91a8-ac382e43e3e8'   // TEST Boulangerie Favre
 const USER = '448e9591-ce80-4c97-ac39-43dadd583386'  // Léa Favre, administratrice (test)
 const SHOTS = `${H}/projets/.unlazy/assistant-actions/captures/projectlead`
 mkdirSync(SHOTS, { recursive: true })
-const SENTENCE = 'Est-ce que tu peux planifier toutes les étapes dans un projet automatiquement pour un nouveau site Internet ?'
+// Le scénario phare (ledger, cahier du 27.10) et la question de la capture d'Ève : chacune doit donner la carte d'emblée.
+const SENTENCE = 'Planifie toutes les étapes de ce projet pour un nouveau site Internet'
+const SENTENCE_CAPTURE = 'Est-ce que tu peux planifier toutes les étapes dans un projet automatiquement pour un nouveau site Internet ?'
 const LIMIT_MS = 300_000
 // Le délai du tour de la route (alignement B1) : la fonction (300 s) moins 10 s. Un plan complet doit tenir dessous.
 const TURN_MS = 290_000
@@ -206,7 +210,7 @@ async function ask(page, text) {
 }
 const REFUSE_LIKE = /je ne peux pas|aucun de mes outils|ne permet pas de créer|pas en mesure de créer/i
 
-async function planRun(kind, viewport, isMobile) {
+async function planRun(kind, viewport, isMobile, sentence) {
   const created = await api('POST', '/projects', { name: `TEST Site Internet ${stamp} ${kind}`, status: 'active' })
   check(`${kind} : projet TEST vide créé par l’API (comme à l’écran)`, created.status === 201, created)
   const pid = created.body.id
@@ -215,7 +219,8 @@ async function planRun(kind, viewport, isMobile) {
   await page.waitForSelector('[data-assistant-bubble]', { timeout: 60_000 })
   await page.click('[data-assistant-bubble]')
   await page.waitForSelector('[data-assistant-panel] textarea')
-  const t = await ask(page, SENTENCE)
+  console.log(`  Phrase (${kind}) : « ${sentence} »`)
+  const t = await ask(page, sentence)
   const usage = await one(`select duration_ms, ok, tools, error from assistant_usage where user_id = $1 and kind = 'message' order by created_at desc limit 1`, [USER])
   console.log(`  Durée du tour : ${(t.ms / 1000).toFixed(1)} s vue de l’écran, ${((usage?.duration_ms ?? 0) / 1000).toFixed(1)} s au serveur (délai ${TURN_MS / 1000} s) — outils ${usage?.tools?.join('+')}`)
   check(`${kind} : durée du tour sous le délai du tour (290 s, fonction 300 s), mesurée à l’écran et au serveur`, t.ms < TURN_MS && usage?.duration_ms < TURN_MS && usage.ok, { ms: t.ms, usage })
@@ -399,8 +404,8 @@ async function alignementRun() {
 try {
   if (SCENARIO === 'alignement') await alignementRun()
   else if (SCENARIO === 'plan') {
-    await planRun(PROD ? 'prod-bureau' : 'bureau', { width: 1440, height: 900 }, false)
-    if (!PROD) await planRun('mobile', { width: 390, height: 844 }, true)
+    await planRun(PROD ? 'prod-bureau' : 'bureau', { width: 1440, height: 900 }, false, SENTENCE)
+    if (!PROD) await planRun('mobile', { width: 390, height: 844 }, true, SENTENCE_CAPTURE)
   } else await forbiddenRun()
   check('aucune erreur JavaScript dans les pages', !jsErrors.length, jsErrors.slice(0, 3))
 } finally {

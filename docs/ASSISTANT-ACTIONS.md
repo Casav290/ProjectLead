@@ -236,8 +236,10 @@ InvoiceLead, avec les droits de la personne), `open_page`. Toutes passent par le
 
 ## Le scénario d'Ève
 
-Dans un projet : « Est-ce que tu peux planifier toutes les étapes dans un projet automatiquement pour un nouveau site
-Internet ? » → une carte `propose_project_plan` : 4 à 8 étapes datées, leurs tâches (durée en jours ouvrés,
+Dans un projet : « Planifie toutes les étapes de ce projet pour un nouveau site Internet » (scénario phare, joué au
+bureau par G4), ou la question de sa capture du 27.10, « Est-ce que tu peux planifier toutes les étapes dans un projet
+automatiquement pour un nouveau site Internet ? » (jouée au téléphone par G4) → dès la première réponse, une carte
+`propose_project_plan` : 4 à 8 étapes datées, leurs tâches (durée en jours ouvrés,
 estimation), au moins un jalon de validation par le client, des dépendances simples. Les dates sont calculées par
 ProjectLead (`server/lib/assistant/schedule.ts`) : jours ouvrés du lundi au vendredi, étapes enchaînées, une tâche après
 ses tâches préalables, un jalon le jour où finit sa dernière tâche préalable. « Confirmer » crée tout en une

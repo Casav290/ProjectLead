@@ -287,7 +287,7 @@ function g3() {
 function e2e(args, token, label) {
   console.log(label)
   const r = run('node', ['scripts/e2e-assistant-actions.mjs', ...args], {}, 1_200_000)
-  process.stdout.write(r.out.split('\n').filter((l) => /^\s*[✓✗]|^Aperçu|^Production|^Durée|^—/.test(l)).map((l) => `${l}\n`).join(''))
+  process.stdout.write(r.out.split('\n').filter((l) => /^\s*[✓✗]|^Aperçu|^Production|^\s*Durée|^\s*Phrase|^—/.test(l)).map((l) => `${l}\n`).join(''))
   const verts = r.out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
   expect(`essai réel : ${verts ? `${verts[1]} verts, ${verts[2]} rouges` : 'pas de bilan'}`, r.code === 0 && verts && verts[2] === '0' && Number(verts[1]) >= 10, lastLine(r.out))
   expect('dernière ligne de l’essai', lastLine(r.out) === token.replace('ASSISTANT_ACTIONS_', 'E2E_ACTIONS_'), lastLine(r.out))
@@ -295,10 +295,19 @@ function e2e(args, token, label) {
 }
 
 function g4() {
-  e2e(['--scenario', 'plan'], 'ASSISTANT_ACTIONS_G4_OK', 'G4 — aperçu Vercel : le scénario d’Ève, vrai modèle, compte TEST')
+  const started = Date.now()
+  const out = e2e(['--scenario', 'plan'], 'ASSISTANT_ACTIONS_G4_OK', 'G4 — aperçu Vercel : le scénario d’Ève, vrai modèle, compte TEST')
+  // Le scénario phare au bureau, la question de la capture d'Ève au téléphone : les deux phrases ont été jouées.
+  expect('phrase du scénario phare jouée au bureau', out.includes('Phrase (bureau) : « Planifie toutes les étapes de ce projet pour un nouveau site Internet »'))
+  expect('question de la capture d’Ève jouée au téléphone', /Phrase \(mobile\) : « Est-ce que tu peux planifier toutes les étapes/.test(out))
+  // Chaque capture du parcours a été écrite PENDANT cette porte (pas une capture d'un essai précédent).
   const shots = join(CHANTIER, 'captures/projectlead')
-  const big = (k) => existsSync(shots) && readdirSync(shots).some((f) => f.includes(k) && f.endsWith('.png') && statSync(join(shots, f)).size > 20_000)
-  expect('captures bureau et mobile présentes (> 20 ko)', big('bureau') && big('mobile'))
+  const expected = ['bureau-1-carte', 'bureau-2-confirme', 'bureau-3-gantt', 'bureau-4-etapes', 'bureau-5-liste', 'mobile-1-carte', 'mobile-2-confirme', 'mobile-3-etapes']
+  const stale = expected.filter((f) => {
+    const p = join(shots, `${f}.png`)
+    return !existsSync(p) || statSync(p).size <= 20_000 || statSync(p).mtimeMs < started
+  })
+  expect(`captures bureau et mobile écrites pendant cette porte (${expected.length}, > 20 ko)`, !stale.length, stale.join(', '))
   finish('ASSISTANT_ACTIONS_G4_OK')
 }
 function g5() {
