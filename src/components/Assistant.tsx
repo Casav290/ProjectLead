@@ -110,7 +110,8 @@ export default function Assistant() {
   const loc = useLocation()
   const small = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
 
-  useEffect(() => { if (key) setState(load(key)) }, [key])
+  // Une autre personne ou une autre entreprise dans le même onglet : son fil, et sa formule relue (jamais celle d'avant).
+  useEffect(() => { if (key) setState(load(key)); setAllowance(null) }, [key])
   // Ce qu'il reste de la formule gratuite, relu à chaque ouverture (une autre personne de l'entreprise a pu s'en servir).
   const readAllowance = useCallback(() => {
     api.get<{ allowance: Allowance }>('/assistant/allowance').then((r) => setAllowance(r.allowance)).catch(() => {})
@@ -322,7 +323,7 @@ export default function Assistant() {
               {!isNativeApp && (
                 <p className="mt-1">{tr('shell.assistant.free.pro')}{' '}
                   <Link to={me.plan.upgradeUrl} data-assistant-plans onClick={() => { if (small()) setOpen(false) }}
-                    className="font-semibold text-accent-dark underline">{tr('shell.assistant.free.plans')}</Link></p>
+                    className="whitespace-nowrap font-semibold text-accent-dark underline">{tr('shell.assistant.free.plans')}</Link></p>
               )}
             </div>
           ) : (

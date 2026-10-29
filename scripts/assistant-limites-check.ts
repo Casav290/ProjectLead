@@ -342,12 +342,13 @@ if (browser) try {
   await bubbleOpen(k.page)
   const c1 = await textOf(k.page, '[data-assistant-allowance]')
   check('L5 bulle : « Formule gratuite : il vous reste environ 7 demandes ce mois-ci. » au-dessus du champ, champ actif',
-    c1 === 'Formule gratuite : il vous reste environ 7 demandes ce mois-ci.' && !(await k.page.locator('[data-assistant-input]').isDisabled()), c1)
+    c1 === tx('fr', 'shell.assistant.free.left', { n: 7 }) && c1?.startsWith('Formule gratuite : il vous reste environ 7 demandes ce mois-')
+    && !(await k.page.locator('[data-assistant-input]').isDisabled()), c1)
   // Le compteur suit chaque tour : une autre consommation arrive entre-temps, la réponse du tour la montre.
   await pose(K.id, 40_000)
   await askUi(k.page, 'Bonjour')
   const c2 = await textOf(k.page, '[data-assistant-allowance]')
-  check('L5 bulle : compteur mis à jour après le tour (7 → 5), sans rouvrir', c2 === 'Formule gratuite : il vous reste environ 5 demandes ce mois-ci.', c2)
+  check('L5 bulle : compteur mis à jour après le tour (7 → 5), sans rouvrir', c2 === tx('fr', 'shell.assistant.free.left', { n: 5 }), c2)
   await askUi(k.page, `FAKE:propose_create_task:{"project_id":"${(await K.cl.post('/api/projects', { name: 'Site Kim', status: 'active' })).body.id}","title":"Carte gardée"}`)
   check('mise en place : une carte en attente dans la bulle', (await k.page.locator('[data-assistant-confirm="pending"]').count()) === 1)
   await pose(K.id, 100_000 - 2_000)

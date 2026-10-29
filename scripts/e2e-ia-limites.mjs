@@ -228,7 +228,9 @@ async function perimetreRun() {
 // ------------------------------------------------------------------ G4 : la limite de la formule gratuite
 const FR_MONTH = new Intl.DateTimeFormat('fr-CH', { month: 'long', timeZone: 'UTC' })
 const nextMonth = () => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)) }
-const counterFr = (n) => n >= 1 ? `Formule gratuite : il vous reste environ ${n} ${n < 2 ? 'demande' : 'demandes'} ce mois-ci.` : 'Formule gratuite : il vous reste moins d’une demande ce mois-ci.'
+// « mois-⁠ci » : un gluon (U+2060) après le trait d'union, pour que la ligne ne se coupe pas entre « mois- » et « ci ».
+const counterFr = (n) => (n >= 1 ? `Formule gratuite : il vous reste environ ${n} ${n < 2 ? 'demande' : 'demandes'} ce mois-\u2060ci.`
+  : 'Formule gratuite : il vous reste moins d’une demande ce mois-\u2060ci.')
 async function limiteRun() {
   const freeTok = await session(FREE_USER, FREE_ORG)
   const paidTok = await session(PAID_USER, PAID_ORG)
@@ -250,7 +252,7 @@ async function limiteRun() {
     const f = await open(freeTok)
     await bubble(f.page)
     const c0 = (await f.page.locator('[data-assistant-allowance]').count()) ? (await f.page.locator('[data-assistant-allowance]').innerText()).trim() : null
-    check(`gratuite : la bulle dit « ${counterFr(n0)} »`, c0 === counterFr(n0), c0)
+    check(`gratuite : la bulle dit « ${counterFr(n0).replace('\u2060', '')} »`, c0 === counterFr(n0), c0)
     await f.page.screenshot({ path: `${SHOTS}/limite-1-compteur.png` })
 
     // Un vrai tour : le compteur suit (consommation lue au journal).
@@ -259,7 +261,7 @@ async function limiteRun() {
     const n1 = Math.floor(Math.max(0, BUDGET - used1) / REQUEST)
     const c1 = (await f.page.locator('[data-assistant-allowance]').count()) ? (await f.page.locator('[data-assistant-allowance]').innerText()).trim() : null
     console.log(`  vrai tour → « ${reply} » ; consommé ${Math.round(used0)} → ${Math.round(used1)} jetons pondérés`)
-    check(`gratuite : un vrai tour est servi et compté (${Math.round(used1 - used0)} jetons pondérés), le compteur suit : « ${counterFr(n1)} »`,
+    check(`gratuite : un vrai tour est servi et compté (${Math.round(used1 - used0)} jetons pondérés), le compteur suit : « ${counterFr(n1).replace('\u2060', '')} »`,
       Boolean(reply) && used1 > used0 && c1 === counterFr(n1), { reply, c1, used0, used1 })
 
     // La consommation du mois posée jusqu'au budget, sur la base d'APERÇU.

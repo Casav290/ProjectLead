@@ -84,7 +84,9 @@ const ask = (cl: Client, text: string, history: any[] = []) =>
 const count = async (sql: string, args: unknown[]) => Number((await pool.query(sql, args)).rows[0].n)
 
 const stamp = Date.now().toString(36)
-const today = new Date().toISOString().slice(0, 10)
+// La date du jour de l'entreprise (fuseau par défaut Europe/Zurich), comme la consigne envoyée au modèle : la date UTC
+// diffère d'un jour entre minuit et 1 h (2 h en été) à Zurich, et le contrôle du bloc variable échouait à ces heures-là.
+const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich' }).format(new Date())
 
 // ------------------------------------------------------------------ deux entreprises, deux personnes
 const ann = new Client()
