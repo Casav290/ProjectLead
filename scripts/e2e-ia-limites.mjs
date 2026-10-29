@@ -245,6 +245,9 @@ async function limiteRun() {
     where account_id = any($1) group by account_id order by account_id`, [[FREE_ORG, PAID_ORG]]).then((r) => r.rows))
   const keep = await snap()
   const sums0 = await sums()
+  // La dernière venue des deux personnes (la garde de l'API la note au plus une fois par heure) : remise telle quelle.
+  const seen0 = (await w.query(`select account_id, user_id, last_seen_at from account_users where (account_id, user_id) in (($1::uuid, $2::uuid), ($3::uuid, $4::uuid))`,
+    [FREE_ORG, FREE_USER, PAID_ORG, PAID_USER])).rows
   try {
     const used0 = await monthUsed(FREE_ORG)
     const n0 = Math.floor(Math.max(0, BUDGET - used0) / REQUEST)
@@ -320,6 +323,7 @@ async function limiteRun() {
     // La base comme avant : les lignes de l'essai (posées et vrais tours) retirées, comptes relus.
     const extra = (await snap()).filter((id) => !keep.includes(id))
     if (extra.length) await w.query('delete from assistant_usage where id = any($1)', [extra])
+    for (const x of seen0) await w.query('update account_users set last_seen_at = $3 where account_id = $1 and user_id = $2', [x.account_id, x.user_id, x.last_seen_at])
     const sums1 = await sums()
     check(`base d’aperçu remise comme avant (${extra.length} lignes de l’essai retirées, comptes et sommes identiques)`, sums1 === sums0, { sums0, sums1 })
   }
