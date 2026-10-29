@@ -24,7 +24,17 @@ export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: s
   source: 'free' | 'own' | 'family'; paidTier: 'free' | 'pro' | 'pro_plus'
   inherited: { tier: 'free' | 'pro' | 'pro_plus'; app: string | null; until: string | null } | null
   lead: { tier: 'free' | 'pro' | 'pro_plus'; until: string | null } | null
-  openProjects: number; projectLimit: number | null; members: number; invited: number }
+  openProjects: number; projectLimit: number | null; members: number; invited: number
+  /** Le budget du mois de l'Assistant IA en jetons pondérés (formule gratuite), null sans limite (29.10.2026). */
+  assistantBudget?: number | null }
+
+/**
+ * La formule gratuite de l'Assistant IA et ce qu'il en reste ce mois-ci (server/lib/assistant/budget.ts, `Allowance`) :
+ * `requests`, environ combien de demandes restent ; `total`, l'équivalent du mois ; `exhausted`, budget atteint ;
+ * `resets_on`, le 1er du mois suivant (AAAA-MM-JJ).
+ */
+export type Allowance = { limited: false }
+  | { limited: true; budget: number; used: number; remaining: number; requests: number; total: number; exhausted: boolean; resets_on: string }
 
 /** L'abonnement ProjectLead (server/routes/billing.ts, GET /api/billing). */
 export type Billing = {

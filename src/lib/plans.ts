@@ -11,8 +11,10 @@ export type Tier = Plan['tier']
 export const PLAN_RANK: Record<Tier, number> = { free: 0, pro: 1, pro_plus: 2 }
 // Les noms et les lignes des formules suivent la langue : lus à chaque accès (clés shell.plan.*).
 export const PLAN_NAME: Record<Tier, string> = labels('shell.plan.name', ['free', 'pro', 'pro_plus'])
+// « assistant10 » : l'Assistant IA de la formule gratuite, l'équivalent de 10 demandes par mois (29.10.2026 ; le nombre
+// est celui du serveur, FREE_REQUESTS de server/lib/assistant/budget.ts : scripts/assistant-limites-check.ts le vérifie).
 const FEATURE_KEYS: Record<Tier, string[]> = {
-  free: ['projects3', 'person1', 'allFeatures'],
+  free: ['projects3', 'person1', 'assistant10', 'allFeatures'],
   pro: ['projectsUnlimited', 'person1', 'allFeatures'],
   pro_plus: ['projectsUnlimited', 'persons5', 'allFeatures'],
 }

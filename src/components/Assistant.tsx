@@ -1,9 +1,11 @@
 import clsx from 'clsx'
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { getLocale, isLocale, t, useI18n, useT } from '../i18n'
+import { getLocale, intlLocale, isLocale, t, useI18n, useT } from '../i18n'
 import { api, ApiError } from '../lib/api'
+import { isNativeApp } from '../lib/native'
 import { useApp } from '../lib/store'
+import type { Allowance } from '../lib/types'
 import { CardText, Rich } from './assistantText'
 
 /**
@@ -17,6 +19,11 @@ import { CardText, Rich } from './assistantText'
  * « Assistant IA : » (B8) ; rien de masqué par la bulle, cachée à l'impression, champ en 16 px au téléphone (B9) ; fil
  * propre à la personne ET à l'entreprise (B10) ; mention « peut se tromper » sous le champ (B11) ; un fil refusé par le
  * service se recommence par le bouton « Nouvelle conversation » du message (B3).
+ *
+ * Formule gratuite (29.10.2026, server/lib/assistant/budget.ts) : au-dessus du champ, « il vous reste environ N demandes
+ * ce mois-ci », relu à l'ouverture et après chaque tour ; budget du mois atteint → le message qui dit quand l'assistant
+ * revient (avec la formule Pro et le lien vers les formules, hors de l'app mobile) et le champ désactivé. Les cartes déjà
+ * proposées se confirment toujours : « Confirmer » n'appelle pas le modèle.
  */
 
 type Group = { title: string; lines: string[]; notes?: string[]; more?: number }
@@ -29,7 +36,7 @@ type Item =
   | { kind: 'error'; text: string; reset?: boolean }
   | { kind: 'confirm'; token: string; summary: Summary; state: 'pending' | 'busy' | 'done' | 'cancelled' | 'failed'; result?: string; path?: string | null; links?: Link[] }
 type Action = { type: 'navigate'; path: string; label?: string } | { type: 'confirm'; token: string; summary: Summary }
-type Reply = { messages: unknown[]; reply: string; actions: Action[] }
+type Reply = { messages: unknown[]; reply: string; actions: Action[]; allowance?: Allowance }
 type Saved = { api: unknown[]; items: Item[]; notes: string[] }
 
 // Les clés des suggestions (shell.assistant.suggest.*), traduites au rendu ; « plan » : le scénario d'Ève (27.10.2026).
@@ -93,14 +100,30 @@ export default function Assistant() {
   const [state, setState] = useState<Saved>(() => (key ? load(key) : EMPTY))
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  // La formule gratuite (L5) : null tant qu'elle n'est pas lue.
+  const [allowance, setAllowance] = useState<Allowance | null>(null)
   const bubble = useRef<HTMLButtonElement>(null)
   const field = useRef<HTMLTextAreaElement>(null)
   const thread = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLElement>(null)
   const nav = useNavigate()
   const loc = useLocation()
   const small = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
 
   useEffect(() => { if (key) setState(load(key)) }, [key])
+  // Ce qu'il reste de la formule gratuite, relu à chaque ouverture (une autre personne de l'entreprise a pu s'en servir).
+  const readAllowance = useCallback(() => {
+    api.get<{ allowance: Allowance }>('/assistant/allowance').then((r) => setAllowance(r.allowance)).catch(() => {})
+  }, [])
+  useEffect(() => { if (open && key) readAllowance() }, [open, key, readAllowance])
+  const exhausted = allowance?.limited === true && allowance.exhausted
+  // Budget atteint, champ désactivé : le focus reste dans le panneau (Échap le ferme toujours), sur le lien des formules.
+  useEffect(() => {
+    const p = panel.current
+    if (!open || !exhausted || !p) return
+    const at = document.activeElement
+    if (!at || !p.contains(at) || at === field.current) (p.querySelector<HTMLElement>('[data-assistant-plans]') ?? p.querySelector<HTMLElement>('[data-assistant-reset]'))?.focus()
+  }, [open, exhausted])
   const update = useCallback((fn: (s: Saved) => Saved) => setState((s) => { const n = fn(s); if (key) save(key, n); return n }), [key])
 
   // Focus : dans le champ à l'ouverture, rendu à la bulle à la fermeture (après le rendu, sans délai).
@@ -126,7 +149,7 @@ export default function Assistant() {
 
   const send = async (raw: string) => {
     const text = raw.trim()
-    if (!text || busy) return
+    if (!text || busy || exhausted) return
     setInput('')
     setBusy(true)
     const notes = state.notes
@@ -144,9 +167,15 @@ export default function Assistant() {
       const opened: Item[] = go?.label ? [{ kind: 'page', label: go.label }] : []
       const said: Item[] = r.reply ? [{ kind: 'assistant', text: r.reply }] : []
       update((s) => ({ api: r.messages, notes: [], items: [...s.items, ...said, ...opened, ...cards] }))
+      if (r.allowance) setAllowance(r.allowance)
       if (go) { nav(go.path); if (small()) setOpen(false) }
     } catch (e) {
-      update((s) => ({ ...s, items: [...s.items, errorItem(e)] }))
+      // Formule gratuite, budget du mois atteint : le message dit quand l'assistant revient (sous le fil), pas une panne.
+      if (e instanceof ApiError && e.code === 'free_limit' && e.body?.allowance?.limited) setAllowance(e.body.allowance)
+      else {
+        update((s) => ({ ...s, items: [...s.items, errorItem(e)] }))
+        readAllowance()
+      }
     } finally {
       setBusy(false)
       setTimeout(() => field.current?.focus(), 30)
@@ -192,6 +221,9 @@ export default function Assistant() {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); send(input) }
   }
   const fr = locale === 'fr'
+  // Le mois où l'assistant revient (le 1er, en UTC), en toutes lettres dans la langue de l'interface.
+  const backMonth = allowance?.limited ? new Intl.DateTimeFormat(intlLocale(), { month: 'long', timeZone: 'UTC' })
+    .format(new Date(`${allowance.resets_on}T00:00:00Z`)) : ''
 
   if (!me?.features.assistant) return null
 
@@ -206,7 +238,7 @@ export default function Assistant() {
         </button>
       )}
       {open && (
-        <section id="assistant-ia" role="dialog" aria-modal="false" aria-labelledby="assistant-ia-title" onKeyDown={(e) => {
+        <section ref={panel} id="assistant-ia" role="dialog" aria-modal="false" aria-labelledby="assistant-ia-title" onKeyDown={(e) => {
           if (e.key === 'Escape') { e.stopPropagation(); close() }
         }} data-assistant-panel
           className="fixed inset-0 z-50 flex flex-col border border-input bg-card print:hidden min-[641px]:inset-auto min-[641px]:bottom-24 min-[641px]:right-6 min-[641px]:h-[600px] min-[641px]:max-h-[calc(100dvh-8rem)] min-[641px]:w-[400px] min-[641px]:shadow-[0_12px_40px_rgba(0,0,0,0.18)]">
@@ -222,7 +254,7 @@ export default function Assistant() {
                 <p className="text-muted-foreground">{tr('shell.assistant.intro')}</p>
                 <ul className="space-y-2">
                   {SUGGESTIONS.map((k) => tr(`shell.assistant.suggest.${k}`)).map((s) => (
-                    <li key={s}><button type="button" onClick={() => send(s)} className="w-full border border-input bg-[#f7f5f3] px-3 py-2 text-left hover:border-accent">{s}</button></li>
+                    <li key={s}><button type="button" onClick={() => send(s)} disabled={exhausted} className="w-full border border-input bg-[#f7f5f3] px-3 py-2 text-left hover:border-accent disabled:opacity-60 disabled:hover:border-input">{s}</button></li>
                   ))}
                 </ul>
               </div>
@@ -284,11 +316,24 @@ export default function Assistant() {
             ))}
             {busy && <p className="flex items-center gap-2 text-muted-foreground" role="status"><span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />{tr('shell.assistant.working')}</p>}
           </div>
-          <form className="flex items-end gap-2 border-t border-border px-3 pb-1.5 pt-3" onSubmit={(e) => { e.preventDefault(); send(input) }}>
-            <textarea ref={field} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={busy} rows={2} maxLength={4000}
+          {allowance?.limited && (exhausted ? (
+            <div aria-live="polite" data-assistant-free-limit className="border-t border-border border-l-[3px] border-l-soon bg-soon/5 px-3 py-2 text-[13px]">
+              <p>{tr('shell.assistant.free.used', { n: allowance.total, month: backMonth })}</p>
+              {!isNativeApp && (
+                <p className="mt-1">{tr('shell.assistant.free.pro')}{' '}
+                  <Link to={me.plan.upgradeUrl} data-assistant-plans onClick={() => { if (small()) setOpen(false) }}
+                    className="font-semibold text-accent-dark underline">{tr('shell.assistant.free.plans')}</Link></p>
+              )}
+            </div>
+          ) : (
+            <p data-assistant-allowance className="border-t border-border px-3 pt-2 text-xs text-muted-foreground">
+              {allowance.requests >= 1 ? tr('shell.assistant.free.left', { n: allowance.requests }) : tr('shell.assistant.free.lessThanOne')}</p>
+          ))}
+          <form className={clsx('flex items-end gap-2 px-3 pb-1.5 pt-3', !allowance?.limited && 'border-t border-border')} onSubmit={(e) => { e.preventDefault(); send(input) }}>
+            <textarea ref={field} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={busy || exhausted} rows={2} maxLength={4000}
               aria-label={tr('shell.assistant.inputLabel')} aria-describedby="assistant-ia-note" placeholder={tr('shell.assistant.placeholder')} data-assistant-input
               className="max-h-40 min-h-[44px] flex-1 resize-none border border-input bg-[#f7f5f3] px-3 py-2 text-base focus:border-accent focus:outline-none disabled:opacity-60 min-[641px]:text-sm" />
-            <button type="submit" disabled={busy || !input.trim()} className="h-[44px] bg-brand px-4 font-bold text-white hover:bg-accent-dark disabled:opacity-50">{tr('shell.assistant.send')}</button>
+            <button type="submit" disabled={busy || exhausted || !input.trim()} className="h-[44px] bg-brand px-4 font-bold text-white hover:bg-accent-dark disabled:opacity-50">{tr('shell.assistant.send')}</button>
           </form>
           <p id="assistant-ia-note" data-assistant-note className="px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] text-[11.5px] text-muted-foreground">{tr('shell.assistant.note')}</p>
         </section>
