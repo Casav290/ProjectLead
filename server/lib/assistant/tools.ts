@@ -6,7 +6,7 @@ import { callApi } from './internal.js'
 import { OpFailure, runOps } from './run.js'
 import { schedulePlan, workdayFrom, workdaysBetween } from './schedule.js'
 import { labelOf } from './pages.js'
-import { MAX_OPS, opAllowed, signConfirm, type Mode, type Summary, type SummaryGroup, type WriteOp } from './token.js'
+import { MAX_OPS, MAX_TOKEN_CHARS, opAllowed, signConfirm, type Mode, type Summary, type SummaryGroup, type WriteOp } from './token.js'
 
 /**
  * Les outils de l'assistant de ProjectLead. Chacun appelle les routes existantes (`callApi`, avec la session de la
@@ -20,7 +20,14 @@ import { MAX_OPS, opAllowed, signConfirm, type Mode, type Summary, type SummaryG
  *
  * Aucun outil ne supprime ni n'archive, ne gère l'équipe, les membres ou le responsable d'un projet, la visibilité,
  * l'abonnement, les clés d'API, les branchements (boîtes mail, agendas extérieurs), ni n'envoie quoi que ce soit à
- * l'extérieur (liste fermée de token.ts, docs/ASSISTANT-ACTIONS.md).
+ * l'extérieur (liste fermée de token.ts, docs/ASSISTANT-ACTIONS.md). Ni indirectement : une écriture qui ferait partir
+ * un email (automatisation de l'entreprise) est refusée à l'essai et à « Confirmer » (run.ts) ; un changement qui
+ * relancerait le suivi périodique au client, assignerait quelqu'un qui n'a pas accès à un projet réservé, ou copierait
+ * un projet réservé (copie visible de toute l'entreprise) n'a pas de carte.
+ *
+ * La carte montre TOUT ce qui sera écrit (B7) : chaque champ, en entier (aucun texte coupé), « avant → après » pour une
+ * modification ; dans un lot ou un plan, chaque opération et chaque tâche (aucune cachée sous « + N autres ») ; son titre
+ * vient du serveur, jamais du modèle.
  *
  * Langues : ce que voit la personne (titre et lignes des cartes) vient des dictionnaires du serveur, clés
  * `assistant.card.*` (server/i18n/<langue>.ts, cinq langues), dans la langue de l'interface. Ce que lit le modèle
@@ -120,6 +127,8 @@ export const ROUTE_ERRORS: Record<string, string> = {
   not_opened: 'Ouvrez d’abord l’autre application une fois avec votre Compte Lead.',
   no_seat: 'Pas de place pour vous dans l’autre application.',
   not_linked: 'Les deux applications ne sont pas encore reliées.',
+  sends_outside: 'Ce changement ferait partir un email vers l’extérieur (une automatisation de l’entreprise écrit au client) : '
+    + 'l’assistant n’envoie jamais rien. Explique-le et ouvre l’écran (open_page) : la personne le fait elle-même.',
 }
 
 /** Les pages de l'application vers lesquelles l'assistant peut ouvrir (open_page, liens des cartes). */
@@ -134,10 +143,9 @@ const PAGES = [
 export const pageAllowed = (p: string) => PAGES.some((re) => re.test(p))
 
 type Line = string | null | false | undefined | 0
-/** Ce qu'un outil d'écriture prépare : les écritures, et ce que la carte en montre. */
+/** Ce qu'un outil d'écriture prépare : les écritures, et ce que la carte en montre (TOUT ce qui est écrit). */
 type Built = {
   title: string; lines: Line[]; ops: WriteOp[]
-  short?: string            // une ligne, pour un lot
   groups?: SummaryGroup[]
   open?: string | null      // la page à ouvrir après « Confirmer » (« @ref » permis)
   links?: { label: string; path: string }[]   // label : clé d'onglet du projet (stages, list, gantt), traduite à l'écran
@@ -197,7 +205,7 @@ export function buildTools(s: ToolScope) {
   const clientValue = (field: string, v: unknown) => (v == null || v === '' ? '—'
     : field === 'kind' && KIND_K[String(v)] ? L(KIND_K[String(v)])
       : field === 'country' ? region(v)
-        : field === 'language' && LANG_K[String(v)] ? L(LANG_K[String(v)]) : clip(String(v), 120))
+        : field === 'language' && LANG_K[String(v)] ? L(LANG_K[String(v)]) : String(v))
   const money = (cents: number | null | undefined, cur = 'CHF') => (cents == null ? L('assistant.card.none')
     : `${cur} ${(cents / 100).toLocaleString(INTL[l], { minimumFractionDigits: cents % 100 ? 2 : 0 })}`)
   const noun = (key: string, n: number) => L(key, { n })
@@ -231,11 +239,44 @@ export function buildTools(s: ToolScope) {
     return r.status === 200 ? r.body : null
   }
 
+  /**
+   * Assigner une tâche fait de la personne une intervenante du projet (routes/tasks.ts, setAssignees). Dans un projet
+   * réservé aux intervenants, cela OUVRE le projet à un membre qui ne le voyait pas : c'est gérer les intervenants et les
+   * droits, interdit à l'assistant (pas de carte ; à faire depuis l'écran du projet). Ailleurs, la carte le dit.
+   * `p` : le projet lu par GET /api/projects/:id (null : nouveau projet, visible de l'entreprise, la personne en est
+   * la responsable).
+   */
+  const joining = async (p: any | null, ids: string[] | undefined, projectName: string): Promise<{ line: Line } | Refused> => {
+    if (!ids?.length) return { line: null }
+    const known = new Set<string>(p ? [p.owner_id, ...(p.members_detail ?? []).map((m: any) => m.id)] : [s.ctx.userId])
+    const fresh = [...new Set(ids)].filter((id) => !known.has(id))
+    if (!fresh.length) return { line: null }
+    const t = await team()
+    const opens = p?.visibility === 'members' ? fresh.filter((id) => t.find((m) => m.id === id)?.role === 'member') : []
+    if (opens.length) return { error: 'opens_reserved_project', people: await peopleNames(opens),
+      hint: 'projet réservé aux intervenants : assigner ces personnes leur ouvrirait le projet (gestion des intervenants, interdite à l’assistant). À faire depuis l’écran du projet.' }
+    return { line: L('assistant.card.becomesMember', { project: projectName, names: await peopleNames(fresh) }) }
+  }
+  /** Copier un projet réservé aux intervenants (ou en partir comme modèle) donnerait une copie visible de toute l'entreprise. */
+  const reservedCopy = { error: 'reserved_project_copy',
+    hint: 'projet réservé aux intervenants : sa copie serait visible de toute l’entreprise (la visibilité ne se règle pas par l’assistant). À faire depuis l’écran.' }
+
   // ------------------------------------------------------------------ proposer : essayer, signer, montrer
   const failureForModel = (e: unknown, n: number) => {
     if (e instanceof OpFailure) return { error: 'would_fail', step: e.index + 1, of: n, status: e.status, code: e.code, operation: e.label,
       hint: ROUTE_ERRORS[e.code] ?? 'refusé par l’application', fields: e.body?.fields }
     return { error: 'would_fail', code: String((e as Error)?.message ?? e).slice(0, 80) }
+  }
+
+  /**
+   * Une proposition à la fois dans un tour : le modèle peut appeler plusieurs outils d'un coup (le runner les lance
+   * ensemble) ; chaque essai tient une connexion de la base (db.ts) et les cartes gardent l'ordre des appels.
+   */
+  let queue: Promise<unknown> = Promise.resolve()
+  const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = queue.then(fn, fn)
+    queue = next.catch(() => {})
+    return next
   }
 
   const propose = async (tool: string, b: Built | Refused) => {
@@ -255,6 +296,8 @@ export function buildTools(s: ToolScope) {
     const page = (x: string) => pageAllowed(x.replace(/@[A-Za-z0-9_:.-]+/g, '00000000-0000-4000-8000-000000000000'))
     const token = signConfirm({ u: s.ctx.userId, a: s.ctx.accountId, mode, tool, ops: b.ops, summary,
       open: b.open && page(b.open) ? b.open : null, ...(b.links?.length ? { links: b.links.filter((x) => page(x.path)) } : {}) })
+    // Une carte que « Confirmer » refuserait (jeton trop long : textes très longs × nombreuses écritures) n'est pas montrée.
+    if (token.length > MAX_TOKEN_CHARS) return out({ error: 'card_too_large', hint: 'découper en deux cartes ou raccourcir les textes' })
     s.actions.push({ type: 'confirm', token, summary })
     return out({ proposed: true, status: 'waiting_for_user_confirmation', card: b.title, operations: b.ops.length,
       checked: mode === 'tx' ? 'essai réussi : la confirmation écrira exactement ce que montre la carte' : undefined, ...b.info,
@@ -284,6 +327,8 @@ export function buildTools(s: ToolScope) {
       let parent: any = null
       if (a.parent_id) { parent = await task(a.parent_id); if (!parent || parent.project_id !== a.project_id) return { error: 'parent_not_in_project' } }
       if ((await unknownPeople(a.assignee_ids)).length) return { error: 'unknown_person', hint: 'ids de list_team, personnes actives' }
+      const joins = await joining(p, a.assignee_ids, p.name)
+      if ('error' in joins) return joins
       const col = a.column_id ? p.columns.find((x: any) => x.id === a.column_id) : null
       const people = await peopleNames(a.assignee_ids)
       return {
@@ -291,15 +336,14 @@ export function buildTools(s: ToolScope) {
         ops: [{ method: 'POST', path: '/api/tasks', body: { ...a }, ref: 'task' }],
         lines: [L('assistant.card.task', { title: a.title }), L('assistant.card.project', { name: p.name }),
           parent && L('assistant.card.subtaskOf', { title: parent.title }),
-          a.description && L('assistant.card.description', { text: clip(a.description, 200) }),
+          a.description && L('assistant.card.description', { text: a.description }),
           a.start_date && L('assistant.card.start', { date: D(a.start_date) }), a.due_date && L('assistant.card.due', { date: D(a.due_date) }),
           a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }), stage && L('assistant.card.stage', { name: stage.name }),
-          col && L('assistant.card.column', { name: col.name }), people && L('assistant.card.assignees', { names: people }),
+          col && L('assistant.card.column', { name: col.name }), people && L('assistant.card.assignees', { names: people }), joins.line,
           a.estimate_minutes != null && L('assistant.card.estimate', { value: hm(a.estimate_minutes) }), a.is_milestone && L('assistant.card.milestone'),
           a.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client) }),
           a.recurrence && a.recurrence !== 'none' && L('assistant.card.recurrenceLine', { value: L(RECURRENCE_K[a.recurrence]) }),
           a.tags?.length && L('assistant.card.tags', { value: a.tags.join(', ') })],
-        short: [`${q(a.title)} (${p.name})`, a.due_date && L('assistant.card.dueShort', { date: D(a.due_date) }), people].filter(Boolean).join(', '),
         open: `/projets/${a.project_id}?tache=@task`,
       }
     },
@@ -320,35 +364,34 @@ export function buildTools(s: ToolScope) {
       if (!t) return { error: 'task_not_found' }
       if (!Object.keys(patch).length) return { error: 'nothing_to_change' }
       let stageName: string | null = null, colName: string | null = null
-      if (patch.stage_id || patch.column_id) {
-        const p = await project(t.project_id)
-        if (patch.stage_id) { stageName = p?.stages.find((x: any) => x.id === patch.stage_id)?.name ?? null; if (!stageName) return { error: 'stage_not_in_project' } }
-        if (patch.column_id) { colName = p?.columns.find((x: any) => x.id === patch.column_id)?.name ?? null; if (!colName) return { error: 'column_not_in_project' } }
-      }
+      const p = patch.stage_id || patch.column_id || patch.assignee_ids?.length ? await project(t.project_id) : null
+      if (patch.stage_id) { stageName = p?.stages.find((x: any) => x.id === patch.stage_id)?.name ?? null; if (!stageName) return { error: 'stage_not_in_project' } }
+      if (patch.column_id) { colName = p?.columns.find((x: any) => x.id === patch.column_id)?.name ?? null; if (!colName) return { error: 'column_not_in_project' } }
       if ((await unknownPeople(patch.assignee_ids)).length) return { error: 'unknown_person' }
-      const nobody = L('assistant.card.nobody'), noStage = L('assistant.card.noStage')
+      const joins = await joining(p, patch.assignee_ids, t.project_name)
+      if ('error' in joins) return joins
+      const nobody = L('assistant.card.nobody'), noStage = L('assistant.card.noStage'), empty = L('assistant.card.empty'), noneF = L('assistant.card.noneF')
       const changes: Line[] = [
         patch.title && L('assistant.card.titleChanged', { value: q(patch.title), old: q(t.title) }),
-        patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') }),
+        patch.description !== undefined && L('assistant.card.description', { text: before(patch.description || empty, clip(t.description, 200) || empty) }),
         patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(t.start_date) }),
         patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(t.due_date) }),
         patch.priority && L('assistant.card.priorityChanged', { value: L(PRIORITY_K[patch.priority]), old: PRIORITY_K[t.priority] ? L(PRIORITY_K[t.priority]) : t.priority }),
         patch.assignee_ids && L('assistant.card.assigneesChanged', { value: (await peopleNames(patch.assignee_ids)) || nobody,
-          old: t.assignees.map((x: any) => x.name).join(', ') || nobody }),
+          old: t.assignees.map((x: any) => x.name).join(', ') || nobody }), joins.line,
         patch.completed !== undefined && L(patch.completed ? 'assistant.card.complete' : 'assistant.card.reopen'),
         patch.estimate_minutes !== undefined && L('assistant.card.estimateChanged', { value: patch.estimate_minutes == null ? L('assistant.card.noneF') : hm(patch.estimate_minutes),
           old: t.estimate_minutes == null ? L('assistant.card.noneF') : hm(t.estimate_minutes) }),
         patch.stage_id !== undefined && L('assistant.card.stageChanged', { value: stageName ?? noStage, old: t.stage_name ?? noStage }),
         colName && L('assistant.card.columnChanged', { value: colName, old: t.column_name ?? '—' }),
         patch.is_milestone !== undefined && L(patch.is_milestone ? 'assistant.card.becomesMilestone' : 'assistant.card.notMilestone'),
-        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(patch.visible_to_client) }),
-        patch.recurrence && L('assistant.card.recurrenceLine', { value: L(RECURRENCE_K[patch.recurrence]) }),
-        patch.tags && L('assistant.card.tags', { value: patch.tags.join(', ') || L('assistant.card.noneF') })]
+        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: before(yesNo(patch.visible_to_client), yesNo(Boolean(t.visible_to_client))) }),
+        patch.recurrence && L('assistant.card.recurrenceLine', { value: before(L(RECURRENCE_K[patch.recurrence]), RECURRENCE_K[t.recurrence] ? L(RECURRENCE_K[t.recurrence]) : noneF) }),
+        patch.tags && L('assistant.card.tags', { value: before(patch.tags.join(', ') || noneF, (t.tags ?? []).join(', ') || noneF) })]
       return {
         title: L('assistant.card.title.updateTask'),
         ops: [{ method: 'PATCH', path: `/api/tasks/${task_id}`, body: patch }],
         lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), ...changes],
-        short: L('assistant.card.itemChange', { item: t.title, change: changes.find(Boolean) }),
         open: `/projets/${t.project_id}?tache=${task_id}`,
       }
     },
@@ -374,6 +417,13 @@ export function buildTools(s: ToolScope) {
         const p = await project(found[0].project_id)
         if (!p?.stages.some((x: any) => x.id === patch.stage_id)) return { error: 'stage_not_in_project' }
       }
+      // Ajouter une personne : elle devient intervenante de chaque projet touché (refus si cela ouvre un projet réservé).
+      const joinLines: Line[] = []
+      if (patch.add_assignee) for (const pid of new Set<string>(found.map((t) => t.project_id))) {
+        const joins = await joining(await project(pid), [patch.add_assignee], found.find((t) => t.project_id === pid).project_name)
+        if ('error' in joins) return joins
+        joinLines.push(joins.line)
+      }
       const what = [patch.completed !== undefined && L(patch.completed ? 'assistant.card.bulk.complete' : 'assistant.card.bulk.reopen'),
         patch.priority && L('assistant.card.bulk.priority', { value: L(PRIORITY_K[patch.priority]) }),
         patch.due_date !== undefined && L('assistant.card.bulk.due', { date: D(patch.due_date) }),
@@ -382,9 +432,8 @@ export function buildTools(s: ToolScope) {
       return {
         title: L('assistant.card.title.updateTasks', { n: ids.length }),
         ops: [{ method: 'POST', path: '/api/tasks/bulk', body: { ids, patch } }],
-        lines: [L('assistant.card.change', { what }), ...found.slice(0, 12).map((t) => `${q(t.title)} (${t.project_name})`),
-          found.length > 12 && L('assistant.card.more', { n: found.length - 12 })],
-        short: L('assistant.card.bulk.short', { n: ids.length, what }),
+        // Chaque tâche visée, toutes (100 au plus) : aucune cachée sous « + N autres ».
+        lines: [L('assistant.card.change', { what }), ...found.map((t) => `${q(t.title)} (${t.project_name})`), ...joinLines],
         open: new Set(found.map((t) => t.project_id)).size === 1 ? `/projets/${found[0].project_id}/liste` : '/taches',
       }
     },
@@ -403,7 +452,7 @@ export function buildTools(s: ToolScope) {
         title: L('assistant.card.title.addDependency'),
         ops: [{ method: 'POST', path: `/api/tasks/${task_id}/dependencies`, body: { depends_on_id } }],
         lines: [L('assistant.card.waits', { task: t.title, dep: d.title }), L('assistant.card.project', { name: t.project_name })],
-        short: L('assistant.card.after', { task: t.title, dep: d.title }), open: `/projets/${t.project_id}/gantt`,
+        open: `/projets/${t.project_id}/gantt`,
       }
     },
   })
@@ -416,8 +465,8 @@ export function buildTools(s: ToolScope) {
       const t = await task(task_id)
       if (!t) return { error: 'task_not_found' }
       return { title: L('assistant.card.title.commentTask'), ops: [{ method: 'POST', path: `/api/tasks/${task_id}/comments`, body: { body } }],
-        lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), L('assistant.card.comment', { text: clip(body, 400) })],
-        short: `${q(t.title)} : ${clip(body, 80)}`, open: `/projets/${t.project_id}?tache=${task_id}` }
+        lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), L('assistant.card.comment', { text: body })],
+        open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
@@ -429,8 +478,8 @@ export function buildTools(s: ToolScope) {
       const p = await project(project_id)
       if (!p) return { error: 'project_not_found' }
       return { title: L('assistant.card.title.commentProject'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/comments`, body: { body } }],
-        lines: [L('assistant.card.project', { name: p.name }), L('assistant.card.comment', { text: clip(body, 400) }), L('assistant.card.internal')],
-        short: `${p.name} : ${clip(body, 80)}`, open: `/projets/${project_id}/activite` }
+        lines: [L('assistant.card.project', { name: p.name }), L('assistant.card.comment', { text: body }), L('assistant.card.internal')],
+        open: `/projets/${project_id}/activite` }
     },
   })
 
@@ -445,8 +494,8 @@ export function buildTools(s: ToolScope) {
       if (!cm) return { error: 'comment_not_found' }
       if (cm.author_id !== s.ctx.userId) return { error: 'not_author', hint: 'seul l’auteur modifie son commentaire' }
       return { title: L('assistant.card.title.updateComment'), ops: [{ method: 'PATCH', path: `/api/tasks/comments/${comment_id}`, body: { body } }],
-        lines: [L('assistant.card.task', { title: t.title }), L('assistant.card.beforeText', { text: clip(cm.body, 200) }), L('assistant.card.afterText', { text: clip(body, 400) })],
-        short: `${q(t.title)} : ${clip(body, 80)}`, open: `/projets/${t.project_id}?tache=${task_id}` }
+        lines: [L('assistant.card.task', { title: t.title }), L('assistant.card.beforeText', { text: clip(cm.body, 200) }), L('assistant.card.afterText', { text: body })],
+        open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
@@ -459,7 +508,7 @@ export function buildTools(s: ToolScope) {
       if (!t) return { error: 'task_not_found' }
       return { title: L('assistant.card.title.addChecklist'), ops: [{ method: 'POST', path: `/api/tasks/${task_id}/checklist`, body: { label } }],
         lines: [L('assistant.card.taskIn', { title: t.title, project: t.project_name }), L('assistant.card.checkItem', { label })],
-        short: `${q(t.title)} : ${label}`, open: `/projets/${t.project_id}?tache=${task_id}` }
+        open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
 
@@ -476,7 +525,6 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.updateChecklist'), ops: [{ method: 'PATCH', path: `/api/tasks/checklist/${item_id}`, body: patch }],
         lines: [L('assistant.card.task', { title: t.title }), L('assistant.card.checkItem', { label: it.label }), patch.label && L('assistant.card.newLabel', { label: patch.label }),
           patch.done !== undefined && L(patch.done ? 'assistant.card.check' : 'assistant.card.uncheck')],
-        short: `${q(it.label)} : ${L(patch.done === undefined ? 'assistant.card.renamed' : patch.done ? 'assistant.card.checked' : 'assistant.card.unchecked')}`,
         open: `/projets/${t.project_id}?tache=${task_id}` }
     },
   })
@@ -487,14 +535,24 @@ export function buildTools(s: ToolScope) {
     currency: z.enum(['CHF', 'EUR', 'USD', 'GBP']).optional(), vat_code: z.enum(['normal', 'reduced', 'lodging', 'exempt', 'export']).optional(),
     doc_locale: LOCALE.nullable().optional().describe('langue des documents du client de ce projet (suivi, factures) ; null = celle de l’entreprise'),
   }
-  const billingLines = (a: any, cur: string): Line[] => [
-    a.billing_mode && L('assistant.card.billingMode', { value: L(BILLING_K[a.billing_mode]) }),
-    a.hourly_rate_cents !== undefined && L('assistant.card.hourlyRate', { value: money(a.hourly_rate_cents, cur) }),
-    a.retainer_cents !== undefined && L('assistant.card.retainer', { value: money(a.retainer_cents, cur) }),
-    a.fixed_cents !== undefined && L('assistant.card.fixed', { value: money(a.fixed_cents, cur) }),
-    a.budget_cents !== undefined && L('assistant.card.budgetAmount', { value: money(a.budget_cents, cur) }),
-    a.currency && L('assistant.card.currency', { value: a.currency }), a.vat_code && L('assistant.card.vat', { value: L(VAT_K[a.vat_code]) }),
-    a.doc_locale !== undefined && L('assistant.card.docLocale', { value: a.doc_locale ? L(LANG_K[a.doc_locale]) : L('assistant.card.companyLanguage') })]
+  /**
+   * La facturation d'un projet, lisible. `old` (le projet tel qu'il est) : chaque montant, taux ou réglage modifié se lit
+   * « avant → après » (B7), chaque montant dans SA devise.
+   */
+  const billingLines = (a: any, cur: string, old?: any): Line[] => {
+    const oldCur = old?.currency ?? cur
+    const v = (value: string, was: string) => (old ? before(value, was) : value)
+    const lang = (x: unknown) => (typeof x === 'string' && LANG_K[x] ? L(LANG_K[x]) : L('assistant.card.companyLanguage'))
+    return [
+      a.billing_mode && L('assistant.card.billingMode', { value: v(L(BILLING_K[a.billing_mode]), BILLING_K[old?.billing_mode] ? L(BILLING_K[old.billing_mode]) : '—') }),
+      a.hourly_rate_cents !== undefined && L('assistant.card.hourlyRate', { value: v(money(a.hourly_rate_cents, cur), money(old?.hourly_rate_cents, oldCur)) }),
+      a.retainer_cents !== undefined && L('assistant.card.retainer', { value: v(money(a.retainer_cents, cur), money(old?.retainer_cents, oldCur)) }),
+      a.fixed_cents !== undefined && L('assistant.card.fixed', { value: v(money(a.fixed_cents, cur), money(old?.fixed_cents, oldCur)) }),
+      a.budget_cents !== undefined && L('assistant.card.budgetAmount', { value: v(money(a.budget_cents, cur), money(old?.budget_cents, oldCur)) }),
+      a.currency && L('assistant.card.currency', { value: v(a.currency, old?.currency ?? '—') }),
+      a.vat_code && L('assistant.card.vat', { value: v(L(VAT_K[a.vat_code]), VAT_K[old?.vat_code] ? L(VAT_K[old.vat_code]) : '—') }),
+      a.doc_locale !== undefined && L('assistant.card.docLocale', { value: v(lang(a.doc_locale), lang(old?.doc_locale)) })]
+  }
 
   write({
     name: 'propose_create_project', batch: true,
@@ -509,7 +567,12 @@ export function buildTools(s: ToolScope) {
       let cl: string | null = null
       if (a.client_id) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
       let template: string | null = null
-      if (a.template_id) { const t = await project(a.template_id); if (!t || !t.is_template) return { error: 'template_not_found' }; template = t.name }
+      if (a.template_id) {
+        const t = await project(a.template_id)
+        if (!t || !t.is_template) return { error: 'template_not_found' }
+        if (t.visibility === 'members') return reservedCopy
+        template = t.name
+      }
       const body = { ...a, ...(a.is_template ? { status: 'planned' } : {}) }
       return {
         title: L(a.is_template ? 'assistant.card.title.createTemplate' : 'assistant.card.title.createProject'),
@@ -517,11 +580,11 @@ export function buildTools(s: ToolScope) {
         lines: [L(a.is_template ? 'assistant.card.templateName' : 'assistant.card.projectName', { name: a.name }), cl && L('assistant.card.client', { name: cl }),
           template && L('assistant.card.fromTemplate', { name: template }),
           !a.is_template && L('assistant.card.status', { value: L(STATUS_K[a.status ?? 'planned']) }), a.code && L('assistant.card.code', { value: a.code }),
-          a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }),
+          a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }), a.color && L('assistant.card.color', { value: a.color }),
           a.start_date && L('assistant.card.start', { date: D(a.start_date) }), a.due_date && L('assistant.card.due', { date: D(a.due_date) }),
           a.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(a.budget_minutes) }), ...billingLines(a, a.currency ?? 'CHF'),
-          a.description && L('assistant.card.description', { text: clip(a.description, 200) })],
-        short: `${q(a.name)}${cl ? ` (${cl})` : ''}`, open: '/projets/@project',
+          a.description && L('assistant.card.description', { text: a.description })],
+        open: '/projets/@project',
       }
     },
   })
@@ -544,14 +607,22 @@ export function buildTools(s: ToolScope) {
       if (!Object.keys(patch).length) return { error: 'nothing_to_change' }
       let cl: string | null = null
       if (patch.client_id) { const c = await client(patch.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
-      const n = Object.keys(patch).length
+      // Le suivi périodique au client (tâches de fond, lib/jobs.ts) part pour un projet en cours, avec un client, dont
+      // l'envoi automatique est réglé. Un changement qui le (re)lance ferait partir un email au prochain passage : pas de
+      // carte (rien n'est envoyé par l'assistant, même indirectement). Un changement de client le dit sur la carte.
+      const follows = (x: any) => Boolean(x.update_frequency && x.update_frequency !== 'none' && x.status === 'active' && !x.is_template && !x.archived_at && x.client_id)
+      const next = { ...p, ...(patch.status ? { status: patch.status } : {}), ...(patch.client_id !== undefined ? { client_id: patch.client_id } : {}) }
+      if (!follows(p) && follows(next)) return { error: 'restarts_client_updates',
+        hint: 'ce projet envoie un suivi automatique au client ; ce changement le relancerait (un email partirait). À faire depuis l’écran du projet.' }
+      const none = L('assistant.card.none'), empty = L('assistant.card.empty')
       return {
         title: L(p.is_template ? 'assistant.card.title.updateTemplate' : 'assistant.card.title.updateProject'),
         ops: [{ method: 'PATCH', path: `/api/projects/${project_id}`, body: patch }],
         lines: [L('assistant.card.project', { name: p.name }), patch.name && L('assistant.card.nameChanged', { value: q(patch.name), old: q(p.name) }),
-          patch.code !== undefined && L('assistant.card.code', { value: patch.code ?? L('assistant.card.none') }),
-          patch.color && L('assistant.card.color', { value: patch.color }),
-          patch.client_id !== undefined && L('assistant.card.clientChanged', { value: cl ?? L('assistant.card.none'), old: p.client?.name ?? L('assistant.card.none') }),
+          patch.code !== undefined && L('assistant.card.code', { value: before(patch.code || none, p.code || none) }),
+          patch.color && L('assistant.card.color', { value: before(patch.color, p.color ?? none) }),
+          patch.client_id !== undefined && L('assistant.card.clientChanged', { value: cl ?? none, old: p.client?.name ?? none }),
+          follows(p) && follows(next) && patch.client_id && patch.client_id !== p.client_id && L('assistant.card.followUpTo', { name: cl }),
           patch.status && L('assistant.card.statusChanged', { value: L(STATUS_K[patch.status]), old: STATUS_K[p.status] ? L(STATUS_K[p.status]) : p.status }),
           patch.health && L('assistant.card.healthChanged', { value: L(HEALTH_K[patch.health]), old: HEALTH_K[p.health] ? L(HEALTH_K[p.health]) : p.health }),
           patch.priority && L('assistant.card.priorityChanged', { value: L(PRIORITY_K[patch.priority]), old: PRIORITY_K[p.priority] ? L(PRIORITY_K[p.priority]) : p.priority }),
@@ -559,11 +630,11 @@ export function buildTools(s: ToolScope) {
           patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(p.due_date) }),
           patch.budget_minutes !== undefined && L('assistant.card.budgetHoursChanged', { value: patch.budget_minutes == null ? L('assistant.card.none') : hm(patch.budget_minutes),
             old: p.budget_minutes == null ? L('assistant.card.none') : hm(p.budget_minutes) }),
-          ...billingLines(patch, patch.currency ?? p.currency ?? 'CHF'),
-          patch.portal_show_tasks !== undefined && L('assistant.card.portalTasks', { value: yesNo(patch.portal_show_tasks) }),
-          patch.portal_show_time !== undefined && L('assistant.card.portalTime', { value: yesNo(patch.portal_show_time) }),
-          patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') })],
-        short: L('assistant.card.changes', { name: p.name, n }), open: `/projets/${project_id}`,
+          ...billingLines(patch, patch.currency ?? p.currency ?? 'CHF', p),
+          patch.portal_show_tasks !== undefined && L('assistant.card.portalTasks', { value: before(yesNo(patch.portal_show_tasks), yesNo(Boolean(p.portal_show_tasks))) }),
+          patch.portal_show_time !== undefined && L('assistant.card.portalTime', { value: before(yesNo(patch.portal_show_time), yesNo(Boolean(p.portal_show_time))) }),
+          patch.description !== undefined && L('assistant.card.description', { text: before(patch.description || empty, clip(p.description, 200) || empty) })],
+        open: `/projets/${project_id}`,
       }
     },
   })
@@ -575,6 +646,8 @@ export function buildTools(s: ToolScope) {
     build: async (a) => {
       const p = await project(a.project_id)
       if (!p) return { error: 'project_not_found' }
+      // La copie (ou le modèle) d'un projet réservé aux intervenants serait visible de toute l'entreprise.
+      if (p.visibility === 'members') return reservedCopy
       let cl: string | null = null
       if (a.client_id && !a.as_template) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
       const body: Record<string, unknown> = { name: a.name, as_template: a.as_template, ...(a.as_template ? {} : { start_date: a.start_date ?? s.today, ...(a.client_id ? { client_id: a.client_id } : {}) }) }
@@ -585,7 +658,7 @@ export function buildTools(s: ToolScope) {
           L('assistant.card.copies', { stages: noun('assistant.noun.stage', p.stages.length), tasks: noun('assistant.noun.task', p.tasks_total) }),
           !a.as_template && L('assistant.card.newStart', { date: D(String(body.start_date)) }), cl && L('assistant.card.client', { name: cl }),
           a.as_template && L('assistant.card.templateNoClient')],
-        short: L(a.as_template ? 'assistant.card.shortTemplate' : 'assistant.card.shortCopy', { name: a.name }), open: '/projets/@copy',
+        open: '/projets/@copy',
       }
     },
   })
@@ -600,8 +673,8 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.projectUpdate'),
         ops: [{ method: 'POST', path: `/api/projects/${a.project_id}/updates`, body: { health: a.health, body: a.body, share_with_client: false } }],
         lines: [L('assistant.card.project', { name: p.name }), L('assistant.card.health', { value: L(HEALTH_K[a.health]) }),
-          a.body && L('assistant.card.text', { text: clip(a.body, 400) }), L('assistant.card.notShared')],
-        short: `${p.name} : ${L(HEALTH_K[a.health])}`, open: `/projets/${a.project_id}` }
+          a.body && L('assistant.card.text', { text: a.body }), L('assistant.card.notShared')],
+        open: `/projets/${a.project_id}` }
     },
   })
 
@@ -619,12 +692,12 @@ export function buildTools(s: ToolScope) {
       if (a.start_date && a.due_date && a.start_date > a.due_date) return { error: 'end_before_start' }
       return { title: L('assistant.card.title.createStage'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/stages`, body: a }],
         lines: [L('assistant.card.stageNumbered', { name: a.name, n: p.stages.length + 1 }), L('assistant.card.project', { name: p.name }),
-          a.description && L('assistant.card.description', { text: clip(a.description, 200) }),
-          a.client_note && L('assistant.card.clientNote', { text: clip(a.client_note, 200) }), a.status && L('assistant.card.status', { value: L(STAGE_K[a.status]) }),
+          a.description && L('assistant.card.description', { text: a.description }),
+          a.client_note && L('assistant.card.clientNote', { text: a.client_note }), a.status && L('assistant.card.status', { value: L(STAGE_K[a.status]) }),
           (a.start_date || a.due_date) && L('assistant.card.dates', { start: D(a.start_date), due: D(a.due_date) }),
           a.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client) }),
           a.billing_cents != null && L('assistant.card.amount', { value: money(a.billing_cents, p.currency) })],
-        short: `${q(a.name)} (${p.name})`, open: `/projets/${project_id}/etapes` }
+        open: `/projets/${project_id}/etapes` }
     },
   })
 
@@ -641,17 +714,17 @@ export function buildTools(s: ToolScope) {
       const p = await project(project_id)
       const st = p?.stages.find((x: any) => x.id === stage_id)
       if (!st) return { error: 'stage_not_found' }
+      const empty = L('assistant.card.empty')
       const changes: Line[] = [patch.name && L('assistant.card.nameChanged', { value: q(patch.name), old: q(st.name) }),
         patch.status && L('assistant.card.stageStatusChanged', { value: L(STAGE_K[patch.status]), old: STAGE_K[st.status] ? L(STAGE_K[st.status]) : st.status }),
         patch.start_date !== undefined && L('assistant.card.startChanged', { value: D(patch.start_date), old: D(st.start_date) }),
         patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(st.due_date) }),
-        patch.description !== undefined && L('assistant.card.description', { text: clip(patch.description, 200) || L('assistant.card.empty') }),
-        patch.client_note !== undefined && L('assistant.card.clientNote', { text: clip(patch.client_note, 200) || L('assistant.card.empty') }),
-        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(patch.visible_to_client) }),
-        patch.billing_cents !== undefined && L('assistant.card.amount', { value: money(patch.billing_cents, p.currency) })]
+        patch.description !== undefined && L('assistant.card.description', { text: before(patch.description || empty, clip(st.description, 200) || empty) }),
+        patch.client_note !== undefined && L('assistant.card.clientNote', { text: before(patch.client_note || empty, clip(st.client_note, 200) || empty) }),
+        patch.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: before(yesNo(patch.visible_to_client), yesNo(Boolean(st.visible_to_client))) }),
+        patch.billing_cents !== undefined && L('assistant.card.amount', { value: before(money(patch.billing_cents, p.currency), money(st.billing_cents, p.currency)) })]
       return { title: L('assistant.card.title.updateStage'), ops: [{ method: 'PATCH', path: `/api/projects/stages/${stage_id}`, body: patch }],
-        lines: [L('assistant.card.stageOf', { name: st.name, project: p.name }), ...changes],
-        short: L('assistant.card.itemChange', { item: st.name, change: changes.find(Boolean) }), open: `/projets/${project_id}/etapes` }
+        lines: [L('assistant.card.stageOf', { name: st.name, project: p.name }), ...changes], open: `/projets/${project_id}/etapes` }
     },
   })
 
@@ -669,7 +742,7 @@ export function buildTools(s: ToolScope) {
       return { title: L(kind === 'stages' ? 'assistant.card.title.reorderStages' : 'assistant.card.title.reorderColumns'),
         ops: [{ method: 'POST', path: `/api/projects/${project_id}/${kind}/order`, body: { ids } }],
         lines: [L('assistant.card.project', { name: p.name }), ...names.map((x: string, i: number) => `${i + 1}. ${x}`)],
-        short: `${p.name} : ${names.join(', ')}`, open: `/projets/${project_id}/${kind === 'stages' ? 'etapes' : 'tableau'}` }
+        open: `/projets/${project_id}/${kind === 'stages' ? 'etapes' : 'tableau'}` }
     },
   })
 
@@ -686,16 +759,16 @@ export function buildTools(s: ToolScope) {
         return { title: L('assistant.card.title.addColumn'), ops: [{ method: 'POST', path: `/api/projects/${project_id}/columns`, body: a }],
           lines: [L('assistant.card.columnName', { name: a.name }), L('assistant.card.project', { name: p.name }), a.is_done && L('assistant.card.doneColumn'),
             a.wip_limit && L('assistant.card.wip', { n: a.wip_limit })],
-          short: `${q(a.name)} (${p.name})`, open: `/projets/${project_id}/tableau` }
+          open: `/projets/${project_id}/tableau` }
       }
       const col = p.columns.find((x: any) => x.id === column_id)
       if (!col) return { error: 'column_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
       return { title: L('assistant.card.title.updateColumn'), ops: [{ method: 'PATCH', path: `/api/projects/columns/${column_id}`, body: a }],
         lines: [L('assistant.card.columnOf', { name: col.name, project: p.name }), a.name && L('assistant.card.nameChanged', { value: q(a.name), old: q(col.name) }),
-          a.is_done !== undefined && L('assistant.card.doneTasks', { value: yesNo(a.is_done) }),
-          a.wip_limit !== undefined && L('assistant.card.wipChanged', { value: a.wip_limit ?? L('assistant.card.noneF') })],
-        short: q(col.name), open: `/projets/${project_id}/tableau` }
+          a.is_done !== undefined && L('assistant.card.doneTasks', { value: before(yesNo(a.is_done), yesNo(Boolean(col.is_done))) }),
+          a.wip_limit !== undefined && L('assistant.card.wipChanged', { value: before(a.wip_limit ?? L('assistant.card.noneF'), col.wip_limit ?? L('assistant.card.noneF')) })],
+        open: `/projets/${project_id}/tableau` }
     },
   })
 
@@ -712,7 +785,7 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.fileVisibility'), ops: [{ method: 'PATCH', path: `/api/projects/files/${file_id}`, body: { visible_to_client } }],
         lines: [L('assistant.card.file', { name: f.filename, project: p?.name ?? '' }),
           L(!visible_to_client ? 'assistant.card.fileHidden' : p?.portal_enabled ? 'assistant.card.fileVisible' : 'assistant.card.fileVisibleClosed')],
-        short: `${f.filename} : ${L(visible_to_client ? 'assistant.card.visible' : 'assistant.card.hidden')}`, open: `/projets/${project_id}/fichiers` }
+        open: `/projets/${project_id}/fichiers` }
     },
   })
 
@@ -735,9 +808,9 @@ export function buildTools(s: ToolScope) {
         lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.date', { date: D(a.entry_date) }),
           L('assistant.card.duration', { value: hm(a.minutes) }),
           a.user_id && a.user_id !== s.ctx.userId && L('assistant.card.for', { names: await peopleNames([a.user_id]) }),
-          a.note && L('assistant.card.note', { text: clip(a.note, 200) }),
+          a.note && L('assistant.card.note', { text: a.note }),
           p.billing_mode === 'none' ? L('assistant.card.nonBillable') : L('assistant.card.billable', { value: yesNo(body.billable) })],
-        short: L('assistant.card.timeShort', { duration: hm(a.minutes), date: D(a.entry_date), project: p.name }), open: '/temps' }
+        open: '/temps' }
     },
   })
 
@@ -756,17 +829,20 @@ export function buildTools(s: ToolScope) {
       const e = await timeEntry(entry_id)
       if (!e) return { error: 'entry_not_found' }
       if (e.invoiced_at) return { error: 'already_invoiced' }
-      let pName = e.project_name, tTitle: string | null = e.task_title
+      let pName = e.project_name, tTitle: string | null = patch.task_id === null ? null : e.task_title
       if (patch.project_id) { const p = await project(patch.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
       if (patch.task_id) { const t = await task(patch.task_id); if (!t || t.project_id !== (patch.project_id ?? e.project_id)) return { error: 'task_not_in_project' }; tTitle = t.title }
+      const none = L('assistant.card.noneF'), empty = L('assistant.card.empty')
       return { title: L('assistant.card.title.updateTime'), ops: [{ method: 'PATCH', path: `/api/time/entries/${entry_id}`, body: patch }],
+        // Chaque champ modifié « avant → après » (B7).
         lines: [L('assistant.card.entry', { date: D(e.entry_date), duration: hm(e.minutes ?? 0), project: e.project_name, task: e.task_title ? ` (${q(e.task_title)})` : '', person: e.user_name }),
-          patch.project_id && L('assistant.card.project', { name: pName }),
-          patch.task_id !== undefined && (patch.task_id ? L('assistant.card.task', { title: tTitle }) : L('assistant.card.taskNone')),
-          patch.entry_date && L('assistant.card.date', { date: D(patch.entry_date) }), patch.minutes && L('assistant.card.duration', { value: hm(patch.minutes) }),
-          patch.billable !== undefined && L('assistant.card.billable', { value: yesNo(patch.billable) }),
-          patch.note !== undefined && L('assistant.card.note', { text: clip(patch.note, 200) || L('assistant.card.empty') })],
-        short: L('assistant.card.entryShort', { date: D(e.entry_date), project: e.project_name }), open: '/temps' }
+          patch.project_id && L('assistant.card.project', { name: before(pName, e.project_name) }),
+          patch.task_id !== undefined && L('assistant.card.taskChanged', { value: tTitle ? q(tTitle) : none, old: e.task_title ? q(e.task_title) : none }),
+          patch.entry_date && L('assistant.card.date', { date: before(D(patch.entry_date), D(e.entry_date)) }),
+          patch.minutes && L('assistant.card.duration', { value: before(hm(patch.minutes), hm(e.minutes ?? 0)) }),
+          patch.billable !== undefined && L('assistant.card.billable', { value: before(yesNo(patch.billable), yesNo(Boolean(e.billable))) }),
+          patch.note !== undefined && L('assistant.card.note', { text: before(patch.note || empty, clip(e.note, 200) || empty) })],
+        open: '/temps' }
     },
   })
 
@@ -787,7 +863,7 @@ export function buildTools(s: ToolScope) {
         ops: [{ method: 'PUT', path: '/api/time/week/cell', body: { project_id: a.project_id, task_id: a.task_id ?? null, entry_date: a.entry_date, minutes: a.minutes } }],
         lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.day', { date: D(a.entry_date) }),
           L('assistant.card.dayTotal', { value: hm(a.minutes), old: prev ? hm(prev) : L('assistant.card.nothing') }), prev > 0 && L('assistant.card.replaced')],
-        short: L('assistant.card.timesheetShort', { date: D(a.entry_date), duration: hm(a.minutes), project: p.name }), open: '/temps' }
+        open: '/temps' }
     },
   })
 
@@ -797,7 +873,7 @@ export function buildTools(s: ToolScope) {
     schema: z.object({ action: z.enum(['start', 'stop']), project_id: UUID.optional(), task_id: UUID.optional(), note: z.string().max(2000).optional() }),
     build: async (a) => {
       if (a.action === 'stop') return { title: L('assistant.card.title.timerStop'), ops: [{ method: 'POST', path: '/api/time/timer/stop', body: {} }],
-        lines: [L('assistant.card.timerSaved')], short: L('assistant.card.title.timerStop'), open: '/temps' }
+        lines: [L('assistant.card.timerSaved')], open: '/temps' }
       if (!a.project_id) return { error: 'project_id_required' }
       const p = await project(a.project_id)
       if (!p) return { error: 'project_not_found' }
@@ -805,8 +881,9 @@ export function buildTools(s: ToolScope) {
       if (a.task_id) { t = await task(a.task_id); if (!t || t.project_id !== a.project_id) return { error: 'task_not_in_project' } }
       return { title: L('assistant.card.title.timerStart'),
         ops: [{ method: 'POST', path: '/api/time/timer/start', body: { project_id: a.project_id, task_id: a.task_id ?? null, note: a.note ?? '' } }],
-        lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }), L('assistant.card.timerReplaces')],
-        short: L('assistant.card.timerShort', { project: p.name }), open: '/temps' }
+        lines: [L('assistant.card.project', { name: p.name }), t && L('assistant.card.task', { title: t.title }),
+          a.note && L('assistant.card.note', { text: a.note }), L('assistant.card.timerReplaces')],
+        open: '/temps' }
     },
   })
 
@@ -832,8 +909,8 @@ export function buildTools(s: ToolScope) {
         a.contact_person && L('assistant.card.contactPerson', { name: a.contact_person }),
         a.email && L('assistant.card.email', { value: a.email }), a.phone && L('assistant.card.phone', { value: a.phone }), addressLine(a),
         L('assistant.card.country', { value: region(a.country) }), L('assistant.card.clientLanguage', { value: L(LANG_K[a.language]) }),
-        a.vat_number && L('assistant.card.vatNumber', { value: a.vat_number })],
-      short: a.name, open: '/clients/@client',
+        a.vat_number && L('assistant.card.vatNumber', { value: a.vat_number }), a.notes && L('assistant.card.note', { text: a.notes })],
+      open: '/clients/@client',
     }),
   })
 
@@ -849,7 +926,7 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.updateClient'), ops: [{ method: 'PATCH', path: `/api/clients/${client_id}`, body: patch }],
         lines: [L('assistant.card.clientName', { name: c.name }), ...Object.entries(patch).map(([k, v]) => L('assistant.card.fieldChanged', {
           field: CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k, value: clientValue(k, v), old: clip(String(clientValue(k, c[k])), 60) }))],
-        short: `${c.name} : ${Object.keys(patch).map((k) => (CLIENT_FIELD_K[k] ? L(CLIENT_FIELD_K[k]) : k)).join(', ')}`, open: `/clients/${client_id}` }
+        open: `/clients/${client_id}` }
     },
   })
 
@@ -861,27 +938,39 @@ export function buildTools(s: ToolScope) {
     build: async ({ client_id, contact_id, ...a }) => {
       const c = await client(client_id)
       if (!c) return { error: 'client_not_found' }
-      const detail: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.email && L('assistant.card.email', { value: a.email }),
-        a.phone && L('assistant.card.phone', { value: a.phone }), a.job_title && L('assistant.card.jobTitle', { value: a.job_title })]
-      if (!contact_id) {
+      // Ajout : chaque champ ; modification : chaque champ « avant → après » (B7). « Reçoit le suivi » toujours dit.
+      const k = contact_id ? c.contacts.find((x: any) => x.id === contact_id) : null
+      if (contact_id && !k) return { error: 'contact_not_found' }
+      const v = (value: unknown, old: unknown) => (k ? before(value, old || '—') : value)
+      const detail: Line[] = [a.name !== undefined && L('assistant.card.name', { value: v(a.name || '—', k?.name) }),
+        a.email !== undefined && L('assistant.card.email', { value: v(a.email, k?.email) }),
+        a.phone !== undefined && L('assistant.card.phone', { value: v(a.phone || '—', k?.phone) }),
+        a.job_title !== undefined && L('assistant.card.jobTitle', { value: v(a.job_title || '—', k?.job_title) })]
+      if (!k) {
         if (!a.name && !a.email) return { error: 'name_or_email_required' }
         return { title: L('assistant.card.title.addContact'), ops: [{ method: 'POST', path: `/api/clients/${client_id}/contacts`, body: a }],
           lines: [L('assistant.card.clientName', { name: c.name }), ...detail, L('assistant.card.receives', { value: yesNo(a.receives_updates ?? true) })],
-          short: `${a.name || a.email} (${c.name})`, open: `/clients/${client_id}` }
+          open: `/clients/${client_id}` }
       }
-      const k = c.contacts.find((x: any) => x.id === contact_id)
-      if (!k) return { error: 'contact_not_found' }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
       return { title: L('assistant.card.title.updateContact'), ops: [{ method: 'PATCH', path: `/api/clients/contacts/${contact_id}`, body: a }],
         lines: [L('assistant.card.contactOf', { name: k.name || k.email, client: c.name }), ...detail,
-          a.receives_updates !== undefined && L('assistant.card.receives', { value: yesNo(a.receives_updates) })],
-        short: `${k.name || k.email}`, open: `/clients/${client_id}` }
+          a.receives_updates !== undefined && L('assistant.card.receives', { value: before(yesNo(a.receives_updates), yesNo(Boolean(k.receives_updates))) })],
+        open: `/clients/${client_id}` }
     },
   })
 
+  /** Un rendez-vous tel qu'il est, avec ses participants (la liste de l'Agenda, toute l'entreprise). */
+  const eventOf = async (id: string) => {
+    const r = await get('/api/calendar/events?from=2000-01-01&to=2100-12-31&scope=all')
+    const list: any[] = r.status === 200 ? (Array.isArray(r.body) ? r.body : r.body.events ?? []) : []
+    return list.find((e) => e.id === id) ?? null
+  }
+  const EVENT_KIND_K: Record<string, string> = { meeting: 'assistant.card.eventKind.meeting', call: 'assistant.card.eventKind.call',
+    workshop: 'assistant.card.eventKind.workshop', deadline: 'assistant.card.eventKind.deadline', other: 'assistant.card.eventKind.other' }
   write({
     name: 'propose_event', batch: true,
-    description: 'Prépare un rendez-vous de l’agenda : création (sans event_id : titre, début, fin obligatoires) ou modification (event_id lu avec list_events). Dates avec heure et décalage (2026-11-03T14:00:00+01:00). Les personnes de l’équipe sont prévenues dans ProjectLead ; AUCUNE invitation n’est envoyée par email aux adresses extérieures (cela se fait depuis l’agenda).',
+    description: 'Prépare un rendez-vous de l’agenda : création (sans event_id : titre, début, fin obligatoires) ou modification (event_id lu avec list_events). Dates avec heure et décalage (2026-11-03T14:00:00+01:00). attendee_user_ids et attendee_emails : la liste COMPLÈTE (elle remplace l’actuelle, lue avec list_events) ; une liste non donnée reste telle quelle ; la personne qui confirme reste participante. Les personnes de l’équipe sont prévenues dans ProjectLead ; AUCUNE invitation n’est envoyée par email aux adresses extérieures (cela se fait depuis l’agenda).',
     schema: z.object({
       event_id: UUID.optional(), title: z.string().trim().min(1).max(300).optional(), description: z.string().max(10000).optional(), location: z.string().max(500).optional(),
       kind: z.enum(['meeting', 'call', 'workshop', 'deadline', 'other']).optional(), starts_at: DATETIME.optional(), ends_at: DATETIME.optional(), all_day: z.boolean().optional(),
@@ -890,23 +979,59 @@ export function buildTools(s: ToolScope) {
     }),
     build: async ({ event_id, ...a }) => {
       if (a.starts_at && a.ends_at && Date.parse(a.ends_at) < Date.parse(a.starts_at)) return { error: 'end_before_start' }
-      let pName: string | null = null
+      const none = L('assistant.card.none'), empty = L('assistant.card.empty')
+      let pName: string | null = null, cName: string | null = null
       if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
+      if (a.client_id) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cName = c.name }
       if ((await unknownPeople(a.attendee_user_ids)).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.title && L('assistant.card.eventTitle', { value: a.title }), a.starts_at && L('assistant.card.eventStart', { value: when(a.starts_at) }),
-        a.ends_at && L('assistant.card.eventEnd', { value: when(a.ends_at) }), a.all_day && L('assistant.card.allDay'),
-        a.location && L('assistant.card.location', { value: a.location }), pName && L('assistant.card.project', { name: pName }),
-        a.attendee_user_ids?.length && L('assistant.card.team', { names: await peopleNames(a.attendee_user_ids) }),
-        a.attendee_emails?.length && L('assistant.card.external', { emails: a.attendee_emails.join(', ') }),
-        a.description && L('assistant.card.description', { text: clip(a.description, 200) })]
+      const kind = (k: unknown) => (typeof k === 'string' && EVENT_KIND_K[k] ? L(EVENT_KIND_K[k]) : '—')
       if (!event_id) {
         if (!a.title || !a.starts_at || !a.ends_at) return { error: 'title_start_end_required' }
+        // La route ajoute toujours la personne qui confirme aux participants.
+        const team = [...new Set([s.ctx.userId, ...(a.attendee_user_ids ?? [])])]
         return { title: L('assistant.card.title.createEvent'), ops: [{ method: 'POST', path: '/api/calendar/events', body: { ...a, send_invites: false } }],
-          lines, short: `${a.title}, ${when(a.starts_at)}`, open: '/agenda' }
+          lines: [L('assistant.card.eventTitle', { value: a.title }), a.kind && L('assistant.card.eventKind', { value: kind(a.kind) }),
+            L('assistant.card.eventStart', { value: when(a.starts_at) }), L('assistant.card.eventEnd', { value: when(a.ends_at) }), a.all_day && L('assistant.card.allDay'),
+            a.location && L('assistant.card.location', { value: a.location }), pName && L('assistant.card.project', { name: pName }), cName && L('assistant.card.client', { name: cName }),
+            L('assistant.card.team', { names: await peopleNames(team) }),
+            a.attendee_emails?.length && L('assistant.card.external', { emails: a.attendee_emails.join(', ') }),
+            a.description && L('assistant.card.description', { text: a.description })],
+          open: '/agenda' }
       }
       if (!Object.keys(a).length) return { error: 'nothing_to_change' }
-      return { title: L('assistant.card.title.updateEvent'), ops: [{ method: 'PATCH', path: `/api/calendar/events/${event_id}`, body: { ...a, send_invites: false } }],
-        lines, short: a.title ?? L('assistant.card.title.updateEvent'), open: '/agenda' }
+      const ev = await eventOf(event_id)
+      if (!ev) return { error: 'event_not_found' }
+      // Les participants : la route efface TOUTE la liste dès qu'une des deux est donnée, puis réinsère ce qu'elle reçoit
+      // (routes/calendar.ts). La liste qui n'est pas donnée est donc recopiée telle quelle : rien n'est retiré en douce.
+      const attendees: any[] = ev.attendees ?? []
+      const usersBefore = attendees.filter((x) => x.user_id).map((x) => x.user_id as string)
+      const emailsBefore = attendees.filter((x) => !x.user_id && x.email).map((x) => x.email as string)
+      const body: Record<string, unknown> = { ...a, send_invites: false }
+      const touching = a.attendee_user_ids !== undefined || a.attendee_emails !== undefined
+      if (touching) {
+        body.attendee_user_ids = a.attendee_user_ids ?? usersBefore
+        body.attendee_emails = a.attendee_emails ?? emailsBefore
+      }
+      const usersAfter = touching ? [...new Set([s.ctx.userId, ...(body.attendee_user_ids as string[])])] : usersBefore
+      const emailsAfter = touching ? body.attendee_emails as string[] : emailsBefore
+      const same = (x: string[], y: string[]) => x.length === y.length && x.every((v) => y.includes(v))
+      const names = async (ids: string[]) => (await peopleNames(ids)) || none
+      const at = (iso: string | null) => (iso ? when(iso) : none)
+      // Chaque champ modifié « avant → après » (B7), les participants retirés compris.
+      return { title: L('assistant.card.title.updateEvent'), ops: [{ method: 'PATCH', path: `/api/calendar/events/${event_id}`, body }],
+        lines: [L('assistant.card.event', { title: ev.title, when: at(ev.starts_at) }),
+          a.title && L('assistant.card.eventTitle', { value: before(a.title, ev.title) }),
+          a.kind && L('assistant.card.eventKind', { value: before(kind(a.kind), kind(ev.kind)) }),
+          a.starts_at && L('assistant.card.eventStart', { value: before(when(a.starts_at), at(ev.starts_at)) }),
+          a.ends_at && L('assistant.card.eventEnd', { value: before(when(a.ends_at), at(ev.ends_at)) }),
+          a.all_day !== undefined && L('assistant.card.allDayChanged', { value: before(yesNo(a.all_day), yesNo(Boolean(ev.all_day))) }),
+          a.location !== undefined && L('assistant.card.location', { value: before(a.location || empty, ev.location || empty) }),
+          a.project_id !== undefined && L('assistant.card.project', { name: before(pName ?? none, ev.project_name ?? none) }),
+          a.client_id !== undefined && L('assistant.card.client', { name: before(cName ?? none, ev.client_name ?? none) }),
+          !same(usersBefore, usersAfter) && L('assistant.card.team', { names: before(await names(usersAfter), await names(usersBefore)) }),
+          !same(emailsBefore, emailsAfter) && L('assistant.card.external', { emails: before(emailsAfter.join(', ') || none, emailsBefore.join(', ') || none) }),
+          a.description !== undefined && L('assistant.card.description', { text: before(a.description || empty, clip(ev.description, 200) || empty) })],
+        open: '/agenda' }
     },
   })
 
@@ -926,7 +1051,7 @@ export function buildTools(s: ToolScope) {
       return { title: L(status === 'ignored' ? 'assistant.card.title.ignoreEmail' : 'assistant.card.title.untriageEmail'),
         ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/status`, body: { status } }],
         lines: [emailLine(m), status === 'new' && m.project_name && L('assistant.card.detached', { name: m.project_name })],
-        short: `${q(m.subject || L('assistant.card.noSubject'))} : ${L(status === 'ignored' ? 'assistant.card.ignored' : 'assistant.card.toTriage')}`, open: '/emails' }
+        open: '/emails' }
     },
   })
 
@@ -941,7 +1066,7 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.notifRead'), ops: [{ method: 'POST', path: '/api/notifications/read', body: ids ? { ids } : {} }],
         lines: [L('assistant.card.unread', { n: unread.length }), ...unread.slice(0, 6).map((x: any) => clip(x.title, 90) as string),
           unread.length > 6 && L('assistant.card.more', { n: unread.length - 6 })],
-        short: L('assistant.card.unread', { n: unread.length }), open: null }
+        open: null }
     },
   })
 
@@ -959,25 +1084,31 @@ export function buildTools(s: ToolScope) {
     build: async (a) => {
       const ops: WriteOp[] = []
       const lines: Line[] = []
-      const set = (k: string, v: unknown) => L(k, { value: typeof v === 'boolean' ? yesNo(v) : clip(String(v), 80) })
+      // Chaque réglage « avant → après » (B7), chaque texte en entier (la signature est ajoutée à TOUS les suivis client).
+      const fmt = (v: unknown) => (typeof v === 'boolean' ? yesNo(v) : v == null || v === '' ? L('assistant.card.empty') : String(v))
+      const set = (k: string, v: unknown, old: unknown) => L(k, { value: before(fmt(v), fmt(old)) })
+      const me = a.profile || a.company ? (await get('/api/me')).body : null
       if (a.profile && Object.values(a.profile).some((v) => v !== undefined)) {
         ops.push({ method: 'PATCH', path: '/api/me', body: a.profile })
-        lines.push(L('assistant.card.profile', { value: [a.profile.name !== undefined && set('assistant.card.set.name', a.profile.name),
-          a.profile.color && set('assistant.card.set.color', a.profile.color)].filter(Boolean).join(', ') }))
+        lines.push(L('assistant.card.profile', { value: [a.profile.name !== undefined && set('assistant.card.set.name', a.profile.name, me?.user?.name),
+          a.profile.color && set('assistant.card.set.color', a.profile.color, me?.user?.color)].filter(Boolean).join(', ') }))
       }
       if (a.company && Object.values(a.company).some((v) => v !== undefined)) {
+        const acc = me?.account ?? {}
         ops.push({ method: 'PATCH', path: '/api/account', body: a.company })
-        lines.push(L('assistant.card.company', { value: [a.company.name !== undefined && set('assistant.card.set.name', a.company.name),
-          a.company.timezone && set('assistant.card.set.timezone', a.company.timezone), a.company.currency && set('assistant.card.set.currency', a.company.currency),
-          a.company.week_hours !== undefined && set('assistant.card.set.weekHours', a.company.week_hours),
-          a.company.locale && L('assistant.card.set.docLocale', { value: L(LANG_K[a.company.locale]) })].filter(Boolean).join(', ') }))
+        lines.push(L('assistant.card.company', { value: [a.company.name !== undefined && set('assistant.card.set.name', a.company.name, acc.name),
+          a.company.timezone && set('assistant.card.set.timezone', a.company.timezone, acc.timezone), a.company.currency && set('assistant.card.set.currency', a.company.currency, acc.currency),
+          a.company.week_hours !== undefined && set('assistant.card.set.weekHours', a.company.week_hours, acc.week_hours),
+          a.company.locale && L('assistant.card.set.docLocale', { value: before(L(LANG_K[a.company.locale]), LANG_K[acc.locale] ? L(LANG_K[acc.locale]) : '—') })].filter(Boolean).join(', ') }))
       }
       if (a.billing && Object.values(a.billing).some((v) => v !== undefined)) {
+        const r = await get('/api/integrations')
+        const cur: any = r.status === 200 ? r.body : {}
         ops.push({ method: 'PATCH', path: '/api/integrations/settings', body: a.billing })
-        lines.push(L('assistant.card.billingSettings', { value: [a.billing.monthly_billing_auto !== undefined && set('assistant.card.set.auto', a.billing.monthly_billing_auto),
-          a.billing.monthly_billing_day !== undefined && set('assistant.card.set.day', a.billing.monthly_billing_day),
-          a.billing.invoice_language && L('assistant.card.set.invoiceLanguage', { value: L(LANG_K[a.billing.invoice_language]) }),
-          a.billing.client_update_signature !== undefined && set('assistant.card.set.signature', a.billing.client_update_signature)].filter(Boolean).join(', ') }))
+        lines.push(L('assistant.card.billingSettings', { value: [a.billing.monthly_billing_auto !== undefined && set('assistant.card.set.auto', a.billing.monthly_billing_auto, cur.monthly_billing_auto),
+          a.billing.monthly_billing_day !== undefined && set('assistant.card.set.day', a.billing.monthly_billing_day, cur.monthly_billing_day),
+          a.billing.invoice_language && L('assistant.card.set.invoiceLanguage', { value: before(L(LANG_K[a.billing.invoice_language]), LANG_K[cur.invoice_language] ? L(LANG_K[cur.invoice_language]) : '—') }),
+          a.billing.client_update_signature !== undefined && set('assistant.card.set.signature', a.billing.client_update_signature, clip(cur.client_update_signature, 200))].filter(Boolean).join(', ') }))
       }
       if (a.mailbox && (a.mailbox.display_name !== undefined || a.mailbox.is_default !== undefined)) {
         const r = await get('/api/mail/mailboxes')
@@ -985,11 +1116,11 @@ export function buildTools(s: ToolScope) {
         if (!mb) return { error: 'mailbox_not_found' }
         const { id, ...rest } = a.mailbox
         ops.push({ method: 'PATCH', path: `/api/mail/mailboxes/${id}`, body: rest })
-        lines.push(L('assistant.card.mailbox', { email: mb.email, value: [rest.display_name !== undefined && L('assistant.card.set.displayName', { value: rest.display_name }),
-          rest.is_default && L('assistant.card.set.default')].filter(Boolean).join(', ') }))
+        lines.push(L('assistant.card.mailbox', { email: mb.email, value: [rest.display_name !== undefined && L('assistant.card.set.displayName', { value: before(rest.display_name, mb.display_name ?? '') }),
+          rest.is_default !== undefined && L('assistant.card.set.isDefault', { value: before(yesNo(rest.is_default), yesNo(Boolean(mb.is_default))) })].filter(Boolean).join(', ') }))
       }
       if (!ops.length) return { error: 'nothing_to_change' }
-      return { title: L('assistant.card.title.settings'), ops, lines, short: lines.filter(Boolean).join(' ; ') as string,
+      return { title: L('assistant.card.title.settings'), ops, lines,
         open: a.company || a.billing ? '/reglages/entreprise' : a.mailbox ? '/reglages/emails' : '/reglages/profil' }
     },
   })
@@ -1007,24 +1138,38 @@ export function buildTools(s: ToolScope) {
     }),
     build: async ({ booking_page_id, ...a }) => {
       if ((await unknownPeople(a.host_ids)).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.slug && L('assistant.card.url', { value: `/rdv/${a.slug}` }),
-        a.duration_minutes && L('assistant.card.durationMin', { n: a.duration_minutes }), a.location && L('assistant.card.location', { value: a.location }),
-        a.host_ids?.length && L('assistant.card.hosts', { names: await peopleNames(a.host_ids) }),
-        a.availability && L('assistant.card.availability', { value: Object.entries(a.availability).map(([d, r]: [string, any]) =>
-          `${L(DAY_K[Number(d) - 1])} ${r.map((x: string[]) => x.join('-')).join(', ')}`).join(' ; ') }),
-        a.create_project !== undefined && L('assistant.card.createsProject', { value: yesNo(a.create_project) }),
-        a.active !== undefined && L('assistant.card.active', { value: yesNo(a.active) })]
-      if (!booking_page_id) {
-        if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
-        return { title: L('assistant.card.title.createBooking'), ops: [{ method: 'POST', path: '/api/booking', body: a }],
-          lines: [...lines, L('assistant.card.publicBooking')], short: L('assistant.card.pageShort', { name: a.name }), open: '/reglages/rendez-vous' }
-      }
-      const r = await get('/api/booking')
-      const bt = r.status === 200 ? r.body.find((x: any) => x.id === booking_page_id) : null
-      if (!bt) return { error: 'booking_page_not_found' }
-      if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      let bt: any = null
+      if (booking_page_id) {
+        const r = await get('/api/booking')
+        bt = r.status === 200 ? r.body.find((x: any) => x.id === booking_page_id) : null
+        if (!bt) return { error: 'booking_page_not_found' }
+        if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      } else if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
+      let pName: string | null = null
+      if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
+      const oldProject = bt?.project_id ? (await project(bt.project_id))?.name ?? null : null
+      // Création : chaque champ ; modification : chaque champ « avant → après » (B7).
+      const none = L('assistant.card.none'), empty = L('assistant.card.empty')
+      const v = (value: unknown, old: unknown) => (bt ? before(value, old ?? none) : value)
+      const avail = (x: any) => (x && Object.keys(x).length ? Object.entries(x).map(([d, r]: [string, any]) =>
+        `${L(DAY_K[Number(d) - 1])} ${(r as string[][]).map((x) => x.join('-')).join(', ')}`).join(' ; ') : none)
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: v(a.name, bt?.name) }),
+        a.slug && L('assistant.card.url', { value: v(`/rdv/${a.slug}`, bt && `/rdv/${bt.slug}`) }),
+        a.description !== undefined && L('assistant.card.description', { text: v(a.description || empty, clip(bt?.description, 200) || empty) }),
+        a.duration_minutes && L('assistant.card.durationMin', { n: v(a.duration_minutes, bt?.duration_minutes) }),
+        a.buffer_minutes !== undefined && L('assistant.card.buffer', { n: v(a.buffer_minutes, bt?.buffer_minutes) }),
+        a.min_notice_hours !== undefined && L('assistant.card.minNotice', { n: v(a.min_notice_hours, bt?.min_notice_hours) }),
+        a.max_days_ahead !== undefined && L('assistant.card.maxAhead', { n: v(a.max_days_ahead, bt?.max_days_ahead) }),
+        a.location !== undefined && L('assistant.card.location', { value: v(a.location || empty, bt?.location || empty) }),
+        a.host_ids && L('assistant.card.hosts', { names: v((await peopleNames(a.host_ids)) || none, (await peopleNames(bt?.host_ids)) || none) }),
+        a.availability && L('assistant.card.availability', { value: v(avail(a.availability), avail(bt?.availability)) }),
+        a.create_project !== undefined && L('assistant.card.createsProject', { value: v(yesNo(a.create_project), yesNo(Boolean(bt?.create_project))) }),
+        a.project_id !== undefined && L('assistant.card.project', { name: v(pName ?? none, oldProject ?? none) }),
+        a.active !== undefined && L('assistant.card.active', { value: v(yesNo(a.active), yesNo(Boolean(bt?.active))) })]
+      if (!bt) return { title: L('assistant.card.title.createBooking'), ops: [{ method: 'POST', path: '/api/booking', body: a }],
+        lines: [...lines, L('assistant.card.publicBooking')], open: '/reglages/rendez-vous' }
       return { title: L('assistant.card.title.updateBooking'), ops: [{ method: 'PATCH', path: `/api/booking/${booking_page_id}`, body: a }],
-        lines: [L('assistant.card.page', { name: bt.name }), ...lines], short: L('assistant.card.pageShort', { name: bt.name }), open: '/reglages/rendez-vous' }
+        lines: [L('assistant.card.page', { name: bt.name }), ...lines], open: '/reglages/rendez-vous' }
     },
   })
 
@@ -1034,32 +1179,46 @@ export function buildTools(s: ToolScope) {
     schema: z.object({ form_id: UUID.optional(), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,60}$/).optional(), name: z.string().trim().min(1).max(120).optional(),
       intro: z.string().max(3000).optional(), template_id: UUID.nullable().optional(), owner_id: UUID.nullable().optional(), active: z.boolean().optional() }),
     build: async ({ form_id, ...a }) => {
-      if (a.template_id) { const t = await project(a.template_id); if (!t?.is_template) return { error: 'template_not_found' } }
-      if (a.owner_id && (await unknownPeople([a.owner_id])).length) return { error: 'unknown_person' }
-      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.slug && L('assistant.card.url', { value: `/demande/${a.slug}` }),
-        a.intro && L('assistant.card.intro', { text: clip(a.intro, 160) }), a.owner_id && L('assistant.card.owner', { names: await peopleNames([a.owner_id]) }),
-        a.active !== undefined && L('assistant.card.formActive', { value: yesNo(a.active) })]
-      if (!form_id) {
-        if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
-        return { title: L('assistant.card.title.createForm'), ops: [{ method: 'POST', path: '/api/forms', body: a }], lines: [...lines, L('assistant.card.publicForm')],
-          short: L('assistant.card.formShort', { name: a.name }), open: '/reglages/formulaires' }
+      let tName: string | null = null
+      if (a.template_id) {
+        const t = await project(a.template_id)
+        if (!t?.is_template) return { error: 'template_not_found' }
+        // Chaque demande ouvrirait un projet visible de toute l'entreprise avec la structure d'un modèle réservé.
+        if (t.visibility === 'members') return reservedCopy
+        tName = t.name
       }
-      const r = await get('/api/forms')
-      const f = r.status === 200 ? r.body.find((x: any) => x.id === form_id) : null
-      if (!f) return { error: 'form_not_found' }
-      if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      if (a.owner_id && (await unknownPeople([a.owner_id])).length) return { error: 'unknown_person' }
+      let f: any = null
+      if (form_id) {
+        const r = await get('/api/forms')
+        f = r.status === 200 ? r.body.find((x: any) => x.id === form_id) : null
+        if (!f) return { error: 'form_not_found' }
+        if (!Object.keys(a).length) return { error: 'nothing_to_change' }
+      } else if (!a.slug || !a.name) return { error: 'slug_and_name_required' }
+      const none = L('assistant.card.none'), empty = L('assistant.card.empty')
+      const v = (value: unknown, old: unknown) => (f ? before(value, old ?? none) : value)
+      // La création confie les demandes à la personne qui confirme si aucune n'est choisie (routes/work.ts).
+      const owner = async (id: string | null | undefined) => (id ? await peopleNames([id]) : none)
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: v(a.name, f?.name) }),
+        a.slug && L('assistant.card.url', { value: v(`/demande/${a.slug}`, f && `/demande/${f.slug}`) }),
+        a.intro !== undefined && L('assistant.card.intro', { text: v(a.intro || empty, clip(f?.intro, 200) || empty) }),
+        a.template_id !== undefined && L('assistant.card.formTemplate', { name: v(tName ?? none, f?.template_name ?? none) }),
+        (f ? a.owner_id !== undefined : true) && L('assistant.card.owner', { names: v(await owner(f ? a.owner_id : a.owner_id ?? s.ctx.userId), await owner(f?.owner_id)) }),
+        a.active !== undefined && L('assistant.card.formActive', { value: v(yesNo(a.active), yesNo(Boolean(f?.active))) })]
+      if (!f) return { title: L('assistant.card.title.createForm'), ops: [{ method: 'POST', path: '/api/forms', body: a }], lines: [...lines, L('assistant.card.publicForm')],
+        open: '/reglages/formulaires' }
       return { title: L('assistant.card.title.updateForm'), ops: [{ method: 'PATCH', path: `/api/forms/${form_id}`, body: a }],
-        lines: [L('assistant.card.form', { name: f.name }), ...lines], short: L('assistant.card.formShort', { name: f.name }), open: '/reglages/formulaires' }
+        lines: [L('assistant.card.form', { name: f.name }), ...lines], open: '/reglages/formulaires' }
     },
   })
 
   write({
     name: 'propose_automation', batch: true,
-    description: 'Prépare une automatisation « quand … alors … » (responsables et administrateurs) : création (sans automation_id) ou modification. Déclencheurs : task_completed, task_moved, stage_completed, task_created, project_completed. Actions : notify (params.to: owner|members|assignees ou params.user_ids, params.message), assign (params.user_id), set_priority (params.priority), move_column (params.column_name), complete_stage, create_task (params.title, params.due_in_days). L’envoi automatique au client n’est pas permis à l’assistant.',
+    description: 'Prépare une automatisation « quand … alors … » (responsables et administrateurs) : création (sans automation_id) ou modification. Déclencheurs : task_completed, task_moved, stage_completed, task_created, project_completed. Conditions (avec project_id) : column_id (tâche dans cette colonne), stage_id (de cette étape). Actions : notify (params.to: owner|members|assignees ou params.user_ids, params.message), assign (params.user_id), set_priority (params.priority), move_column (params.column_name), complete_stage, create_task (params.title, params.due_in_days). L’envoi automatique au client n’est pas permis à l’assistant.',
     schema: z.object({
       automation_id: UUID.optional(), name: z.string().trim().min(1).max(120).optional(), project_id: UUID.nullable().optional(),
       trigger: z.enum(['task_completed', 'task_moved', 'stage_completed', 'task_created', 'project_completed']).optional(),
-      conditions: z.record(z.string(), z.unknown()).optional(),
+      conditions: z.object({ column_id: UUID.optional(), stage_id: UUID.optional() }).strict().optional(),
       action: z.enum(['notify', 'assign', 'set_priority', 'move_column', 'complete_stage', 'create_task']).optional(),
       params: z.record(z.string(), z.unknown()).optional(), active: z.boolean().optional(),
     }),
@@ -1073,31 +1232,50 @@ export function buildTools(s: ToolScope) {
         if (au.action === 'send_client_update') return { error: 'forbidden_category', hint: 'automatisation qui écrit au client : à régler dans l’écran' }
         if (!Object.keys(a).length) return { error: 'nothing_to_change' }
       } else if (!a.name || !a.trigger || !a.action) return { error: 'name_trigger_action_required' }
-      let pName: string | null = null
-      if (a.project_id) { const p = await project(a.project_id); if (!p) return { error: 'project_not_found' }; pName = p.name }
+      const projectId = a.project_id !== undefined ? a.project_id : au?.project_id ?? null
+      const scope = projectId ? await project(projectId) : null
+      if (projectId && !scope) return { error: 'project_not_found' }
+      // Les conditions désignent une colonne ou une étape du projet de l'automatisation : dites par leur nom.
+      const condText = (c: any) => {
+        if (!c || (!c.column_id && !c.stage_id)) return L('assistant.card.autoAny')
+        const col = c.column_id ? scope?.columns.find((x: any) => x.id === c.column_id) : null
+        const st = c.stage_id ? scope?.stages.find((x: any) => x.id === c.stage_id) : null
+        return [c.column_id && L('assistant.card.autoColumn', { name: col?.name ?? '?' }), c.stage_id && L('assistant.card.autoStage', { name: st?.name ?? '?' })].filter(Boolean).join(', ')
+      }
+      if (a.conditions && ((a.conditions.column_id && !scope?.columns.some((x: any) => x.id === a.conditions.column_id))
+        || (a.conditions.stage_id && !scope?.stages.some((x: any) => x.id === a.conditions.stage_id)))) return { error: 'condition_not_in_project', hint: 'colonne ou étape du projet de l’automatisation (project_id)' }
       // « Alors … » : la même phrase que l'écran Réglages → Automatisations, dans la langue de la personne.
       const action: string = a.action ?? au?.action
       const p: Record<string, any> = a.params ?? (a.action ? {} : au?.params ?? {})
-      const people = [...(Array.isArray(p.user_ids) ? p.user_ids : []), ...(typeof p.user_id === 'string' ? [p.user_id] : [])]
+      const peopleOf = (x: Record<string, any>) => [...(Array.isArray(x.user_ids) ? x.user_ids : []), ...(typeof x.user_id === 'string' ? [x.user_id] : [])]
+      const people = peopleOf(p)
       if (people.some((id) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) || (await unknownPeople(people)).length) return { error: 'unknown_person', hint: 'ids de list_team, personnes actives' }
-      const then = async () => {
-        if (action === 'notify') return L('assistant.card.autoThen.notify', { to: p.to && AUTO_TO_K[p.to] ? L(AUTO_TO_K[p.to])
-          : people.length ? await peopleNames(people) : L('assistant.card.autoTo.team') })
-        if (action === 'assign') return L('assistant.card.autoThen.assign', { name: (await peopleNames(people)) || '…' })
-        if (action === 'set_priority') return L('assistant.card.autoThen.setPriority', { priority: PRIORITY_K[p.priority] ? L(PRIORITY_K[p.priority]).toLowerCase() : '…' })
-        if (action === 'move_column') return L('assistant.card.autoThen.moveColumn', { name: p.column_name || '…' })
-        if (action === 'create_task') return L('assistant.card.autoThen.createTask', { title: p.title || '…' })
-          + (p.due_in_days != null ? L('assistant.card.autoThen.createTaskDue', { n: p.due_in_days }) : '')
-        return ACTION_K[action] ? L(ACTION_K[action]) : action
+      const thenOf = async (act: string, x: Record<string, any>) => {
+        const who = peopleOf(x)
+        if (act === 'notify') return L('assistant.card.autoThen.notify', { to: x.to && AUTO_TO_K[x.to] ? L(AUTO_TO_K[x.to])
+          : who.length ? await peopleNames(who) : L('assistant.card.autoTo.team') })
+        if (act === 'assign') return L('assistant.card.autoThen.assign', { name: (await peopleNames(who)) || '…' })
+        if (act === 'set_priority') return L('assistant.card.autoThen.setPriority', { priority: PRIORITY_K[x.priority] ? L(PRIORITY_K[x.priority]).toLowerCase() : '…' })
+        if (act === 'move_column') return L('assistant.card.autoThen.moveColumn', { name: x.column_name || '…' })
+        if (act === 'create_task') return L('assistant.card.autoThen.createTask', { title: x.title || '…' })
+          + (x.due_in_days != null ? L('assistant.card.autoThen.createTaskDue', { n: x.due_in_days }) : '')
+        return ACTION_K[act] ? L(ACTION_K[act]) : act
       }
-      const lines: Line[] = [a.name && L('assistant.card.name', { value: a.name }), a.trigger && L('assistant.card.when', { value: L(TRIGGER_K[a.trigger]) }),
-        (a.action || a.params) && L('assistant.card.then', { value: await then() }),
-        action === 'notify' && typeof p.message === 'string' && p.message && L('assistant.card.autoMessage', { text: clip(p.message, 160) }),
-        a.project_id !== undefined && L('assistant.card.project', { name: pName ?? L('assistant.card.allProjects') }),
-        a.active !== undefined && L('assistant.card.active', { value: yesNo(a.active) })]
-      if (!au) return { title: L('assistant.card.title.createAutomation'), ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, short: q(a.name), open: '/reglages/automatisations' }
+      // Création : chaque champ ; modification : chaque champ « avant → après » (B7).
+      const v = (value: unknown, old: unknown) => (au ? before(value, old ?? '—') : value)
+      const all = L('assistant.card.allProjects')
+      const message = action === 'notify' && typeof p.message === 'string' ? p.message : ''
+      const oldMessage = au?.action === 'notify' && typeof au.params?.message === 'string' ? au.params.message : ''
+      const lines: Line[] = [a.name && L('assistant.card.name', { value: v(a.name, au?.name) }),
+        a.trigger && L('assistant.card.when', { value: v(L(TRIGGER_K[a.trigger]), TRIGGER_K[au?.trigger] ? L(TRIGGER_K[au.trigger]) : null) }),
+        a.conditions !== undefined && L('assistant.card.autoOnly', { value: v(condText(a.conditions), condText(au?.conditions)) }),
+        (a.action || a.params) && L('assistant.card.then', { value: v(await thenOf(action, p), au ? await thenOf(au.action, au.params ?? {}) : null) }),
+        (a.action || a.params) && (message || oldMessage) && L('assistant.card.autoMessage', { text: v(message || L('assistant.card.empty'), clip(oldMessage, 200) || L('assistant.card.empty')) }),
+        a.project_id !== undefined && L('assistant.card.project', { name: v(scope?.name ?? all, au?.project_name ?? all) }),
+        a.active !== undefined && L('assistant.card.active', { value: v(yesNo(a.active), yesNo(Boolean(au?.active))) })]
+      if (!au) return { title: L('assistant.card.title.createAutomation'), ops: [{ method: 'POST', path: '/api/automations', body: a }], lines, open: '/reglages/automatisations' }
       return { title: L('assistant.card.title.updateAutomation'), ops: [{ method: 'PATCH', path: `/api/automations/${automation_id}`, body: a }],
-        lines: [L('assistant.card.automation', { name: au.name }), ...lines], short: q(au.name), open: '/reglages/automatisations' }
+        lines: [L('assistant.card.automation', { name: au.name }), ...lines], open: '/reglages/automatisations' }
     },
   })
 
@@ -1168,8 +1346,9 @@ export function buildTools(s: ToolScope) {
       return { title: L('assistant.card.title.billing', { period }), mode: 'route',
         ops: [{ method: 'POST', path: '/api/integrations/billing/run', body: { period, ...(project_ids ? { project_ids } : {}) } }],
         lines: [L('assistant.card.drafts', { n: fresh.length, done: list.length - fresh.length }),
-          ...fresh.slice(0, 10).map((x: any) => `${x.project.name}${x.client ? ` (${x.client.name})` : ''} : ${money(x.total_cents, x.project.currency ?? 'CHF')}`),
-          fresh.length > 10 && L('assistant.card.more', { n: fresh.length - 10 }), L('assistant.card.draftsOnly')],
+          // Chaque brouillon et son montant, tous : aucun caché sous « + N autres ».
+          ...fresh.map((x: any) => `${x.project.name}${x.client ? ` (${x.client.name})` : ''} : ${money(x.total_cents, x.project.currency ?? 'CHF')}`),
+          L('assistant.card.draftsOnly')],
         open: '/facturation' }
     },
   })
@@ -1237,6 +1416,8 @@ export function buildTools(s: ToolScope) {
       if (a.new_project?.client_id) { const c = await client(a.new_project.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
       const allPeople = a.tasks.flatMap((t: any) => t.assignee_ids ?? [])
       if ((await unknownPeople(allPeople)).length) return { error: 'unknown_person', hint: 'ids de list_team, personnes actives' }
+      const joins = await joining(p, allPeople, p ? p.name : a.new_project.name)
+      if ('error' in joins) return joins
       const start = workdayFrom(a.start_date ?? (p?.start_date && p.start_date.slice(0, 10) >= s.today ? p.start_date.slice(0, 10) : s.today))
       const plan = schedulePlan(start, a.stages, a.tasks)
       if ('error' in plan) return plan
@@ -1267,7 +1448,8 @@ export function buildTools(s: ToolScope) {
       if (ops.length > MAX_OPS) return { error: 'plan_too_large', operations: ops.length, max: MAX_OPS,
         hint: 'moins de points de contrôle ou de tâches, ou deux cartes (une partie des étapes, puis la suite)' }
 
-      // La carte : un groupe par étape, ses tâches avec dates, estimation, dépendances.
+      // La carte : un groupe par étape, sa description et sa note pour le client, puis TOUTES ses tâches avec dates,
+      // estimation, dépendances, points de contrôle (leurs libellés), personnes, priorité, visibilité et description.
       const titleOf = new Map<string, string>(a.tasks.map((t: any) => [t.key, t.title]))
       const milestones = ordered.filter((t: any) => plan.tasks.get(t.key)!.milestone)
       const estimate = ordered.reduce((n: number, t: any) => n + (t.estimate_minutes ?? 0), 0)
@@ -1276,21 +1458,30 @@ export function buildTools(s: ToolScope) {
         return [`${d.milestone ? '◆ ' : ''}${t.title}`, d.milestone ? `${D(d.due)} ${L('assistant.card.plan.milestoneTag')}` : span(d.start, d.due),
           t.estimate_minutes ? hm(t.estimate_minutes) : null,
           t.after?.length ? L('assistant.card.plan.after', { list: t.after.map((k: string) => q(titleOf.get(k))).join(', ') }) : null,
-          t.checklist?.length ? noun('assistant.noun.checklist', t.checklist.length) : null,
-          t.assignee_ids?.length ? await peopleNames(t.assignee_ids) : null].filter(Boolean).join(' · ')
+          t.checklist?.length ? `${noun('assistant.noun.checklist', t.checklist.length)} (${t.checklist.join(', ')})` : null,
+          t.assignee_ids?.length ? await peopleNames(t.assignee_ids) : null,
+          t.priority ? L('assistant.card.plan.priorityTag', { value: L(PRIORITY_K[t.priority]) }) : null,
+          t.visible_to_client ? L('assistant.card.plan.visibleTag') : null,
+          t.description ? L('assistant.card.description', { text: t.description }) : null].filter(Boolean).join(' · ')
       }
-      const CAP = 10
+      const n0 = p?.stages.length ?? 0
       const groups: SummaryGroup[] = []
       if (a.stages.length) {
         for (const [i, st] of a.stages.entries()) {
           const d = plan.stages.get(st.key)!
           const list = ordered.filter((t: any) => t.stage === st.key)
-          groups.push({ title: `${(p?.stages.length ?? 0) + i + 1}. ${st.name} · ${span(d.start, d.due)}`,
-            lines: list.length ? await Promise.all(list.slice(0, CAP).map(taskLine)) : [L('assistant.card.plan.emptyStage')], ...(list.length > CAP ? { more: list.length - CAP } : {}) })
+          const notes = [st.description && L('assistant.card.description', { text: st.description }),
+            st.client_note && L('assistant.card.clientNote', { text: st.client_note })].filter((x): x is string => Boolean(x))
+          groups.push({ title: `${n0 + i + 1}. ${st.name} · ${span(d.start, d.due)}`, ...(notes.length ? { notes } : {}),
+            lines: list.length ? await Promise.all(list.map(taskLine)) : [L('assistant.card.plan.emptyStage')] })
         }
       } else {
-        groups.push({ title: L('assistant.card.plan.tasksGroup'), lines: await Promise.all(ordered.slice(0, 40).map(taskLine)), ...(ordered.length > 40 ? { more: ordered.length - 40 } : {}) })
+        groups.push({ title: L('assistant.card.plan.tasksGroup'), lines: await Promise.all(ordered.map(taskLine)) })
       }
+      // Une étape est visible par le client par défaut (page de suivi, suivis envoyés) : la carte dit lesquelles.
+      const shown = a.stages.map((st: any, i: number) => ({ st, n: n0 + i + 1 })).filter(({ st }: any) => st.visible_to_client !== false)
+      const visibleLine = a.stages.length && L('assistant.card.plan.clientVisible', { list: shown.length === a.stages.length ? L('assistant.card.plan.allStages')
+        : shown.length ? shown.map(({ st, n }: any) => `${n}. ${st.name}`).join(', ') : L('assistant.card.noneF') })
       const name = p ? p.name : a.new_project.name
       const late = p?.due_date && plan.end > p.due_date.slice(0, 10)
       const counts = [a.stages.length && noun('assistant.noun.stage', a.stages.length),
@@ -1300,7 +1491,7 @@ export function buildTools(s: ToolScope) {
       return {
         title: L(p ? 'assistant.card.title.plan' : 'assistant.card.title.createPlan', { name }),
         lines: [p ? L('assistant.card.project', { name }) : cl ? L('assistant.card.plan.newProjectClient', { name, client: cl }) : L('assistant.card.plan.newProject', { name }),
-          L('assistant.card.plan.period', { start: D(plan.start), end: D(plan.end), n: workdaysBetween(plan.start, plan.end) }), counts,
+          L('assistant.card.plan.period', { start: D(plan.start), end: D(plan.end), n: workdaysBetween(plan.start, plan.end) }), counts, visibleLine, joins.line,
           p && (p.stages.length || p.tasks_total) && L('assistant.card.plan.existing', { stages: noun('assistant.noun.stage', p.stages.length), tasks: noun('assistant.noun.task', p.tasks_total) }),
           Object.keys(dates).length && L('assistant.card.plan.projectDates', { value: [dates.start_date && L('assistant.card.plan.startPart', { date: D(dates.start_date) }),
             dates.due_date && L('assistant.card.plan.endPart', { date: D(dates.due_date) })].filter(Boolean).join(', ') }),
@@ -1317,12 +1508,11 @@ export function buildTools(s: ToolScope) {
   const defs = new Map(W.map((d) => [d.name, d]))
   const batchTool = betaZodTool({
     name: 'propose_batch',
-    description: 'Regroupe PLUSIEURS changements en UNE carte « À confirmer » (un clic, une transaction : tout ou rien, 150 écritures au plus). Chaque opération = { tool, input } où tool est un des outils propose_* regroupables et input exactement ce que cet outil prend. Pour les étapes, tâches, jalons et dépendances d’un plan de projet : propose_project_plan.',
+    description: 'Regroupe PLUSIEURS changements en UNE carte « À confirmer » (un clic, une transaction : tout ou rien, 150 écritures au plus). Chaque opération = { tool, input } où tool est un des outils propose_* regroupables et input exactement ce que cet outil prend. La carte montre chaque opération en entier. Pour les étapes, tâches, jalons et dépendances d’un plan de projet : propose_project_plan.',
     inputSchema: z.object({
-      title: z.string().trim().min(1).max(120).optional().describe('titre court de la carte, dans la langue de la personne'),
       operations: z.array(z.object({ tool: z.enum(BATCHABLE), input: z.record(z.string(), z.unknown()) })).min(1).max(MAX_OPS),
     }),
-    run: async (a) => {
+    run: (a) => oneAtATime(async () => {
       mark('propose_batch')
       const ops: WriteOp[] = []
       const byTitle = new Map<string, string[]>()
@@ -1337,20 +1527,21 @@ export function buildTools(s: ToolScope) {
         if ('error' in b) return out({ ...b, operation: i + 1, tool: item.tool })
         // Dans un lot, les références locales ne servent qu'à l'outil seul (page à ouvrir) : on les retire.
         for (const op of b.ops) ops.push({ method: op.method, path: op.path, body: op.body })
+        // Chaque opération EN ENTIER (tout ce que montrerait sa carte seule) : une ligne, ses parties séparées par « · ».
         const list = byTitle.get(b.title) ?? []
-        list.push(b.short ?? (b.lines.find(Boolean) as string) ?? b.title)
+        list.push(b.lines.filter((x): x is string => Boolean(x)).join(' · ') || b.title)
         byTitle.set(b.title, list)
         opens.add(b.open?.includes('@') ? null : b.open?.replace(/\?.*$/, '') ?? null)
       }
-      const groups: SummaryGroup[] = [...byTitle].map(([title, lines]) => ({ title: lines.length > 1 ? `${title} (${lines.length})` : title,
-        lines: lines.slice(0, 10), ...(lines.length > 10 ? { more: lines.length - 10 } : {}) }))
+      // Toutes les opérations, aucune cachée sous « + N autres » ; le titre vient du serveur, jamais du modèle.
+      const groups: SummaryGroup[] = [...byTitle].map(([title, lines]) => ({ title: lines.length > 1 ? `${title} (${lines.length})` : title, lines }))
       const n = a.operations.length
       const only = opens.size === 1 ? [...opens][0] : null
       return propose('propose_batch', {
-        title: a.title ?? L('assistant.card.batch.title', { n }),
+        title: L('assistant.card.batch.title', { n }),
         lines: [L('assistant.card.batch.line', { n })], groups, ops, open: only,
       })
-    },
+    }),
   })
 
   // ------------------------------------------------------------------ outils de lecture
@@ -1594,7 +1785,7 @@ export function buildTools(s: ToolScope) {
     }),
     betaZodTool({
       name: 'list_events',
-      description: "Les rendez-vous de l'agenda entre deux dates (ceux de la personne, ou toute l'entreprise si scope='all'), avec leur id.",
+      description: "Les rendez-vous de l'agenda entre deux dates (ceux de la personne, ou toute l'entreprise si scope='all'), avec leur id et leurs participants (équipe : id et nom ; extérieurs : email).",
       inputSchema: z.object({ from: DATE, to: DATE, scope: z.enum(['mine', 'all']).default('mine') }),
       run: async (a) => {
         mark('list_events')
@@ -1602,7 +1793,9 @@ export function buildTools(s: ToolScope) {
         if (r.status !== 200) return refusal(r.status, r.body)
         const list = Array.isArray(r.body) ? r.body : (r.body.events ?? [])
         return out(rows(list, (e: any) => ({ id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, all_day: e.all_day, location: e.location,
-          project: e.project_name, client: e.client_name, organizer: e.organizer_name, external: Boolean(e.external) })))
+          project: e.project_name, client: e.client_name, organizer: e.organizer_name, external: Boolean(e.external),
+          team: (e.attendees ?? []).filter((x: any) => x.user_id).map((x: any) => ({ id: x.user_id, name: x.name })),
+          external_emails: (e.attendees ?? []).filter((x: any) => !x.user_id && x.email).map((x: any) => x.email) })))
       },
     }),
     betaZodTool({
@@ -1681,7 +1874,7 @@ export function buildTools(s: ToolScope) {
 
   const writes = W.map((d) => betaZodTool({
     name: d.name, description: d.description, inputSchema: d.schema,
-    run: async (a: any) => { mark(d.name); return propose(d.name, await d.build(a)) },
+    run: (a: any) => oneAtATime(async () => { mark(d.name); return propose(d.name, await d.build(a)) }),
   }))
   return [...reads, ...writes, batchTool]
 }

@@ -19,7 +19,7 @@ import { CardText, Rich } from './assistantText'
  * service se recommence par le bouton « Nouvelle conversation » du message (B3).
  */
 
-type Group = { title: string; lines: string[]; more?: number }
+type Group = { title: string; lines: string[]; notes?: string[]; more?: number }
 type Summary = { title: string; lines: string[]; groups?: Group[] }
 type Link = { label: string; path: string }
 type Item =
@@ -250,6 +250,7 @@ export default function Assistant() {
                       {it.summary.groups?.map((g, j) => (
                         <div key={j} className="mt-2 border-l-2 border-accent-light pl-2" data-assistant-group>
                           <p className="text-[13px] font-bold [overflow-wrap:anywhere]">{g.title}</p>
+                          {g.notes?.map((n, k) => <p key={k} data-assistant-group-note className="text-[12.5px] [overflow-wrap:anywhere]"><CardText text={n} becomes={tr('shell.assistant.card.becomes')} /></p>)}
                           <ul className="space-y-0.5 text-[12.5px] text-muted-foreground">
                             {g.lines.map((l, k) => {
                               // « Titre · dates · estimation · après … » : le titre en avant, le reste en retrait.

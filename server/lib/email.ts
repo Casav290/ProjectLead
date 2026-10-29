@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer'
-import { afterSharedCommit, anon, isDryRun } from '../db.js'
+import { anon, refuseOutbound } from '../db.js'
 import { newMessageId } from './mailbox/types.js'
 import { sendVia } from './mailbox/index.js'
 
@@ -44,11 +44,10 @@ async function log(m: Mail, via: string, error: string | null) {
 /** Rend le moyen d'envoi utilisé, ou lève si tout a échoué. */
 export async function sendMail(m: Mail): Promise<{ via: string }> {
   if (!m.to.length) throw new Error('no_recipient')
-  // Essai d'une proposition de l'Assistant IA (transaction toujours annulée) : rien ne part, rien n'est journalisé.
-  if (isDryRun()) return { via: 'essai' }
-  // « Confirmer » d'une carte (transaction partagée) : l'email part après la validation de toute la carte, jamais si une
-  // écriture suivante est refusée (tout ou rien, db.ts). Hors carte, il part tout de suite, comme à l'écran.
-  if (afterSharedCommit(() => sendMail(m))) return { via: 'after_commit' }
+  // Écriture de l'Assistant IA (essai d'une proposition ou « Confirmer ») : RIEN ne part, même l'email d'une automatisation
+  // de l'entreprise. La tentative est notée (db.ts, refuseOutbound) et la carte entière est refusée, rien n'est enregistré
+  // (lib/assistant/run.ts). Hors assistant, l'email part tout de suite, comme à l'écran.
+  if (refuseOutbound()) throw new Error('outbound_refused')
   // 1. Une boîte branchée : celle de la personne, sinon celle par défaut de l'entreprise.
   if (m.accountId) {
     const mb = await anon(async (db) => (await db.query(

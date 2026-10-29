@@ -367,9 +367,16 @@ const batch = await ask(ann, 'propose_batch', { title: 'Relances de la semaine',
   { tool: 'propose_log_time', input: { project_id: site, task_id: t2, entry_date: '2026-11-02', minutes: 90, note: 'Maquette accueil' } },
 ] })
 after = await footprint(accountId)
-check('lot : UNE carte groupée (3 tâches, 1 modification, 1 saisie), rien d’écrit', batch.card?.summary.title === 'Relances de la semaine'
+check('lot : UNE carte groupée (3 tâches, 1 modification, 1 saisie), rien d’écrit', batch.card?.summary.title === '5 changements'
   && batch.card.summary.groups.map((g: any) => g.title).join('|') === 'Créer une tâche (3)|Modifier une tâche|Saisir du temps' && same(before, after),
   { s: batch.card?.summary, d: diff(before, after) })
+// La carte du lot montre CHAQUE opération en entier (relecture du 29.10) : rien d'écrit qui ne soit lu avant « Confirmer ».
+const bLines = (batch.card?.summary.groups ?? []).flatMap((g: any) => g.lines) as string[]
+check('lot : le titre de la carte vient du serveur, jamais du modèle (« Relances de la semaine » ignoré)', batch.card?.summary.title === '5 changements'
+  && !JSON.stringify(batch.card?.summary).includes('Relances de la semaine'), batch.card?.summary.title)
+check('lot : chaque opération en entier (échéance, personne, priorité avant → après, note, intervenant nouveau)', bLines.length === 5
+  && bLines.some((l) => l.includes('« Envoyer le devis signé »') && l.includes('Assignée à : Mia Responsable') && l.includes('Devient intervenant de « Autre projet » : Mia Responsable'))
+  && bLines.some((l) => l.includes('« Arborescence »') && /Priorité : \S+ → haute/.test(l)) && bLines.some((l) => l.includes('Note : Maquette accueil') && l.includes('1 h 30')), bLines)
 r = await bob.post('/api/assistant/confirm', { token: batch.card.token })
 check('lot : autre personne → 403', r.status === 403, r)
 r = await eve.post('/api/assistant/confirm', { token: batch.card.token })
@@ -391,6 +398,23 @@ b2 = await ask(ann, 'propose_batch', { operations: [
   { tool: 'propose_create_task', input: { project_id: other, title: 'Bonne' } },
   { tool: 'propose_add_dependency', input: { task_id: t1, depends_on_id: (await q(`select id from tasks where project_id = $1 limit 1`, [other]))[0].id } }] })
 check('lot dont une opération échouerait : refusé à l’essai, pas de carte', !b2.card && /dependency_other_project/.test(b2.reply), b2.reply.slice(0, 300))
+// Le scénario de la relecture : un texte lu pousse le modèle à glisser « tarif à 0 » et « autre client » dans un lot.
+// La carte montre chaque champ du projet « avant → après » : rien ne passe sous « Modifier un projet : 3 changements ».
+const cliA = (await ann.post('/api/clients', { name: `Client A ${stamp}` })).body.id
+const cliB = (await ann.post('/api/clients', { name: `Client B ${stamp}` })).body.id
+const billed = (await ann.post('/api/projects', { name: `Projet facturé ${stamp}`, status: 'active', client_id: cliA, billing_mode: 'hourly', hourly_rate_cents: 12000 })).body.id
+b2 = await ask(ann, 'propose_batch', { title: 'Petit décalage', operations: [
+  { tool: 'propose_update_project', input: { project_id: billed, due_date: '2026-12-15', hourly_rate_cents: 0, client_id: cliB } },
+  { tool: 'propose_create_task', input: { project_id: billed, title: 'Tâche ajoutée', description: `Début. ${'x'.repeat(4000)} FIN-DU-TEXTE` } }] })
+const proj = (b2.card?.summary.groups ?? []).find((g: any) => g.title === 'Modifier un projet')?.lines[0] ?? ''
+const added = (b2.card?.summary.groups ?? []).find((g: any) => g.title === 'Créer une tâche')?.lines[0] ?? ''
+check('lot : « Modifier un projet » montre chaque champ avant → après (échéance, taux horaire CHF 120 → CHF 0, client A → B)', proj.includes(`Projet : Projet facturé ${stamp}`)
+  && /Échéance : aucune → .*15 déc/.test(proj) && proj.includes('Taux horaire : CHF 120 → CHF 0') && proj.includes(`Client : Client A ${stamp} → Client B ${stamp}`)
+  && b2.card.summary.title === '2 changements', { proj, title: b2.card?.summary.title })
+check('lot : la description de 4 000 caractères est montrée en entier (jusqu’à « FIN-DU-TEXTE »)', added.includes('FIN-DU-TEXTE') && added.length > 4000, added.length)
+const twelve = await ask(ann, 'propose_batch', { operations: Array.from({ length: 12 }, (_, i) => ({ tool: 'propose_create_task', input: { project_id: other, title: `Lot de douze ${i + 1} ${stamp}` } })) })
+const g12 = twelve.card?.summary.groups?.[0]
+check('lot de 12 tâches : les 12 lignes sur la carte, aucune cachée sous « + N autres »', g12?.lines.length === 12 && !g12.more && g12.lines[11].includes(`Lot de douze 12 ${stamp}`), g12)
 
 // ------------------------------------------------------------------ 5. chaque outil d'écriture : proposer n'écrit rien, confirmer écrit juste
 section('outils d’écriture, un par un')
@@ -689,41 +713,196 @@ check('propose_sync_now, agenda en panne : 502, message clair dans la langue (de
   && r.body.message.startsWith('Die Synchronisierung ist fehlgeschlagen') && (await extEvents()) === 3, r.body)
 ics.status = 200
 
-// ------------------------------------------------------------------ 6. l'essai n'envoie rien (automatisation « écrire au client »)
-section('essai sans effet extérieur')
+// ------------------------------------------------------------------ 6. rien ne sort, même indirectement (relecture du 29.10)
+// Une automatisation de l'entreprise qui « écrit au client » quand une tâche est créée ou terminée, une étape ou un projet
+// terminé : à l'écran, l'email part. Depuis une carte de l'assistant, JAMAIS : la carte est refusée à l'essai, et
+// « Confirmer » refuse la carte entière si l'automatisation est apparue entre-temps (rien d'écrit, rien d'envoyé).
+section('rien ne sort, même indirectement')
+const { tr } = await import('../server/lib/i18n.js')
 const watched = (await ann.post('/api/projects', { name: `Projet suivi ${stamp}`, status: 'active', client_id: cli })).body.id
 await ann.post(`/api/clients/${cli}/contacts`, { name: 'Contact suivi', email: `suivi-${stamp}@exemple.test`, receives_updates: true })
-await ann.post('/api/automations', { name: 'Suivi à chaque tâche', project_id: watched, trigger: 'task_created', action: 'send_client_update', params: {} })
-const mails0 = await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])
-const reports0 = await n('select count(*)::int as n from client_reports where project_id = $1', [watched])
-const wt = await ask(ann, 'propose_create_task', { project_id: watched, title: 'Tâche qui déclenche le suivi' })
-check('essai d’une tâche dont l’automatisation écrit au client : AUCUN email, aucun suivi enregistré', Boolean(wt.card)
-  && (await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])) === mails0
-  && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports0)
-await ann.post('/api/assistant/confirm', { token: wt.card.token })
-check('après « Confirmer », l’automatisation de l’entreprise joue comme à l’écran (suivi journalisé)', (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports0 + 1)
-// Tout ou rien, email compris : dans un lot, l'email d'une automatisation attend la validation de TOUTE la carte.
-const mails1 = await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])
-const reports1 = await n('select count(*)::int as n from client_reports where project_id = $1', [watched])
+const mails = () => n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])
+const reports = () => n('select count(*)::int as n from client_reports where project_id = $1', [watched])
+const wStage = (await ann.post(`/api/projects/${watched}/stages`, { name: 'Maquettes', status: 'in_progress' })).body.id
+const wTask = (await ann.post('/api/tasks', { project_id: watched, title: `Tâche suivie ${stamp}`, stage_id: wStage })).body.id
+const autoIds: string[] = []
+for (const trigger of ['task_created', 'task_completed', 'stage_completed', 'project_completed'])
+  autoIds.push((await ann.post('/api/automations', { name: `Écrire au client (${trigger})`, project_id: watched, trigger, action: 'send_client_update', params: {} })).body.id)
+const m0 = await mails(), r0 = await reports()
+r = await ann.post('/api/tasks', { project_id: watched, title: `Créée à l’écran ${stamp}` })
+check('témoin : à l’écran (inchangé), l’automatisation « écrire au client » joue : suivi enregistré, email journalisé', r.status === 201
+  && (await reports()) === r0 + 1 && (await mails()) === m0 + 1, { r: r.body, reports: await reports(), mails: await mails() })
+const sending: [string, string, unknown][] = [
+  ['tâche créée (automatisation task_created)', 'propose_create_task', { project_id: watched, title: `Déclenche ${stamp}` }],
+  ['tâche terminée (task_completed)', 'propose_update_task', { task_id: wTask, completed: true }],
+  ['tâches terminées par lot de sélection (task_completed)', 'propose_update_tasks', { task_ids: [wTask], completed: true }],
+  ['étape terminée (stage_completed) — la carte aurait dit « le client n’est pas prévenu »', 'propose_update_stage', { project_id: watched, stage_id: wStage, status: 'done' }],
+  ['projet terminé (project_completed)', 'propose_update_project', { project_id: watched, status: 'done' }],
+  ['plan de projet (ses tâches déclenchent task_created)', 'propose_project_plan', { project_id: watched, stages: [{ key: 'a', name: 'Recette' }],
+    tasks: [{ key: 'x', stage: 'a', title: 'Tests', duration_days: 2 }] }],
+  ['lot dont la 2e opération termine une tâche suivie', 'propose_batch', { operations: [{ tool: 'propose_create_task', input: { project_id: other, title: `Sans suivi ${stamp}` } },
+    { tool: 'propose_update_task', input: { task_id: wTask, completed: true } }] }],
+]
+for (const [label, tool, input] of sending) {
+  const fp0 = await footprint(accountId)
+  const a = await ask(ann, tool, input)
+  const fp1 = await footprint(accountId)
+  check(`${label} : pas de carte (« sends_outside » dit au modèle), rien d’écrit, aucun email, aucun suivi`, !a.card && a.reply.includes('"code":"sends_outside"')
+    && a.reply.includes('l’assistant n’envoie jamais rien') && same(fp0, fp1), { reply: a.reply.slice(0, 300), d: diff(fp0, fp1) })
+}
+// L'automatisation apparaît APRÈS la carte : « Confirmer » la voit et refuse la carte entière ; la carte n'est pas usée.
+const quiet = (await ann.post('/api/projects', { name: `Projet calme ${stamp}`, status: 'active', client_id: cli })).body.id
+const quietTask = await ask(ann, 'propose_create_task', { project_id: quiet, title: `Calme ${stamp}` })
+check('projet sans automatisation : carte « Créer une tâche »', Boolean(quietTask.card), quietTask.reply.slice(0, 200))
+const lateAuto = (await ann.post('/api/automations', { name: 'Ajoutée après la carte', project_id: quiet, trigger: 'task_created', action: 'send_client_update', params: {} })).body.id
+let fpa = await footprint(accountId)
+r = await ann.post('/api/assistant/confirm', { token: quietTask.card.token })
+let fpb = await footprint(accountId)
+check('automatisation ajoutée après la carte : « Confirmer » → 409 sends_outside, message traduit, rien d’écrit, aucun email, jeton pas usé', r.status === 409
+  && r.body.error === 'sends_outside' && r.body.message === tr('fr', 'assistant.error.sends_outside') && same(fpa, fpb)
+  && (await n('select count(*)::int as n from tasks where title = $1', [`Calme ${stamp}`])) === 0, { r: r.body, d: diff(fpa, fpb) })
+fpa = await footprint(accountId)
 r = await ann.post('/api/assistant/confirm', { token: sign(annId, [
-  { method: 'POST', path: '/api/tasks', body: { project_id: watched, title: `Déclenche le suivi ${stamp}` } },   // l'automatisation écrit au client
-  { method: 'POST', path: '/api/tasks', body: { project_id: other, title: `Tâche A ${stamp}` }, ref: 'a' },
-  { method: 'POST', path: '/api/tasks', body: { project_id: site, title: `Tâche B ${stamp}` }, ref: 'b' },
-  { method: 'POST', path: '/api/tasks/@a/dependencies', body: { depends_on_id: '@b' } },                       // deux projets : refusée
+  { method: 'POST', path: '/api/tasks', body: { project_id: other, title: `Avant le suivi ${stamp}` } },
+  { method: 'POST', path: '/api/tasks', body: { project_id: quiet, title: `Déclenche le suivi ${stamp}` } },
 ]) })
-check('lot refusé à la 4e écriture après une tâche qui déclenche le suivi client : AUCUN email parti, aucun suivi, aucune tâche', r.status === 400
-  && (await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])) === mails1
-  && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports1
-  && (await n('select count(*)::int as n from tasks where title = $1', [`Déclenche le suivi ${stamp}`])) === 0, r.body)
-r = await ann.post('/api/assistant/confirm', { token: sign(annId, [
-  { method: 'POST', path: '/api/tasks', body: { project_id: watched, title: `Déclenche le suivi, validé ${stamp}` } },
-  { method: 'POST', path: '/api/tasks', body: { project_id: other, title: `Accompagne ${stamp}` } },
-]) })
-const sentAfter = await q('select to_emails, via from sent_emails where account_id = $1 order by created_at desc limit 1', [accountId])
-check('lot validé : l’email du suivi part APRÈS la validation (une fois, au contact qui reçoit le suivi)', r.status === 200
-  && (await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])) === mails1 + 1
-  && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports1 + 1
-  && sentAfter[0]?.to_emails.includes(`suivi-${stamp}@exemple.test`), { r: r.body, sentAfter })
+fpb = await footprint(accountId)
+check('jeton signé dont la 2e écriture ferait écrire au client : 409, « écriture 2 sur 2 », RIEN d’écrit (pas même la 1re), aucun email', r.status === 409
+  && r.body.error === 'sends_outside' && r.body.message.includes('écriture 2 sur 2') && same(fpa, fpb)
+  && (await n('select count(*)::int as n from tasks where title = $1', [`Avant le suivi ${stamp}`])) === 0, { r: r.body, d: diff(fpa, fpb) })
+await ann.patch(`/api/automations/${lateAuto}`, { active: false })
+r = await ann.post('/api/assistant/confirm', { token: quietTask.card.token })
+check('automatisation coupée : la même carte se confirme (elle n’était pas usée), aucun email', r.status === 200
+  && (await n('select count(*)::int as n from tasks where title = $1', [`Calme ${stamp}`])) === 1 && (await mails()) === m0 + 1, r.body)
+// Sans automatisation qui écrit au client, la carte d'étape dit vrai : « le client n'est pas prévenu », et il ne l'est pas.
+for (const id of autoIds) await ann.patch(`/api/automations/${id}`, { active: false })
+const m1 = await mails(), r1 = await reports()
+const stCard = await cycle('propose_update_stage terminée (sans automatisation)', ann, 'propose_update_stage', { project_id: watched, stage_id: wStage, status: 'done' },
+  async () => (await one('select status from stages where id = $1', [wStage]))?.status === 'done')
+check('… sa carte disait « le client n’est pas prévenu », et aucun email ni suivi n’est parti', Boolean(stCard?.summary.lines.some((l: string) => l.includes('le client n’est pas prévenu')))
+  && (await mails()) === m1 && (await reports()) === r1, stCard?.summary.lines)
+// Le suivi périodique (lib/jobs.ts) : relancé par un changement de statut ou de client, il enverrait un email au prochain passage.
+const paused = (await ann.post('/api/projects', { name: `Projet en pause ${stamp}`, status: 'on_hold', client_id: cli })).body.id
+await ann.patch(`/api/projects/${paused}`, { update_frequency: 'weekly' })
+const loose = (await ann.post('/api/projects', { name: `Projet sans client ${stamp}`, status: 'active' })).body.id
+await ann.patch(`/api/projects/${loose}`, { update_frequency: 'weekly' })
+for (const [label, input] of [['projet en pause, suivi hebdomadaire, remis « en cours »', { project_id: paused, status: 'active' }],
+  ['projet en cours, suivi hebdomadaire, sans client : un client ajouté', { project_id: loose, client_id: cli }]] as const) {
+  fpa = await footprint(accountId)
+  const a = await ask(ann, 'propose_update_project', input)
+  fpb = await footprint(accountId)
+  check(`${label} : pas de carte (« restarts_client_updates »), rien d’écrit`, !a.card && a.reply.includes('restarts_client_updates') && same(fpa, fpb), a.reply.slice(0, 300))
+}
+const followed = (await ann.post('/api/projects', { name: `Projet suivi chaque semaine ${stamp}`, status: 'active', client_id: cliA })).body.id
+await ann.patch(`/api/projects/${followed}`, { update_frequency: 'weekly' })
+const moved = await ask(ann, 'propose_update_project', { project_id: followed, client_id: cliB })
+check('projet suivi chaque semaine, client changé : la carte dit « avant → après » et à qui partiront les prochains suivis', Boolean(moved.card)
+  && moved.card.summary.lines.includes(`Client : Client A ${stamp} → Client B ${stamp}`)
+  && moved.card.summary.lines.includes(`Suivi automatique du projet : les prochains partiront à Client B ${stamp}`), moved.card?.summary.lines ?? moved.reply.slice(0, 300))
+const pausedQuiet = (await ann.post('/api/projects', { name: `En pause sans suivi ${stamp}`, status: 'on_hold', client_id: cli })).body.id
+const resumeQuiet = await ask(ann, 'propose_update_project', { project_id: pausedQuiet, status: 'active' })
+check('témoin : sans suivi automatique, remettre un projet « en cours » a sa carte (Statut : en pause → en cours)', Boolean(resumeQuiet.card)
+  && resumeQuiet.card.summary.lines.includes('Statut : en pause → en cours'), resumeQuiet.card?.summary.lines ?? resumeQuiet.reply.slice(0, 300))
+
+// ------------------------------------------------------------------ 6 bis. intervenants et visibilité, même indirectement
+// Assigner fait de la personne une intervenante (routes/tasks.ts) : dans un projet réservé, cela lui OUVRE le projet.
+// Copier un projet réservé (ou en faire un modèle) donne une copie visible de toute l'entreprise.
+section('intervenants et visibilité, même indirectement')
+const secret = (await ann.post('/api/projects', { name: `Projet réservé ${stamp}`, status: 'active', visibility: 'members' })).body.id
+const secretTask = (await ann.post('/api/tasks', { project_id: secret, title: `Devis ${stamp}` })).body.id
+check('témoin : Bob (membre, pas intervenant) ne voit pas le projet réservé', (await bob.get(`/api/projects/${secret}`)).status === 404)
+const opening: [string, string, unknown][] = [
+  ['créer une tâche assignée à Bob', 'propose_create_task', { project_id: secret, title: `Pour Bob ${stamp}`, assignee_ids: [bobId] }],
+  ['assigner la tâche à Bob', 'propose_update_task', { task_id: secretTask, assignee_ids: [annId, bobId] }],
+  ['ajouter Bob par la sélection multiple', 'propose_update_tasks', { task_ids: [secretTask], add_assignee: bobId }],
+  ['plan dont une tâche est assignée à Bob', 'propose_project_plan', { project_id: secret, stages: [{ key: 'a', name: 'Étude' }],
+    tasks: [{ key: 'x', stage: 'a', title: 'Analyse', duration_days: 2, assignee_ids: [bobId] }] }],
+]
+for (const [label, tool, input] of opening) {
+  fpa = await footprint(accountId)
+  const a = await ask(ann, tool, input)
+  fpb = await footprint(accountId)
+  check(`projet réservé, ${label} : pas de carte (« opens_reserved_project »), rien d’écrit`, !a.card && a.reply.includes('opens_reserved_project')
+    && a.reply.includes('Bob Membre') && same(fpa, fpb), a.reply.slice(0, 300))
+}
+check('… Bob ne voit toujours pas le projet réservé, et n’en est pas intervenant', (await bob.get(`/api/projects/${secret}`)).status === 404
+  && (await n('select count(*)::int as n from project_members where project_id = $1 and user_id = $2', [secret, bobId])) === 0)
+const miaJoins = await ask(ann, 'propose_update_task', { task_id: secretTask, assignee_ids: [miaId] })
+check('projet réservé, assigner Mia (responsable : elle voit déjà tout) : carte qui dit qu’elle devient intervenante', Boolean(miaJoins.card)
+  && miaJoins.card.summary.lines.includes(`Devient intervenant de « Projet réservé ${stamp} » : Mia Responsable`), miaJoins.card?.summary.lines ?? miaJoins.reply.slice(0, 300))
+const secretTpl = (await ann.post('/api/projects', { name: `Modèle réservé ${stamp}`, is_template: true, visibility: 'members' })).body.id
+for (const [label, tool, input] of [['dupliquer le projet réservé', 'propose_duplicate_project', { project_id: secret, name: `Copie ${stamp}` }],
+  ['enregistrer le projet réservé comme modèle', 'propose_duplicate_project', { project_id: secret, name: `Modèle ${stamp}`, as_template: true }],
+  ['créer un projet depuis un modèle réservé', 'propose_create_project', { name: `Depuis le modèle ${stamp}`, template_id: secretTpl }],
+  ['formulaire qui ouvre ses projets depuis un modèle réservé', 'propose_intake_form', { slug: `demande-${stamp}`, name: 'Demande', template_id: secretTpl }]] as const) {
+  fpa = await footprint(accountId)
+  const a = await ask(ann, tool, input)
+  fpb = await footprint(accountId)
+  check(`${label} : pas de carte (« reserved_project_copy » : la copie serait visible de toute l’entreprise), rien d’écrit`, !a.card
+    && a.reply.includes('reserved_project_copy') && same(fpa, fpb), a.reply.slice(0, 300))
+}
+const openCopy = await ask(ann, 'propose_duplicate_project', { project_id: other, name: `Copie ouverte ${stamp}` })
+check('témoin : dupliquer un projet visible de l’entreprise a sa carte', Boolean(openCopy.card), openCopy.reply.slice(0, 200))
+
+// ------------------------------------------------------------------ 6 ter. la carte montre tout ce qui est écrit
+section('la carte montre tout ce qui est écrit')
+// Les participants d'un rendez-vous : la route remplace TOUTE la liste dès qu'une des deux est donnée.
+const meet = (await ann.post('/api/calendar/events', { title: `Rendez-vous client ${stamp}`, starts_at: '2026-11-12T10:00:00+01:00', ends_at: '2026-11-12T11:00:00+01:00',
+  attendee_user_ids: [bobId], attendee_emails: [`client1-${stamp}@exemple.test`, `client2-${stamp}@exemple.test`] })).body.id
+const people = async () => (await q('select user_id, email from event_attendees where event_id = $1', [meet]))
+const onlyMia = await ask(ann, 'propose_event', { event_id: meet, attendee_user_ids: [miaId] })
+const teamLine = onlyMia.card?.summary.lines.find((l: string) => l.startsWith('Équipe : ')) ?? ''
+check('rendez-vous, « ajoute Marie » mal compris (liste réduite à Mia) : la carte montre Bob retiré (avant → après), les extérieurs gardés', Boolean(onlyMia.card)
+  && /^Équipe : .*Bob Membre.* → (?!.*Bob).*Mia Responsable/.test(teamLine) && !onlyMia.card.summary.lines.some((l: string) => l.startsWith('Participants extérieurs')),
+  onlyMia.card?.summary.lines ?? onlyMia.reply.slice(0, 300))
+const addMia = await ask(ann, 'propose_event', { event_id: meet, attendee_user_ids: [bobId, miaId], title: `Rendez-vous client (jeudi) ${stamp}` })
+r = addMia.card ? await ann.post('/api/assistant/confirm', { token: addMia.card.token }) : { status: 0, body: null }
+const after2 = await people()
+check('rendez-vous, Mia ajoutée : titre avant → après ; confirmé, les deux contacts extérieurs et Bob restent, Mia et Ann y sont', r.status === 200
+  && Boolean(addMia.card?.summary.lines.includes(`Titre : Rendez-vous client ${stamp} → Rendez-vous client (jeudi) ${stamp}`))
+  && after2.filter((x) => x.email).length === 2 && [annId, bobId, miaId].every((id) => after2.some((x) => x.user_id === id)), { r: r.body, after2, l: addMia.card?.summary.lines })
+check('list_events donne au modèle les participants (équipe et extérieurs)', (await ask(ann, 'list_events', { from: '2026-11-12', to: '2026-11-12', scope: 'all' })).reply
+  .includes(`client1-${stamp}@exemple.test`))
+// Les textes longs : en entier sur la carte (la signature est ajoutée à TOUS les suivis client).
+const sig = `Cordialement, l’équipe ${stamp}${' '.repeat(1500)}Nos coordonnées bancaires ont changé : IBAN CH00 ${stamp}`
+const sigCard = await ask(ann, 'propose_update_settings', { billing: { client_update_signature: sig } })
+check('signature du suivi client (≈1 600 caractères) : en entier sur la carte, jusqu’à l’IBAN, avant → après', Boolean(sigCard.card?.summary.lines.some((l: string) =>
+  l.includes(`IBAN CH00 ${stamp}`) && l.includes(' → '))), sigCard.card?.summary.lines.map((l: string) => l.slice(-120)) ?? sigCard.reply.slice(0, 200))
+const note = `Retard dû au client. ${'y'.repeat(1900)} FIN-DE-LA-NOTE`
+const noteCard = await ask(ann, 'propose_update_stage', { project_id: watched, stage_id: wStage, client_note: note })
+check('note pour le client d’une étape (2 000 caractères) : en entier sur la carte', Boolean(noteCard.card?.summary.lines.some((l: string) => l.includes('FIN-DE-LA-NOTE'))),
+  noteCard.reply.slice(0, 200))
+// Le plan : description et note pour le client de chaque étape, visibilité par le client, et pour chaque tâche
+// description, priorité, visibilité, points de contrôle par leur libellé ; aucune tâche cachée.
+const planP = (await ann.post('/api/projects', { name: `Plan détaillé ${stamp}`, status: 'active' })).body.id
+const detailed = await ask(ann, 'propose_project_plan', { project_id: planP, start_date: '2026-11-02',
+  stages: [{ key: 'a', name: 'Développement', description: 'Intégration du thème', client_note: 'Retard dû à l’incompétence du client' },
+    { key: 'b', name: 'Interne', visible_to_client: false }],
+  tasks: [...Array.from({ length: 12 }, (_, i) => ({ key: `t${i}`, stage: 'a', title: `Tâche ${i + 1}`, duration_days: 1 })),
+    { key: 'v', stage: 'b', title: 'Revue', duration_days: 1, priority: 'urgent', visible_to_client: true, description: 'Relire tout le code', checklist: ['Sécurité', 'Accessibilité'] }] })
+const dg = detailed.card?.summary.groups ?? []
+check('plan : la note pour le client et la description de l’étape sont sur la carte', Boolean(dg[0]?.notes?.includes('Note pour le client : Retard dû à l’incompétence du client'))
+  && Boolean(dg[0]?.notes?.includes('Description : Intégration du thème')), dg[0])
+check('plan : la carte dit quelles étapes le client voit (« 1. Développement » seulement)', Boolean(detailed.card?.summary.lines
+  .includes('Étapes visibles par le client (page de suivi et suivis envoyés) : 1. Développement')), detailed.card?.summary.lines)
+check('plan : les 12 tâches de l’étape sur la carte (aucune sous « + N autres »)', dg[0]?.lines.length === 12 && !dg[0].more, dg[0]?.lines.length)
+check('plan : une tâche montre priorité, visibilité, description et ses points de contrôle par leur libellé', Boolean(dg[1]?.lines[0]?.includes('2 points de contrôle (Sécurité, Accessibilité)'))
+  && dg[1].lines[0].includes('priorité urgente') && dg[1].lines[0].includes('visible par le client') && dg[1].lines[0].includes('Description : Relire tout le code'), dg[1]?.lines)
+// Le budget et la facturation : « avant → après », chaque montant dans sa devise.
+const budgeted = (await ann.post('/api/projects', { name: `Budgété ${stamp}`, status: 'active', budget_cents: 800000, billing_mode: 'fixed', fixed_cents: 500000 })).body.id
+const bud = await ask(ann, 'propose_update_project', { project_id: budgeted, budget_cents: 150000, fixed_cents: 450000, billing_mode: 'hourly' })
+check('budget, forfait et mode de facturation : avant → après', Boolean(bud.card?.summary.lines.some((l: string) => /^Budget : CHF 8\D?000 → CHF 1\D?500$/.test(l)))
+  && Boolean(bud.card?.summary.lines.some((l: string) => /^Forfait global : CHF 5\D?000 → CHF 4\D?500$/.test(l)))
+  && Boolean(bud.card?.summary.lines.includes('Facturation : forfait global → à l’heure')), bud.card?.summary.lines)
+// Une saisie de temps et un contact modifiés : chaque champ avant → après.
+const te = (await ann.post('/api/time/entries', { project_id: other, entry_date: '2026-11-05', minutes: 60, note: 'Avant' })).body.id
+const teCard = await ask(ann, 'propose_update_time_entry', { entry_id: te, minutes: 90, entry_date: '2026-11-06', billable: false })
+check('saisie de temps modifiée : durée, date, facturable avant → après', Boolean(teCard.card?.summary.lines.includes('Durée : 1 h → 1 h 30'))
+  && Boolean(teCard.card?.summary.lines.some((l: string) => /^Date : .*5 nov.* → .*6 nov/.test(l))) && Boolean(teCard.card?.summary.lines.includes('Facturable : oui → non')), teCard.card?.summary.lines)
+const ctc = (await q(`select id from client_contacts where client_id = $1 and name = 'Contact suivi'`, [cli]))[0].id
+const ctcCard = await ask(ann, 'propose_client_contact', { client_id: cli, contact_id: ctc, email: `autre-${stamp}@exemple.test`, receives_updates: false })
+check('contact modifié : email et « reçoit le suivi » avant → après', Boolean(ctcCard.card?.summary.lines.includes(`Email : suivi-${stamp}@exemple.test → autre-${stamp}@exemple.test`))
+  && Boolean(ctcCard.card?.summary.lines.includes('Reçoit le suivi des projets : oui → non')), ctcCard.card?.summary.lines)
 
 // ------------------------------------------------------------------ 7. la liste fermée : jamais ces écritures, même signées
 section('interdits, même avec un jeton signé')

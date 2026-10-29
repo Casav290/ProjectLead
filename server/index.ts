@@ -7,7 +7,7 @@ import { waitUntil } from '@vercel/functions'
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { hashToken, SESSION_COOKIE } from './auth.js'
-import { anon, inSharedTransaction } from './db.js'
+import { anon, inAssistantWrite, inSharedTransaction } from './db.js'
 import { HttpError, type Env } from './lib/http.js'
 import { asLocale } from './lib/i18n.js'
 import { runJobsIfDue, runJobs } from './lib/jobs.js'
@@ -53,8 +53,9 @@ app.onError((err, c) => {
 // Les tâches de fond profitent du trafic (relances, boîtes mail, facturation du mois…).
 // Sur Vercel, `waitUntil` laisse la fonction finir le passage après la réponse.
 app.use('*', async (c, next) => {
-  // Pas pendant une écriture groupée de l'Assistant IA (appels internes, transaction partagée : lib/assistant/run.ts).
-  const jobs = inSharedTransaction() ? undefined : runJobsIfDue()
+  // Pas pendant une écriture de l'Assistant IA (appels internes, essai ou « Confirmer » : lib/assistant/run.ts) : les
+  // tâches de fond écrivent aux clients, et rien ne doit sortir d'une carte de l'assistant.
+  const jobs = inSharedTransaction() || inAssistantWrite() ? undefined : runJobsIfDue()
   if (jobs && process.env.VERCEL) waitUntil(jobs)
   await next()
 })

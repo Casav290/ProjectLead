@@ -19,7 +19,8 @@ export const MAX_TOKEN_CHARS = 250_000
 
 export type Method = 'POST' | 'PATCH' | 'PUT'
 export type WriteOp = { method: Method; path: string; body: Record<string, unknown>; ref?: string }
-export type SummaryGroup = { title: string; lines: string[]; more?: number }
+/** `notes` : ce que le groupe lui-même écrit (description d'une étape, note pour le client), avant ses lignes. */
+export type SummaryGroup = { title: string; lines: string[]; notes?: string[]; more?: number }
 export type Summary = { title: string; lines: string[]; groups?: SummaryGroup[] }
 export type Mode = 'tx' | 'route'
 export type ConfirmPayload = {

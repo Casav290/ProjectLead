@@ -210,11 +210,14 @@ check('B6 consigne : texte simple, listes « - », gras rare, jamais de tableau,
     && de.includes(`Fällig: ${d('2026-11-03', 'de-CH')} → ${d('2026-11-06', 'de-CH')}`), { fr, de })
   const cl = await ask(ann, 'FAKE:propose_create_client:{"name":"Client Berlin","country":"DE","language":"de"}')
   const st = await ask(ann, `FAKE:propose_create_stage:{"project_id":"${projectId}","name":"Recette","start_date":"2026-11-09","due_date":"2026-11-13"}`)
+  // Le budget modifié se lit « avant → après » (relecture du 29.10 : 8'000 → 1'500, la valeur divisée par cinq se voit).
+  await ann.patch(`/api/projects/${projectId}`, { budget_cents: 800000 })
   const bu = await ask(ann, `FAKE:propose_update_project:{"project_id":"${projectId}","budget_cents":150000}`)
-  const all = [...(card(cl)?.summary.lines ?? []), ...(card(st)?.summary.lines ?? []), ...(card(bu)?.summary.lines ?? [])]
+  const created = [...(card(cl)?.summary.lines ?? []), ...(card(st)?.summary.lines ?? [])]
+  const budget = card(bu)?.summary.lines ?? []
   check('B7 cartes : pays et langue en toutes lettres, intervalle en mots, montant avec devise',
-    all.includes('Pays : Allemagne') && all.includes('Langue : allemand') && all.includes(`Dates : du ${d('2026-11-09', 'fr-CH')} au ${d('2026-11-13', 'fr-CH')}`)
-    && all.some((l: string) => /^Budget : CHF 1\D?500$/.test(l)) && !all.some((l: string) => l.includes(' → ')), all)
+    created.includes('Pays : Allemagne') && created.includes('Langue : allemand') && created.includes(`Dates : du ${d('2026-11-09', 'fr-CH')} au ${d('2026-11-13', 'fr-CH')}`)
+    && !created.some((l: string) => l.includes(' → ')) && budget.some((l: string) => /^Budget : CHF 8\D?000 → CHF 1\D?500$/.test(l)), { created, budget })
 
   // Les refus de « Confirmer », chacun son texte, dans la langue demandée.
   const expired = signConfirm({ u: annId, a: accountId, mode: 'tx', tool: 'test', ops: [{ method: 'POST', path: '/api/tasks', body: { project_id: projectId, title: 'Trop tard' } }],

@@ -236,7 +236,7 @@ app.post('/', async (c) => {
 const CONFIRM_ERRORS = new Set(['forbidden', 'not_found', 'invalid_input', 'plan_limit_projects', 'already_invoiced', 'other_project',
   'unknown_reference', 'conflict', 'dependency_cycle', 'dependency_other_project', 'self_dependency', 'last_column', 'unknown_column',
   'end_before_start', 'invalid_timezone', 'not_from_crmlead', 'operation_not_allowed', 'lead_required', 'person_proof', 'not_opened',
-  'no_seat', 'not_linked'])
+  'no_seat', 'not_linked', 'sends_outside'])
 // tr(l, 'assistant.error.forbidden') tr(l, 'assistant.error.not_found') tr(l, 'assistant.error.invalid_input')
 // tr(l, 'assistant.error.plan_limit_projects') tr(l, 'assistant.error.already_invoiced') tr(l, 'assistant.error.other_project')
 // tr(l, 'assistant.error.unknown_reference') tr(l, 'assistant.error.conflict') tr(l, 'assistant.error.dependency_cycle')
@@ -244,6 +244,8 @@ const CONFIRM_ERRORS = new Set(['forbidden', 'not_found', 'invalid_input', 'plan
 // tr(l, 'assistant.error.unknown_column') tr(l, 'assistant.error.end_before_start') tr(l, 'assistant.error.invalid_timezone')
 // tr(l, 'assistant.error.not_from_crmlead') tr(l, 'assistant.error.operation_not_allowed') tr(l, 'assistant.error.lead_required')
 // tr(l, 'assistant.error.person_proof') tr(l, 'assistant.error.not_opened') tr(l, 'assistant.error.no_seat') tr(l, 'assistant.error.not_linked')
+// Une écriture qui ferait partir un email (automatisation de l'entreprise) : la carte entière est refusée (lib/assistant/run.ts).
+// tr(l, 'assistant.error.sends_outside')
 // Les refus du jeton, chacun avec son texte (B7) : falsifié, expiré, préparé pour une autre personne, déjà utilisé.
 // tr(l, 'assistant.error.token_invalid') tr(l, 'assistant.error.token_expired') tr(l, 'assistant.error.token_other_user') tr(l, 'assistant.error.token_used')
 

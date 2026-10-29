@@ -9,12 +9,15 @@ pg.types.setTypeParser(pg.types.builtins.NUMERIC, (v) => (v === null ? null : Nu
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL manquant')
 
+const POOL_MAX = Number(process.env.PG_POOL_MAX ?? 10)
 // Même contrainte de portabilité que CRMlead : la base n'est joignable que par DATABASE_URL.
 export const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) || process.env.PGSSL === 'off'
     ? false : { rejectUnauthorized: false },
-  max: Number(process.env.PG_POOL_MAX ?? 10),
+  max: POOL_MAX,
+  // Jamais d'attente sans fin d'une connexion (pool plein) : une erreur après ce délai, pas une requête qui pend.
+  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS ?? 30_000),
 })
 
 // Une connexion inactive qui meurt ne doit pas faire tomber le processus (leçon de CRMlead, 12.09.2026).
@@ -30,23 +33,48 @@ export type Db = pg.PoolClient
  * la transaction commune, dans un point de sauvegarde (SAVEPOINT), au lieu d'ouvrir la sienne. Tout est validé à la fin,
  * ou tout est annulé. `dryRun` : la même chose, toujours annulée (essai d'une proposition avant de l'afficher).
  */
-type Shared = { client: pg.PoolClient; ctx: Ctx; n: number; dryRun: boolean; afterCommit: (() => Promise<unknown>)[] }
+type Shared = { client: pg.PoolClient; ctx: Ctx; n: number }
 const shared = new AsyncLocalStorage<Shared>()
 
 /** Vrai pendant une transaction partagée (les tâches de fond n'y démarrent pas). */
 export const inSharedTransaction = () => shared.getStore() !== undefined
-/** Vrai pendant un essai : rien ne doit sortir (emails), et tout sera annulé. */
-export const isDryRun = () => shared.getStore()?.dryRun === true
+
 /**
- * Pendant une transaction partagée validée (« Confirmer » de l'Assistant IA) : ce qui sort de la base (un email d'une
- * automatisation de l'entreprise) attend la validation de TOUTE la carte. Si une écriture suivante est refusée, tout est
- * annulé et rien ne part. Rend faux hors transaction partagée (l'appelant agit tout de suite, comme à l'écran).
+ * Une écriture de l'Assistant IA (essai d'une proposition ou « Confirmer », lib/assistant/run.ts) : RIEN ne sort vers
+ * l'extérieur, même indirectement (l'email d'une automatisation de l'entreprise qui « écrit au client »). `sendMail`
+ * le refuse et le note ici ; l'exécution de la carte voit la tentative et refuse la carte entière (tout est annulé).
  */
-export function afterSharedCommit(fn: () => Promise<unknown>): boolean {
-  const s = shared.getStore()
-  if (!s) return false
-  if (!s.dryRun) s.afterCommit.push(fn)
+type Guard = { attempts: number }
+const guard = new AsyncLocalStorage<Guard>()
+export const withoutOutbound = <T>(fn: () => Promise<T>): Promise<T> => guard.run({ attempts: 0 }, fn)
+/** Vrai pendant une écriture de l'assistant (les tâches de fond n'y démarrent pas : elles écrivent aux clients). */
+export const inAssistantWrite = () => guard.getStore() !== undefined
+/** Pendant une écriture de l'assistant : note la tentative d'envoi et rend vrai (l'appelant n'envoie RIEN). */
+export function refuseOutbound(): boolean {
+  const g = guard.getStore()
+  if (!g) return false
+  g.attempts++
   return true
+}
+/** Le nombre d'envois refusés depuis le début de l'écriture de l'assistant en cours. */
+export const outboundAttempts = () => guard.getStore()?.attempts ?? 0
+
+/**
+ * Au plus SHARED_MAX transactions partagées à la fois dans ce processus. Chacune garde une connexion pendant tout le lot
+ * (ou l'essai), et chaque route qu'elle appelle en demande une seconde, brève (garde de session, `anon`). Sans plafond,
+ * des essais simultanés (le modèle appelle plusieurs outils d'un coup) prendraient toutes les connexions du pool et
+ * attendraient chacun une de plus : blocage sans fin. La moitié du pool au plus ; l'autre moitié sert aux connexions
+ * brèves des lots et aux requêtes ordinaires. Le suivant attend ici, SANS tenir de connexion.
+ */
+const SHARED_MAX = Math.max(1, Math.floor(POOL_MAX / 2))
+let sharedRunning = 0
+const sharedWaiting: (() => void)[] = []
+const sharedSlot = () => (sharedRunning < SHARED_MAX ? (sharedRunning++, Promise.resolve())
+  : new Promise<void>((resolve) => sharedWaiting.push(resolve)))
+const sharedRelease = () => {
+  const next = sharedWaiting.shift()
+  if (next) next()   // la place passe directement au suivant
+  else sharedRunning--
 }
 
 const begin = async (client: pg.PoolClient, ctx: Ctx) => {
@@ -96,22 +124,24 @@ export async function withTenant<T>(ctx: Ctx, fn: (db: Db) => Promise<T>): Promi
 /** Plusieurs écritures (routes de l'application appelées par `fn`) en une seule transaction : tout ou rien. */
 export async function sharedTransaction<T>(ctx: Ctx, fn: (db: Db) => Promise<T>, opts: { dryRun?: boolean } = {}): Promise<T> {
   if (shared.getStore()) throw new Error('shared_transaction_nested')
-  const client = await pool.connect()
-  const store: Shared = { client, ctx, n: 0, dryRun: Boolean(opts.dryRun), afterCommit: [] }
-  let out: T
+  await sharedSlot()
   try {
-    await begin(client, ctx)
-    out = await shared.run(store, () => fn(client))
-    await client.query(opts.dryRun ? 'rollback' : 'commit')
-  } catch (e) {
-    await client.query('rollback').catch(() => {})
-    throw e
+    const client = await pool.connect()
+    const store: Shared = { client, ctx, n: 0 }
+    try {
+      await begin(client, ctx)
+      const out = await shared.run(store, () => fn(client))
+      await client.query(opts.dryRun ? 'rollback' : 'commit')
+      return out
+    } catch (e) {
+      await client.query('rollback').catch(() => {})
+      throw e
+    } finally {
+      client.release()
+    }
   } finally {
-    client.release()
+    sharedRelease()
   }
-  // Validé : ce qui attendait part maintenant, hors de la transaction (et hors du contexte partagé), dans l'ordre.
-  for (const job of store.afterCommit) await job().catch((e) => console.error('[lot] après validation', (e as Error)?.message))
-  return out
 }
 
 /**

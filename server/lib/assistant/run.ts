@@ -1,4 +1,4 @@
-import { sharedTransaction, type Ctx, type Db } from '../../db.js'
+import { outboundAttempts, sharedTransaction, withoutOutbound, type Ctx, type Db } from '../../db.js'
 import { tr } from '../i18n.js'
 import { callApi } from './internal.js'
 import { opAllowed, opLabel, REF, REF_FIELDS, type Mode, type WriteOp } from './token.js'
@@ -8,7 +8,11 @@ import { opAllowed, opLabel, REF, REF_FIELDS, type Mode, type WriteOp } from './
  * de la personne : session, rôle, RLS, projets réservés, limites de la formule revérifiés à ce moment).
  * - `tx` : toutes dans UNE transaction partagée (db.ts, `sharedTransaction`) : la première qui échoue annule tout.
  * - `route` : une seule écriture, la route telle quelle (elle appelle une autre application hors transaction).
- * `dryRun` : l'essai d'une proposition, avant d'afficher la carte ; la transaction est toujours annulée et rien ne sort.
+ * `dryRun` : l'essai d'une proposition, avant d'afficher la carte ; la transaction est toujours annulée.
+ *
+ * Rien ne sort vers l'extérieur, même indirectement (db.ts, `withoutOutbound`) : si une écriture fait partir un email
+ * (une automatisation de l'entreprise qui « écrit au client » quand une tâche est créée ou terminée, une étape ou un
+ * projet terminé), l'email est retenu et la carte entière est refusée (`sends_outside`), à l'essai comme à « Confirmer ».
  */
 export class OpFailure extends Error {
   constructor(public index: number, public status: number, public code: string, public label: string, public body: any = null) {
@@ -42,7 +46,14 @@ async function each(cookie: string, ops: WriteOp[], mode: Mode): Promise<RunOutc
     const label = opLabel(op)
     // La liste fermée, revérifiée sur le chemin réel (après remplacement des références).
     if (!opAllowed(op, mode)) throw new OpFailure(i, 403, 'operation_not_allowed', label)
+    const held = outboundAttempts()
     const r = await callApi(cookie, op.method, op.path, op.body)
+    if (outboundAttempts() > held) {
+      // Un envoi vers l'extérieur a été tenté (et retenu) : jamais depuis une carte de l'assistant.
+      if (mode === 'tx') throw new OpFailure(i, 409, 'sends_outside', label)
+      // Mode `route` (aucune route de ce mode n'écrit aujourd'hui au client) : l'écriture est faite, l'email ne part pas.
+      console.error('[assistant] envoi retenu', label)
+    }
     if (r.status >= 400) throw new OpFailure(i, r.status, String(r.body?.error ?? `http_${r.status}`), label, r.body)
     if (op.ref) {
       const id = r.body?.id
@@ -59,12 +70,12 @@ export async function runOps(cookie: string, ctx: Ctx, ops: WriteOp[], mode: Mod
   if (mode === 'route') {
     if (opts.dryRun) throw new Error('dry_run_route')
     if (ops.length !== 1) throw new OpFailure(0, 400, 'route_single_only', 'route')
-    return each(cookie, ops, 'route')
+    return withoutOutbound(() => each(cookie, ops, 'route'))
   }
-  return sharedTransaction(ctx, async (db) => {
+  return withoutOutbound(() => sharedTransaction(ctx, async (db) => {
     if (opts.first) await opts.first(db)
     return each(cookie, ops, 'tx')
-  }, { dryRun: opts.dryRun })
+  }, { dryRun: opts.dryRun }))
 }
 
 // ------------------------------------------------------------------ ce qui a été fait, en une ligne
