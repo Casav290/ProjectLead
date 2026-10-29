@@ -19,6 +19,7 @@ process.env.ASSISTANT_ACCOUNT_PER_DAY = '50000'
 process.env.MAILBOX_ALLOW_PRIVATE_HOSTS = '1'
 
 import 'dotenv/config'
+import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -81,6 +82,11 @@ const { pool } = await import('../server/db.js')
 const { signConfirm, opAllowed, MAX_OPS } = await import('../server/lib/assistant/token.js')
 const { TOOL_NAMES, BATCHABLE } = await import('../server/lib/assistant/tools.js')
 const sched = await import('../server/lib/assistant/schedule.js')
+
+// pg : « Calling client.query() when the client is already executing a query is deprecated » (plusieurs requêtes lancées
+// ensemble sur une même connexion). Écouté pendant TOUT le contrôle ; vérifié à la fin de la section 6 ter.
+const pgParallel: string[] = []
+process.on('warning', (w) => { if (/already executing a query/.test(w.message)) pgParallel.push(w.message) })
 
 let ok = 0, ko = 0
 function check(name: string, cond: unknown, detail?: unknown) {
@@ -799,6 +805,54 @@ const moved = await ask(ann, 'propose_update_project', { project_id: followed, c
 check('projet suivi chaque semaine, client changé : la carte dit « avant → après » et à qui partiront les prochains suivis', Boolean(moved.card)
   && moved.card.summary.lines.includes(`Client : Client A ${stamp} → Client B ${stamp}`)
   && moved.card.summary.lines.includes(`Suivi automatique du projet : les prochains partiront à Client B ${stamp}`), moved.card?.summary.lines ?? moved.reply.slice(0, 300))
+r = await ann.post('/api/assistant/confirm', { token: moved.card.token })
+check('témoin : projet déjà suivi, client changé : « Confirmer » passe (le suivi continue, vers le nouveau client, comme la carte le dit)',
+  r.status === 200 && (await one('select client_id from projects where id = $1', [followed]))?.client_id === cliB, r.body)
+// Relecture du 29.10 : le suivi périodique revu sur l'état RÉEL après chaque écriture, à l'essai comme à « Confirmer » —
+// un lot (statut puis client), deux cartes préparées avant toute confirmation, un jeton signé de deux écritures.
+const inFollowUp = async (id: string) => (await n(`select count(*)::int as n from projects where id = $1 and update_frequency <> 'none' and status = 'active'
+  and not is_template and archived_at is null and client_id is not null`, [id])) === 1
+const twoSteps = (await ann.post('/api/projects', { name: `En pause, sans client ${stamp}`, status: 'on_hold' })).body.id
+await ann.patch(`/api/projects/${twoSteps}`, { update_frequency: 'weekly' })
+fpa = await footprint(accountId)
+const bothSteps = await ask(ann, 'propose_batch', { operations: [
+  { tool: 'propose_update_project', input: { project_id: twoSteps, status: 'active' } },
+  { tool: 'propose_update_project', input: { project_id: twoSteps, client_id: cli } }] })
+fpb = await footprint(accountId)
+check('lot « en cours » puis client, qui relancerait le suivi : pas de carte (« restarts_client_updates » à la 2e écriture), rien d’écrit',
+  !bothSteps.card && bothSteps.reply.includes('"code":"restarts_client_updates"') && bothSteps.reply.includes('"step":2') && same(fpa, fpb),
+  { reply: bothSteps.reply.slice(0, 300), d: diff(fpa, fpb) })
+const cardStatus = await ask(ann, 'propose_update_project', { project_id: twoSteps, status: 'active' })
+const cardClient = await ask(ann, 'propose_update_project', { project_id: twoSteps, client_id: cli })
+check('deux cartes préparées avant toute confirmation (statut, puis client) : chacune, seule, est montrée', Boolean(cardStatus.card && cardClient.card),
+  [cardStatus.reply.slice(0, 200), cardClient.reply.slice(0, 200)])
+r = await ann.post('/api/assistant/confirm', { token: cardStatus.card?.token })
+check('… la 1re (« en cours », sans client) se confirme : sans client, le suivi ne prend pas le projet', r.status === 200 && !(await inFollowUp(twoSteps)), r.body)
+fpa = await footprint(accountId)
+r = await ann.post('/api/assistant/confirm', { token: cardClient.card?.token })
+fpb = await footprint(accountId)
+check('… la 2e (client) : « Confirmer » revoit l’état réel → 409 restarts_client_updates, message traduit, rien d’écrit, carte pas usée',
+  r.status === 409 && r.body.error === 'restarts_client_updates' && r.body.message === tr('fr', 'assistant.error.restarts_client_updates') && same(fpa, fpb)
+  && (await one('select client_id from projects where id = $1', [twoSteps]))?.client_id === null && !(await inFollowUp(twoSteps)), { r: r.body, d: diff(fpa, fpb) })
+const signedSteps = (await ann.post('/api/projects', { name: `En pause, sans client (jeton) ${stamp}`, status: 'on_hold' })).body.id
+await ann.patch(`/api/projects/${signedSteps}`, { update_frequency: 'monthly' })
+fpa = await footprint(accountId)
+r = await ann.post('/api/assistant/confirm', { token: sign(annId, [
+  { method: 'PATCH', path: `/api/projects/${signedSteps}`, body: { status: 'active' } },
+  { method: 'PATCH', path: `/api/projects/${signedSteps}`, body: { client_id: cli } }]) })
+fpb = await footprint(accountId)
+check('jeton signé de deux écritures (statut puis client) : 409 restarts_client_updates, « écriture 2 sur 2 », RIEN d’écrit (pas même le statut)',
+  r.status === 409 && r.body.error === 'restarts_client_updates' && r.body.message.includes('écriture 2 sur 2') && same(fpa, fpb)
+  && (await one('select status, client_id from projects where id = $1', [signedSteps]))?.status === 'on_hold', { r: r.body, d: diff(fpa, fpb) })
+// L'automatisation « écrire au client » de TOUTE l'entreprise (sans projet) : la conséquence voulue (décision d'Ève à
+// prendre) — aucune tâche créée par l'assistant dans un projet dont le client reçoit les suivis ; ailleurs, la carte.
+const globalAuto = (await ann.post('/api/automations', { name: `Toute l’entreprise ${stamp}`, trigger: 'task_created', action: 'send_client_update', params: {} })).body.id
+const noClient = (await ann.post('/api/projects', { name: `Sans client ${stamp}`, status: 'planned' })).body.id
+const gBlocked = await ask(ann, 'propose_create_task', { project_id: quiet, title: `Globale ${stamp}` })
+const gFree = await ask(ann, 'propose_create_task', { project_id: noClient, title: `Globale ${stamp}` })
+await ann.patch(`/api/automations/${globalAuto}`, { active: false })
+check('automatisation « écrire au client » de toute l’entreprise : refus (sends_outside) là où le client reçoit les suivis, carte ailleurs',
+  !gBlocked.card && gBlocked.reply.includes('"code":"sends_outside"') && Boolean(gFree.card), [gBlocked.reply.slice(0, 200), gFree.reply.slice(0, 200)])
 const pausedQuiet = (await ann.post('/api/projects', { name: `En pause sans suivi ${stamp}`, status: 'on_hold', client_id: cli })).body.id
 const resumeQuiet = await ask(ann, 'propose_update_project', { project_id: pausedQuiet, status: 'active' })
 check('témoin : sans suivi automatique, remettre un projet « en cours » a sa carte (Statut : en pause → en cours)', Boolean(resumeQuiet.card)
@@ -841,6 +895,27 @@ for (const [label, tool, input] of [['dupliquer le projet réservé', 'propose_d
   check(`${label} : pas de carte (« reserved_project_copy » : la copie serait visible de toute l’entreprise), rien d’écrit`, !a.card
     && a.reply.includes('reserved_project_copy') && same(fpa, fpb), a.reply.slice(0, 300))
 }
+// Ouvrir un projet depuis un email reçu, « depuis un modèle » : même règle que propose_create_project (relecture du 29.10).
+await new Client().post(`/api/inbound/${inbound}`, { from: `modele-${stamp}@entreprise-test.ch`, to: ['x@y.z'], subject: `Depuis un modèle ${stamp}`, text: 'Bonjour',
+  message_id: `<m4-${stamp}@t>` })
+const msg4 = (await q('select id from email_messages where subject = $1', [`Depuis un modèle ${stamp}`]))[0]?.id
+fpa = await footprint(accountId)
+const fromSecret = await ask(ann, 'propose_email_to_project', { message_id: msg4, template_id: secretTpl })
+const notTpl = await ask(ann, 'propose_email_to_project', { message_id: msg4, template_id: other })
+fpb = await footprint(accountId)
+check('ouvrir un projet depuis un email avec un modèle réservé : pas de carte (« reserved_project_copy »), rien d’écrit ; un projet ordinaire n’est pas un modèle',
+  !fromSecret.card && fromSecret.reply.includes('reserved_project_copy') && !notTpl.card && notTpl.reply.includes('template_not_found') && same(fpa, fpb),
+  [fromSecret.reply.slice(0, 200), notTpl.reply.slice(0, 200)])
+const openTpl = (await ann.post('/api/projects', { name: `Modèle ouvert ${stamp}`, is_template: true })).body.id
+await ann.post(`/api/projects/${openTpl}/stages`, { name: `Cadrage ${stamp}` })
+const fromOpen = await ask(ann, 'propose_email_to_project', { message_id: msg4, template_id: openTpl, client_id: cliA })
+check('… avec un modèle de l’entreprise : la carte nomme le modèle (ce qu’il recopie) et le client choisi par son nom',
+  Boolean(fromOpen.card?.summary.lines.includes(`Depuis le modèle : Modèle ouvert ${stamp} (étapes, colonnes et tâches recopiées, dates recalées)`))
+  && Boolean(fromOpen.card?.summary.lines.includes(`Client : Client A ${stamp}`)), fromOpen.card?.summary.lines ?? fromOpen.reply.slice(0, 200))
+r = await ann.post('/api/assistant/confirm', { token: fromOpen.card?.token })
+const fromOpenP = (await q(`select id, client_id, visibility from projects where name = $1 and source = 'email'`, [`Depuis un modèle ${stamp}`]))[0]
+check('… confirmée : le projet a le client choisi et l’étape du modèle, comme la carte le dit', r.status === 200 && fromOpenP?.client_id === cliA
+  && (await n('select count(*)::int as n from stages where project_id = $1 and name = $2', [fromOpenP?.id, `Cadrage ${stamp}`])) === 1, { r: r.body, fromOpenP })
 const openCopy = await ask(ann, 'propose_duplicate_project', { project_id: other, name: `Copie ouverte ${stamp}` })
 check('témoin : dupliquer un projet visible de l’entreprise a sa carte', Boolean(openCopy.card), openCopy.reply.slice(0, 200))
 
@@ -903,6 +978,41 @@ const ctc = (await q(`select id from client_contacts where client_id = $1 and na
 const ctcCard = await ask(ann, 'propose_client_contact', { client_id: cli, contact_id: ctc, email: `autre-${stamp}@exemple.test`, receives_updates: false })
 check('contact modifié : email et « reçoit le suivi » avant → après', Boolean(ctcCard.card?.summary.lines.includes(`Email : suivi-${stamp}@exemple.test → autre-${stamp}@exemple.test`))
   && Boolean(ctcCard.card?.summary.lines.includes('Reçoit le suivi des projets : oui → non')), ctcCard.card?.summary.lines)
+
+// La copie d'un projet reprend son client, le statut « en cours » et la facturation : tout est sur la carte (relecture du 29.10).
+const billedSrc = (await ann.post('/api/projects', { name: `Facturé ${stamp}`, status: 'planned', client_id: cliA, billing_mode: 'hourly', hourly_rate_cents: 12000,
+  budget_minutes: 600 })).body.id
+const dup = await ask(ann, 'propose_duplicate_project', { project_id: billedSrc, name: `Copie facturée ${stamp}` })
+const dupLines: string[] = dup.card?.summary.lines ?? []
+check('dupliquer : la carte dit le client repris du projet source, le statut « en cours », la facturation, le taux et le budget',
+  dupLines.includes(`Client : Client A ${stamp}`) && dupLines.includes('Statut : en cours') && dupLines.includes('Facturation : à l’heure')
+  && dupLines.some((l) => /^Taux horaire : CHF 120$/.test(l)) && dupLines.includes('Budget : 10 h'), dupLines.length ? dupLines : dup.reply.slice(0, 200))
+r = await ann.post('/api/assistant/confirm', { token: dup.card?.token })
+const dupP = (await q('select client_id, status, billing_mode, hourly_rate_cents, budget_minutes from projects where name = $1', [`Copie facturée ${stamp}`]))[0]
+check('… confirmée : la copie a exactement ce client, ce statut, cette facturation et ce budget', r.status === 200 && dupP?.client_id === cliA && dupP.status === 'active'
+  && dupP.billing_mode === 'hourly' && dupP.hourly_rate_cents === 12000 && dupP.budget_minutes === 600, { r: r.body, dupP })
+const stg = await ask(ann, 'propose_create_stage', { project_id: other, name: `Étape par défaut ${stamp}` })
+check('nouvelle étape sans choix de visibilité : la carte dit « Visible par le client : oui » (la valeur écrite)', Boolean(stg.card?.summary.lines.includes('Visible par le client : oui')),
+  stg.card?.summary.lines ?? stg.reply.slice(0, 200))
+r = await ann.post('/api/assistant/confirm', { token: stg.card?.token })
+check('… confirmée : l’étape est bien visible par le client', r.status === 200 && (await one('select visible_to_client from stages where name = $1', [`Étape par défaut ${stamp}`]))?.visible_to_client === true, r.body)
+// Un rendez-vous relu seul avant sa modification (plus tout l'agenda de l'entreprise, de 2000 à 2100).
+const evOne = await ann.get(`/api/calendar/events?id=${meet}`)
+const evOther = await eve.get(`/api/calendar/events?id=${meet}`)
+const evBad = await ann.get('/api/calendar/events?id=pas-un-id')
+const toolsSrc = readFileSync(new URL('../server/lib/assistant/tools.ts', import.meta.url), 'utf8')
+check('rendez-vous relu seul (?id=) : lui seul avec ses participants, rien pour une autre entreprise, id invalide 400 ; l’assistant ne lit plus tout l’agenda',
+  evOne.status === 200 && evOne.body.events.length === 1 && evOne.body.events[0].id === meet && evOne.body.events[0].attendees.length >= 4
+  && evOther.status === 200 && evOther.body.events.length === 0 && evBad.status === 400 && !toolsSrc.includes('2000-01-01')
+  && toolsSrc.includes('/api/calendar/events?id='), { one: evOne.body?.events?.length, other: evOther.body, bad: evBad.status })
+// Plusieurs requêtes ensemble sur une même connexion (avertissement de pg) : jamais, ni ici, ni dans tout ce contrôle.
+const someTask = (await q('select id from tasks where account_id = $1 order by created_at limit 1', [accountId]))[0]?.id
+const tGet = await ann.get(`/api/tasks/${someTask}`)
+const sGet = await ann.get(`/api/search?q=${encodeURIComponent('Projet')}`)
+await new Promise((resolve) => setTimeout(resolve, 50))
+check('aucune requête lancée en même temps qu’une autre sur une même connexion (fiche d’une tâche, recherche, tout ce contrôle)',
+  tGet.status === 200 && Array.isArray(tGet.body.checklist) && Array.isArray(tGet.body.activity) && sGet.status === 200 && Array.isArray(sGet.body.projects)
+  && !pgParallel.length, { pgParallel, t: tGet.status, s: sGet.status })
 
 // ------------------------------------------------------------------ 7. la liste fermée : jamais ces écritures, même signées
 section('interdits, même avec un jeton signé')

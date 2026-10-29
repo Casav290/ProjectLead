@@ -13,6 +13,8 @@ import { opAllowed, opLabel, REF, REF_FIELDS, type Mode, type WriteOp } from './
  * Rien ne sort vers l'extérieur, même indirectement (db.ts, `withoutOutbound`) : si une écriture fait partir un email
  * (une automatisation de l'entreprise qui « écrit au client » quand une tâche est créée ou terminée, une étape ou un
  * projet terminé), l'email est retenu et la carte entière est refusée (`sends_outside`), à l'essai comme à « Confirmer ».
+ * De même, une carte qui ferait entrer un projet dans le suivi périodique au client (un email partirait au prochain
+ * passage des tâches de fond) est refusée entière (`restarts_client_updates`), revue sur l'état réel après chaque écriture.
  */
 export class OpFailure extends Error {
   constructor(public index: number, public status: number, public code: string, public label: string, public body: any = null) {
@@ -38,7 +40,20 @@ export function resolveOp(op: WriteOp, ids: Map<string, string>, index = 0): Wri
 
 export type RunOutcome = { results: { label: string; status: number; body: any }[]; ids: Record<string, string> }
 
-async function each(cookie: string, ops: WriteOp[], mode: Mode): Promise<RunOutcome> {
+/**
+ * Les projets que le suivi périodique au client prendrait (même condition que lib/jobs.ts, `clientUpdates`, sans la date) :
+ * en cours, avec un client, un envoi automatique réglé, ni modèle ni archivé.
+ */
+async function clientFollowUps(db: Db): Promise<Set<string>> {
+  return new Set((await db.query(
+    `select id from projects where update_frequency <> 'none' and status = 'active' and not is_template and archived_at is null
+        and client_id is not null`)).rows.map((r) => r.id as string))
+}
+
+/** Après une écriture : `throw` pour refuser la carte entière (la transaction est annulée). */
+type AfterOp = (index: number, label: string) => Promise<void>
+
+async function each(cookie: string, ops: WriteOp[], mode: Mode, after?: AfterOp): Promise<RunOutcome> {
   const ids = new Map<string, string>()
   const results: RunOutcome['results'] = []
   for (const [i, raw] of ops.entries()) {
@@ -55,6 +70,7 @@ async function each(cookie: string, ops: WriteOp[], mode: Mode): Promise<RunOutc
       console.error('[assistant] envoi retenu', label)
     }
     if (r.status >= 400) throw new OpFailure(i, r.status, String(r.body?.error ?? `http_${r.status}`), label, r.body)
+    if (after) await after(i, label)
     if (op.ref) {
       const id = r.body?.id
       if (typeof id !== 'string') throw new OpFailure(i, 500, 'no_id', label)
@@ -74,7 +90,14 @@ export async function runOps(cookie: string, ctx: Ctx, ops: WriteOp[], mode: Mod
   }
   return withoutOutbound(() => sharedTransaction(ctx, async (db) => {
     if (opts.first) await opts.first(db)
-    return each(cookie, ops, 'tx')
+    // Le suivi périodique au client (lib/jobs.ts) : aucun projet de plus ne doit entrer dans son envoi, ni par une
+    // écriture, ni par plusieurs (statut puis client dans un lot), ni par une carte préparée avant qu'une autre soit
+    // confirmée. Revu sur l'état réel après CHAQUE écriture, à l'essai comme à « Confirmer » : un email partirait au
+    // prochain passage (relecture du 29.10.2026).
+    const following = await clientFollowUps(db)
+    return each(cookie, ops, 'tx', async (i, label) => {
+      for (const id of await clientFollowUps(db)) if (!following.has(id)) throw new OpFailure(i, 409, 'restarts_client_updates', label)
+    })
   }, { dryRun: opts.dryRun }))
 }
 

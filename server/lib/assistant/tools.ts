@@ -129,6 +129,8 @@ export const ROUTE_ERRORS: Record<string, string> = {
   not_linked: 'Les deux applications ne sont pas encore reliées.',
   sends_outside: 'Ce changement ferait partir un email vers l’extérieur (une automatisation de l’entreprise écrit au client) : '
     + 'l’assistant n’envoie jamais rien. Explique-le et ouvre l’écran (open_page) : la personne le fait elle-même.',
+  restarts_client_updates: 'Ce changement (seul ou avec les autres de la carte) relancerait le suivi automatique au client : un email '
+    + 'partirait au prochain passage. L’assistant n’envoie jamais rien. Explique-le et ouvre l’écran du projet (open_page).',
 }
 
 /** Les pages de l'application vers lesquelles l'assistant peut ouvrir (open_page, liens des cartes). */
@@ -651,12 +653,21 @@ export function buildTools(s: ToolScope) {
       let cl: string | null = null
       if (a.client_id && !a.as_template) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
       const body: Record<string, unknown> = { name: a.name, as_template: a.as_template, ...(a.as_template ? {} : { start_date: a.start_date ?? s.today, ...(a.client_id ? { client_id: a.client_id } : {}) }) }
+      // Ce que la copie reprend du projet source (routes/projects.ts, duplicate) : son client si aucun n'est donné, le statut
+      // « en cours » (un modèle : sans client), la facturation et le budget. Tout est dit sur la carte (relecture du 29.10).
+      const copied: Record<string, unknown> = { billing_mode: p.billing_mode }
+      for (const k of ['hourly_rate_cents', 'retainer_cents', 'fixed_cents', 'budget_cents', 'doc_locale']) if (p[k] != null) copied[k] = p[k]
+      if (p.vat_code && p.vat_code !== 'normal') copied.vat_code = p.vat_code
       return {
         title: L(a.as_template ? 'assistant.card.title.saveTemplate' : 'assistant.card.title.duplicate'),
         ops: [{ method: 'POST', path: `/api/projects/${a.project_id}/duplicate`, body, ref: 'copy' }],
         lines: [L(a.as_template ? 'assistant.card.copyAsTemplate' : 'assistant.card.copyAsProject', { name: a.name, from: p.name }),
           L('assistant.card.copies', { stages: noun('assistant.noun.stage', p.stages.length), tasks: noun('assistant.noun.task', p.tasks_total) }),
-          !a.as_template && L('assistant.card.newStart', { date: D(String(body.start_date)) }), cl && L('assistant.card.client', { name: cl }),
+          !a.as_template && L('assistant.card.newStart', { date: D(String(body.start_date)) }),
+          !a.as_template && L('assistant.card.client', { name: cl ?? p.client_name ?? L('assistant.card.none') }),
+          !a.as_template && L('assistant.card.status', { value: L(STATUS_K.active) }),
+          ...billingLines(copied, p.currency ?? 'CHF'),
+          p.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(p.budget_minutes) }),
           a.as_template && L('assistant.card.templateNoClient')],
         open: '/projets/@copy',
       }
@@ -695,7 +706,8 @@ export function buildTools(s: ToolScope) {
           a.description && L('assistant.card.description', { text: a.description }),
           a.client_note && L('assistant.card.clientNote', { text: a.client_note }), a.status && L('assistant.card.status', { value: L(STAGE_K[a.status]) }),
           (a.start_date || a.due_date) && L('assistant.card.dates', { start: D(a.start_date), due: D(a.due_date) }),
-          a.visible_to_client !== undefined && L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client) }),
+          // Toujours dit : sans choix, une étape est visible par le client (db/001_schema.sql, stages.visible_to_client).
+          L('assistant.card.visibleToClient', { value: yesNo(a.visible_to_client ?? true) }),
           a.billing_cents != null && L('assistant.card.amount', { value: money(a.billing_cents, p.currency) })],
         open: `/projets/${project_id}/etapes` }
     },
@@ -960,10 +972,10 @@ export function buildTools(s: ToolScope) {
     },
   })
 
-  /** Un rendez-vous tel qu'il est, avec ses participants (la liste de l'Agenda, toute l'entreprise). */
+  /** Un rendez-vous tel que l'Agenda le montre, avec ses participants : lu seul (`?id=`), pas tout l'agenda. */
   const eventOf = async (id: string) => {
-    const r = await get('/api/calendar/events?from=2000-01-01&to=2100-12-31&scope=all')
-    const list: any[] = r.status === 200 ? (Array.isArray(r.body) ? r.body : r.body.events ?? []) : []
+    const r = await get(`/api/calendar/events?id=${encodeURIComponent(id)}`)
+    const list: any[] = r.status === 200 ? r.body.events ?? [] : []
     return list.find((e) => e.id === id) ?? null
   }
   const EVENT_KIND_K: Record<string, string> = { meeting: 'assistant.card.eventKind.meeting', call: 'assistant.card.eventKind.call',
@@ -1288,9 +1300,21 @@ export function buildTools(s: ToolScope) {
     build: async ({ message_id, ...a }) => {
       const m = await inboxMessage(message_id)
       if (!m) return { error: 'message_not_found' }
+      // Le modèle : un vrai modèle, jamais un projet ou modèle réservé aux intervenants (sa copie serait visible de toute
+      // l'entreprise, comme propose_create_project), et nommé sur la carte avec ce qu'il recopie (relecture du 29.10).
+      let template: string | null = null
+      if (a.template_id) {
+        const t = await project(a.template_id)
+        if (!t || !t.is_template) return { error: 'template_not_found' }
+        if (t.visibility === 'members') return reservedCopy
+        template = t.name
+      }
+      let chosen: string | null = null
+      if (a.client_id) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; chosen = c.name }
       return { title: L('assistant.card.title.emailToProject'), mode: 'route', ops: [{ method: 'POST', path: `/api/mail/messages/${message_id}/project`, body: a, ref: 'project' }],
         lines: [emailLine(m), L('assistant.card.newProjectStatus', { name: a.name || m.subject || L('assistant.card.request'), status: L(STATUS_K[a.status]) }),
-          a.client_id ? L('assistant.card.clientChosen') : m.known_client ? L('assistant.card.client', { name: m.known_client.name })
+          template && L('assistant.card.fromTemplate', { name: template }),
+          chosen ? L('assistant.card.client', { name: chosen }) : m.known_client ? L('assistant.card.client', { name: m.known_client.name })
             : L('assistant.card.clientFromSender', { name: a.client_name ?? m.from_name ?? m.from_email }),
           a.first_task && L('assistant.card.firstTask')],
         open: '/projets/@project' }

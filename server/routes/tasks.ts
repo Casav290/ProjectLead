@@ -80,21 +80,30 @@ app.get('/', async (c) => tx(c, async (db) => {
   return c.json(rows)
 }))
 
+/** Plusieurs lectures sur une même connexion, l'une après l'autre (dans l'ordre donné). */
+async function inTurn(db: Db, queries: [string, unknown[]][]) {
+  const out = []
+  for (const [sql, params] of queries) out.push(await db.query(sql, params))
+  return out
+}
+
 app.get('/:id', async (c) => tx(c, async (db) => {
   const t = (await db.query(`select ${TASK_COLS} ${FROM} where t.id = $1`, [c.req.param('id')])).rows[0]
   if (!t) throw notFound()
-  const [checklist, subtasks, deps, blocking, comments, files, time, activity] = await Promise.all([
-    db.query('select * from checklist_items where task_id = $1 order by position, label', [t.id]),
-    db.query(`select ${TASK_COLS} ${FROM} where t.parent_id = $1 order by t.position, t.number`, [t.id]),
-    db.query('select k.id, k.title, k.number, k.completed_at from task_dependencies d join tasks k on k.id = d.depends_on_id where d.task_id = $1', [t.id]),
-    db.query('select k.id, k.title, k.number, k.completed_at from task_dependencies d join tasks k on k.id = d.task_id where d.depends_on_id = $1', [t.id]),
-    db.query(`select cm.*, u.name as author_name, u.color as author_color from comments cm left join users u on u.id = cm.author_id
-               where cm.task_id = $1 order by cm.created_at`, [t.id]),
-    db.query('select id, filename, mime, size, created_at from attachments where task_id = $1 order by created_at desc', [t.id]),
-    db.query(`select te.id, te.entry_date, te.minutes, te.note, te.billable, u.name as user_name from time_entries te join users u on u.id = te.user_id
-               where te.task_id = $1 order by te.entry_date desc`, [t.id]),
-    db.query(`select a.kind, a.data, a.created_at, u.name as actor_name from activities a left join users u on u.id = a.actor_id
-               where a.task_id = $1 order by a.created_at desc limit 50`, [t.id]),
+  // L'une après l'autre : une connexion n'exécute qu'une requête à la fois (pg déconseille de les lancer ensemble, et le
+  // ferait refuser dans sa version 9). Même résultat, sans l'avertissement.
+  const [checklist, subtasks, deps, blocking, comments, files, time, activity] = await inTurn(db, [
+    ['select * from checklist_items where task_id = $1 order by position, label', [t.id]],
+    [`select ${TASK_COLS} ${FROM} where t.parent_id = $1 order by t.position, t.number`, [t.id]],
+    ['select k.id, k.title, k.number, k.completed_at from task_dependencies d join tasks k on k.id = d.depends_on_id where d.task_id = $1', [t.id]],
+    ['select k.id, k.title, k.number, k.completed_at from task_dependencies d join tasks k on k.id = d.task_id where d.depends_on_id = $1', [t.id]],
+    [`select cm.*, u.name as author_name, u.color as author_color from comments cm left join users u on u.id = cm.author_id
+               where cm.task_id = $1 order by cm.created_at`, [t.id]],
+    ['select id, filename, mime, size, created_at from attachments where task_id = $1 order by created_at desc', [t.id]],
+    [`select te.id, te.entry_date, te.minutes, te.note, te.billable, u.name as user_name from time_entries te join users u on u.id = te.user_id
+               where te.task_id = $1 order by te.entry_date desc`, [t.id]],
+    [`select a.kind, a.data, a.created_at, u.name as actor_name from activities a left join users u on u.id = a.actor_id
+               where a.task_id = $1 order by a.created_at desc limit 50`, [t.id]],
   ])
   return c.json({ ...t, checklist: checklist.rows, subtasks: subtasks.rows, dependencies: deps.rows, blocking: blocking.rows,
                   comment_list: comments.rows, files: files.rows, time: time.rows, activity: activity.rows })

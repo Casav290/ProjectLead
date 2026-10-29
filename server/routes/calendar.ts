@@ -28,16 +28,27 @@ async function assertEventSeen(db: any, id: string) {
 
 const fmt = (d: Date, tz: string, l: Locale) => new Intl.DateTimeFormat(intlLocale(l), { timeZone: tz, dateStyle: 'full', timeStyle: 'short' }).format(d)
 
+// Un rendez-vous de l'agenda, avec son projet, son client, son organisateur et ses participants (alias `e`).
+// i18n-ok
+const EVENT_ROW = `select e.*, p.name as project_name, p.color as project_color, cl.name as client_name, u.name as organizer_name,
+            coalesce((select json_agg(json_build_object('user_id', a.user_id, 'email', coalesce(a.email, au.email), 'name', coalesce(a.name, au.name)))
+              from event_attendees a left join users au on au.id = a.user_id where a.event_id = e.id), '[]') as attendees
+       from events e left join projects p on p.id = e.project_id left join clients cl on cl.id = e.client_id left join users u on u.id = e.organizer_id`
+
 app.get('/events', async (c) => tx(c, async (db) => {
+  // Un seul rendez-vous (`id`), tel que l'Agenda le montre : l'Assistant IA le relit avant de préparer sa modification,
+  // sans charger tout l'agenda de l'entreprise (relecture du 29.10.2026). L'écran de l'Agenda ne s'en sert pas.
+  const only = c.req.query('id')
+  if (only !== undefined) {
+    if (!uuid.safeParse(only).success) throw new HttpError(400, 'invalid_input')
+    const events = (await db.query(`${EVENT_ROW} where e.id = $1 and ${EVENT_SEEN}`, [only])).rows
+    return c.json({ events, tasks: [], stages: [], external: [] })
+  }
   const from = c.req.query('from'), to = c.req.query('to')
   if (!from || !to) throw new HttpError(400, 'range_required')
   const mine = c.req.query('scope') !== 'all'
   const events = (await db.query(
-    // i18n-ok
-    `select e.*, p.name as project_name, p.color as project_color, cl.name as client_name, u.name as organizer_name,
-            coalesce((select json_agg(json_build_object('user_id', a.user_id, 'email', coalesce(a.email, au.email), 'name', coalesce(a.name, au.name)))
-              from event_attendees a left join users au on au.id = a.user_id where a.event_id = e.id), '[]') as attendees
-       from events e left join projects p on p.id = e.project_id left join clients cl on cl.id = e.client_id left join users u on u.id = e.organizer_id
+    `${EVENT_ROW}
       where e.starts_at < $2::date + 1 and e.ends_at >= $1::date and ${EVENT_SEEN}
         and (not $3 or e.organizer_id = app_user() or exists (select 1 from event_attendees a where a.event_id = e.id and a.user_id = app_user()))
       order by e.starts_at`, [from, to, mine])).rows

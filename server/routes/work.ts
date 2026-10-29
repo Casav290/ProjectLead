@@ -61,12 +61,11 @@ app.get('/search', async (c) => tx(c, async (db) => {
   const q = (c.req.query('q') ?? '').trim()
   if (q.length < 2) return c.json({ projects: [], tasks: [], clients: [] })
   const like = `%${q}%`
-  const [projects, tasks, clients] = await Promise.all([
-    db.query(`select id, name, code, status, color from projects where not is_template and (name ilike $1 or code ilike $1 or description ilike $1) order by updated_at desc limit 10`, [like]),
-    db.query(`select t.id, t.title, t.project_id, p.name as project_name, t.completed_at from tasks t join projects p on p.id = t.project_id
-               where not p.is_template and (t.title ilike $1 or t.description ilike $1) order by t.completed_at nulls first, t.updated_at desc limit 15`, [like]),
-    db.query(`select id, name, town, email from clients where archived_at is null and (name ilike $1 or email ilike $1 or contact_person ilike $1) order by name limit 10`, [like]),
-  ])
+  // L'une après l'autre : une connexion n'exécute qu'une requête à la fois (pg déconseille de les lancer ensemble).
+  const projects = await db.query(`select id, name, code, status, color from projects where not is_template and (name ilike $1 or code ilike $1 or description ilike $1) order by updated_at desc limit 10`, [like])
+  const tasks = await db.query(`select t.id, t.title, t.project_id, p.name as project_name, t.completed_at from tasks t join projects p on p.id = t.project_id
+               where not p.is_template and (t.title ilike $1 or t.description ilike $1) order by t.completed_at nulls first, t.updated_at desc limit 15`, [like])
+  const clients = await db.query(`select id, name, town, email from clients where archived_at is null and (name ilike $1 or email ilike $1 or contact_person ilike $1) order by name limit 10`, [like])
   return c.json({ projects: projects.rows, tasks: tasks.rows, clients: clients.rows })
 }))
 
