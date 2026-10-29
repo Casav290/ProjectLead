@@ -169,10 +169,12 @@ async function cardMatchesDb(card, pid, label) {
       const parts = [`${t.is_milestone ? '◆ ' : ''}${t.title}`, t.is_milestone ? `${D(t.due_date)} (jalon)` : span(t.start_date, t.due_date), t.estimate_minutes ? hm(t.estimate_minutes) : null]
       const head = parts.filter(Boolean).join(' · ')
       if (!line.startsWith(head)) { problems.push(`« ${line} » ne commence pas par « ${head} »`); continue }
-      const after = line.match(/après (.*?)(?: · |$)/)?.[1]
+      // Lu APRÈS le titre et les dates : un titre peut contenir « après » (« Formation et suivi après mise en ligne »).
+      const rest = line.slice(head.length)
+      const after = rest.match(/ · après (.*?)(?: · |$)/)?.[1]
       const shownDeps = after ? [...after.matchAll(/« (.*?) »/g)].map((m) => m[1]).sort() : []
-      if (JSON.stringify(shownDeps) !== JSON.stringify([...t.deps].sort())) problems.push(`« ${t.title} » : dépendances ${JSON.stringify(t.deps)} en base, ${JSON.stringify(shownDeps)} sur la carte`)
-      const pts = line.match(/(\d+) points? de contrôle/)?.[1]
+      if (JSON.stringify(shownDeps) !== JSON.stringify([...t.deps].sort())) problems.push(`« ${t.title} » : dépendances ${JSON.stringify(t.deps)} en base, ${JSON.stringify(shownDeps)} sur la carte (« ${line} »)`)
+      const pts = rest.match(/ · (\d+) points? de contrôle/)?.[1]
       if (Number(pts ?? 0) !== t.checklist) problems.push(`« ${t.title} » : ${t.checklist} points de contrôle en base, ${pts ?? 0} sur la carte`)
       if (t.people && !t.people.split(', ').every((name) => line.includes(name))) problems.push(`« ${t.title} » : personnes ${t.people}`)
     }
