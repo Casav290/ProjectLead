@@ -6,6 +6,7 @@
  *
  *   node scripts/e2e-assistant-actions.mjs --scenario plan       (aperçu, porte G4)
  *   node scripts/e2e-assistant-actions.mjs --scenario interdit   (aperçu, porte G5)
+ *   node scripts/e2e-assistant-actions.mjs --scenario alignement (aperçu, porte G8 : alignement des bulles du 28.10.2026)
  *   node scripts/e2e-assistant-actions.mjs --prod                (production, porte G6 : seulement après le feu vert)
  *
  * Aperçu : adresse, base de la branche Neon de l'aperçu (rôle propre à la branche) et garde dans
@@ -20,12 +21,15 @@
  * la limite de la fonction (300 s) ; bureau puis téléphone ; captures dans ~/projets/.unlazy/assistant-actions/captures/projectlead/.
  * Scénario « interdit » : « supprime ce projet », « envoie le suivi au client par email » : refus expliqué, aucune
  * carte, lien ou page ouverte, projet intact, aucun email.
+ * Scénario « alignement » (lecture seule) : « ouvrez l'écran Équipe » → navigation et « Page ouverte : Réglages › Équipe »
+ * sans chemin brut ; une demande qui invite à un tableau → aucun balisage affiché ; focus, Échap ; à 390 px le bas des
+ * pages au-dessus de la bulle ; mention « peut se tromper » ; captures alignement-*.png.
  *
  * Seule écriture directe en base : la session de la personne de test (ouverte puis supprimée). Aucun message envoyé.
- * Dernière ligne : E2E_ACTIONS_G4_OK, E2E_ACTIONS_G5_OK ou E2E_ACTIONS_G6_OK.
+ * Dernière ligne : E2E_ACTIONS_G4_OK, E2E_ACTIONS_G5_OK, E2E_ACTIONS_G8_OK ou E2E_ACTIONS_G6_OK.
  */
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 
@@ -37,7 +41,8 @@ const H = homedir()
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : null }
 const PROD = process.argv.includes('--prod')
 const SCENARIO = PROD ? 'plan' : arg('--scenario') ?? 'plan'
-const TOKEN = PROD ? 'E2E_ACTIONS_G6_OK' : SCENARIO === 'interdit' ? 'E2E_ACTIONS_G5_OK' : 'E2E_ACTIONS_G4_OK'
+const TOKEN = PROD ? 'E2E_ACTIONS_G6_OK' : SCENARIO === 'interdit' ? 'E2E_ACTIONS_G5_OK' : SCENARIO === 'alignement' ? 'E2E_ACTIONS_G8_OK' : 'E2E_ACTIONS_G4_OK'
+if (!['plan', 'interdit', 'alignement'].includes(SCENARIO)) throw new Error(`scénario inconnu : ${SCENARIO}`)
 const readEnv = (file) => Object.fromEntries(readFileSync(file, 'utf8').split('\n').filter((l) => /^[A-Z_]+=/.test(l))
   .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
 const ORG = 'ea5a8085-b868-4d7f-91a8-ac382e43e3e8'   // TEST Boulangerie Favre
@@ -46,6 +51,8 @@ const SHOTS = `${H}/projets/.unlazy/assistant-actions/captures/projectlead`
 mkdirSync(SHOTS, { recursive: true })
 const SENTENCE = 'Est-ce que tu peux planifier toutes les étapes dans un projet automatiquement pour un nouveau site Internet ?'
 const LIMIT_MS = 300_000
+// Le délai du tour de la route (alignement B1) : la fonction (300 s) moins 10 s. Un plan complet doit tenir dessous.
+const TURN_MS = 290_000
 
 // ------------------------------------------------------------------ où, avec quelles bases
 let BASE, WRITE_DB, RO_DB, BYPASS = null
@@ -106,7 +113,8 @@ const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich' }).fo
 const fmtShort = new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
 const fmtYear = new Intl.DateTimeFormat('fr-CH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
 const D = (iso) => (iso.slice(0, 4) === today.slice(0, 4) ? fmtShort : fmtYear).format(new Date(`${iso}T12:00:00Z`))
-const span = (a, b) => (a === b ? D(a) : `${D(a)} → ${D(b)}`)
+// Un intervalle en mots (assistant.card.range), comme le serveur : sur une carte, « → » ne dit que « avant → après ».
+const span = (a, b) => (a === b ? D(a) : `du ${D(a)} au ${D(b)}`)
 const hm = (m) => `${Math.floor(m / 60)} h${m % 60 ? ` ${String(m % 60).padStart(2, '0')}` : ''}`
 const plural = (n, one, many) => `${n} ${n < 2 ? one : many}`
 const workdays = (a, b) => { let n = 0; for (let d = new Date(`${a}T12:00:00Z`); d <= new Date(`${b}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) if (d.getUTCDay() % 6) n++; return n }
@@ -209,8 +217,8 @@ async function planRun(kind, viewport, isMobile) {
   await page.waitForSelector('[data-assistant-panel] textarea')
   const t = await ask(page, SENTENCE)
   const usage = await one(`select duration_ms, ok, tools, error from assistant_usage where user_id = $1 and kind = 'message' order by created_at desc limit 1`, [USER])
-  console.log(`  Durée du tour : ${(t.ms / 1000).toFixed(1)} s vue de l’écran, ${((usage?.duration_ms ?? 0) / 1000).toFixed(1)} s au serveur (limite ${LIMIT_MS / 1000} s) — outils ${usage?.tools?.join('+')}`)
-  check(`${kind} : durée du tour sous la limite de la fonction (300 s), mesurée à l’écran et au serveur`, t.ms < LIMIT_MS && usage?.duration_ms < LIMIT_MS && usage.ok, { ms: t.ms, usage })
+  console.log(`  Durée du tour : ${(t.ms / 1000).toFixed(1)} s vue de l’écran, ${((usage?.duration_ms ?? 0) / 1000).toFixed(1)} s au serveur (délai ${TURN_MS / 1000} s) — outils ${usage?.tools?.join('+')}`)
+  check(`${kind} : durée du tour sous le délai du tour (290 s, fonction 300 s), mesurée à l’écran et au serveur`, t.ms < TURN_MS && usage?.duration_ms < TURN_MS && usage.ok, { ms: t.ms, usage })
   const cards = page.locator('[data-assistant-confirm="pending"]')
   check(`${kind} : la première réponse porte UNE carte « À confirmer », sans « je ne peux pas »`, (await cards.count()) === 1 && !REFUSE_LIKE.test(t.reply), t.reply)
   if ((await cards.count()) !== 1) { await page.screenshot({ path: `${SHOTS}/${kind}-0-sans-carte.png` }); await ctx.close(); return null }
@@ -290,8 +298,107 @@ async function forbiddenRun() {
   await ctx.close()
 }
 
+// ------------------------------------------------------------------ alignement des bulles (28.10.2026, porte G8)
+/** Ce qui ne doit jamais s'afficher dans le fil (B5) : un chemin ou une adresse de l'application. */
+const RAW_PATH = /\/(taches|projets|modeles|emails|agenda|temps|charge|rapports|clients|facturation|recherche|reglages)\b|projectlead\.io|vercel\.app|\/api\//
+/** Le balisage qui ne doit jamais s'afficher (B6) : séparateur de tableau, <br>, **, # de titre. */
+const MARKUP = [['|---|', /\|\s*:?-{3,}/], ['<br', /<br/i], ['**', /\*\*/], ['#', /(^|\s)#{1,6}\s/m]]
+const markupIn = (text) => MARKUP.filter(([, re]) => re.test(text)).map(([label]) => label)
+const LOG = '[data-assistant-log]'
+/** Le texte du fil hors messages de la personne : réponses, « Page ouverte », erreurs, cartes. */
+const threadText = (page) => page.evaluate((sel) => [...document.querySelectorAll(`${sel} > :not([data-assistant-user])`)].map((e) => e.innerText).join('\n'), LOG)
+/** Une demande ; attend la fin du travail (une réponse, une ligne « Page ouverte » ou une erreur). */
+async function askAny(page, text) {
+  const n = await page.locator(`${LOG} > *`).count()
+  await page.fill('[data-assistant-input]', text)
+  const t0 = Date.now()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(({ sel, n }) => document.querySelectorAll(sel).length > n + 1 && !document.querySelector('[data-assistant-panel] [role=status]'),
+    { sel: `${LOG} > *`, n }, { timeout: LIMIT_MS })
+  const ms = Date.now() - t0
+  await page.waitForTimeout(500)
+  const items = await page.locator(`${LOG} > :not([data-assistant-user])`).allInnerTexts()
+  return { reply: items.slice(-2).join('\n'), ms }
+}
+/** À 390 px, au bout du défilement : le contenu le plus bas de la page et la bulle (rectangles disjoints). */
+const pageBottom = () => {
+  const fab = document.querySelector('[data-assistant-bubble]').getBoundingClientRect()
+  let bottom = 0, last = null
+  for (const el of document.querySelectorAll('main *')) {
+    const r = el.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0 && r.bottom > bottom) { bottom = r.bottom; last = el }
+  }
+  const lr = last?.getBoundingClientRect()
+  return { bottom: Math.round(bottom), fabTop: Math.round(fab.top), atEnd: Math.ceil(scrollY + innerHeight) >= document.documentElement.scrollHeight - 1,
+    disjoint: Boolean(lr && (lr.bottom <= fab.top || lr.right <= fab.left || lr.left >= fab.right)) }
+}
+
+async function alignementRun() {
+  check('alignement : contre-épreuve, un chemin brut et chacun des balisages sont vus, un texte simple ne l’est pas',
+    RAW_PATH.test('voir /reglages/equipe') && markupIn('| a |\n|---|\n<br> **x**\n# Titre').length === 4 && markupIn('Texte simple : 3 projets, échéance le 4.11.').length === 0)
+  const started = Date.now()
+  const { ctx, page } = await open({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/`)
+  await page.waitForSelector('[data-assistant-bubble]', { timeout: 60_000 })
+  await page.click('[data-assistant-bubble]')
+  check('alignement : focus dans le champ dès l’ouverture', await page.evaluate(() => Boolean(document.activeElement?.hasAttribute('data-assistant-input'))))
+  const note = page.locator('[data-assistant-note]')
+  const [nb, ib] = [await note.boundingBox(), await page.locator('[data-assistant-input]').boundingBox()]
+  check('alignement : mention « peut se tromper » visible sous le champ', (await note.isVisible()) && /peut se tromper/.test(await note.innerText())
+    && nb && ib && nb.y >= ib.y + ib.height, { nb, ib })
+
+  const r1 = await askAny(page, 'Ouvrez l’écran Équipe des réglages, s’il vous plaît.')
+  await page.waitForURL(/\/reglages\/equipe$/, { timeout: 15_000 }).catch(() => {})
+  const opened = await page.locator('[data-assistant-opened]').last().innerText().catch(() => '')
+  const t1 = await threadText(page)
+  console.log(`  « ouvrez l’écran Équipe » (${(r1.ms / 1000).toFixed(1)} s) : ${r1.reply.replace(/\s+/g, ' ').slice(0, 200)}`)
+  check('alignement : « ouvre <écran> » navigue et le fil montre « Page ouverte : <libellé> » sans aucun chemin brut',
+    new URL(page.url()).pathname === '/reglages/equipe' && opened === 'Page ouverte : Réglages › Équipe' && !RAW_PATH.test(t1), { url: page.url(), opened, t1: t1.slice(0, 300) })
+  await page.screenshot({ path: `${SHOTS}/alignement-bureau-page-ouverte.png` })
+
+  const r2 = await askAny(page, 'Présentez-moi sous forme de tableau, avec un titre au-dessus, mes projets en cours et leur échéance.')
+  const t2 = await threadText(page)
+  console.log(`  « tableau » (${(r2.ms / 1000).toFixed(1)} s) : ${r2.reply.replace(/\s+/g, ' ').slice(0, 200)}`)
+  check('alignement : une demande qui invite à un tableau donne un fil sans séparateur de tableau, « <br », « ** » ni « # »',
+    r2.reply.length > 20 && markupIn(t2).length === 0, { found: markupIn(t2), t2: t2.slice(0, 400) })
+  await page.screenshot({ path: `${SHOTS}/alignement-bureau-tableau.png` })
+
+  await page.locator('[data-assistant-reset]').focus()
+  await page.keyboard.press('Escape')
+  check('alignement : Échap ferme le panneau et rend le focus à la bulle', (await page.locator('[data-assistant-panel]').count()) === 0
+    && await page.evaluate(() => Boolean(document.activeElement?.hasAttribute('data-assistant-bubble'))))
+  const turns = await q(`select ok, duration_ms from assistant_usage where user_id = $1 and kind = 'message' and created_at > to_timestamp($2 / 1000.0) order by created_at`, [USER, started])
+  check('alignement : les deux tours ont abouti sous le délai du tour (290 s)', turns.length === 2 && turns.every((u) => u.ok && u.duration_ms < TURN_MS), turns)
+  await ctx.close()
+
+  const m = await open({ width: 390, height: 844 }, true)
+  const bottoms = []
+  for (const path of ['/', '/projets', '/taches']) {
+    await m.page.goto(`${BASE}${path}`)
+    await m.page.waitForSelector('[data-assistant-bubble]', { timeout: 60_000 })
+    await m.page.waitForTimeout(1500)
+    await m.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await m.page.waitForTimeout(400)
+    bottoms.push({ path, ...(await m.page.evaluate(pageBottom)) })
+    if (path === '/projets') await m.page.screenshot({ path: `${SHOTS}/alignement-mobile-bas.png` })
+  }
+  check('alignement : à 390 px, le bas de la page défile au-dessus de la bulle (rectangles disjoints)',
+    bottoms.every((b) => b.atEnd && b.bottom > 0 && b.bottom <= b.fabTop && b.disjoint), bottoms)
+  await m.page.click('[data-assistant-bubble]')
+  const mNote = await m.page.locator('[data-assistant-note]').boundingBox()
+  check('alignement : à 390 px, panneau plein écran et mention visible dans l’écran', (await m.page.locator('[data-assistant-note]').isVisible())
+    && mNote && mNote.y + mNote.height <= 844 && (await m.page.locator('[data-assistant-panel]').boundingBox())?.width >= 389, mNote)
+  await m.page.screenshot({ path: `${SHOTS}/alignement-mobile-panneau.png` })
+  await m.ctx.close()
+  for (const f of ['bureau-page-ouverte', 'bureau-tableau', 'mobile-bas', 'mobile-panneau']) {
+    const path = `${SHOTS}/alignement-${f}.png`
+    check(`capture alignement-${f}.png écrite pendant cet essai`, existsSync(path) && statSync(path).size > 10_000 && statSync(path).mtimeMs >= started)
+  }
+}
+
 try {
-  if (SCENARIO === 'plan') {
+  if (SCENARIO === 'alignement') await alignementRun()
+  else if (SCENARIO === 'plan') {
     await planRun(PROD ? 'prod-bureau' : 'bureau', { width: 1440, height: 900 }, false)
     if (!PROD) await planRun('mobile', { width: 390, height: 844 }, true)
   } else await forbiddenRun()

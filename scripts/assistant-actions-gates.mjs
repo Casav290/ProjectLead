@@ -3,7 +3,7 @@
  * Portes du chantier « tout ce que l'assistant propose s'applique » (27.10.2026) pour ProjectLead.
  * Ledger : ~/projets/.unlazy/assistant-actions/gates/leaf-projectlead.md. Cahier : ~/projets/.unlazy/assistant-actions/CAHIER.md.
  *
- *   node scripts/assistant-actions-gates.mjs G1|G2|G3|G4|G5|G6 [--list-routes]
+ *   node scripts/assistant-actions-gates.mjs G1|G2|G3|G4|G5|G6|G7|G8 [--list-routes]
  *
  * Chaque porte vérifie vraiment (lance les contrôles, relit la base, joue le scénario) et n'imprime son jeton
  * ASSISTANT_ACTIONS_Gn_OK qu'à la fin, après toutes ses assertions. Aucun secret n'est affiché : les adresses de base et
@@ -19,6 +19,13 @@
  * G4  essai réel sur l'APERÇU Vercel (vrai modèle, compte TEST) : scripts/e2e-assistant-actions.mjs --scenario plan.
  * G5  essai réel sur l'aperçu : demandes interdites (supprimer, envoyer) refusées : e2e … --scenario interdit.
  * G6  production (après le feu vert seulement) : e2e … --prod + PROD-projectlead.md (sauvegarde, déploiement, retour).
+ * G7  alignement des bulles (28.10.2026, B1–B14), statique : le tableau « Alignement des bulles » de
+ *     docs/ASSISTANT-ACTIONS.md ; chaque `fichier:ligne` « extrait » existe ET porte l'extrait ; chaque test nommé existe,
+ *     est relancé maintenant (scripts/assistant-alignement-check.ts, scripts/assistant-bulle-check.ts) et passe ; chaque
+ *     assertion G8 citée existe ; quelques preuves lues dans le code ; contre-épreuves (le contrôle voit une ligne
+ *     décalée, un test inconnu ou non passé, un point retiré, une assertion G8 inventée).
+ * G8  alignement sur l'APERÇU (vrai modèle, compte TEST, navigateur sans tête) : e2e … --scenario alignement, chaque
+ *     assertion G8 du tableau vue « ✓ », captures alignement-*.png écrites pendant la porte.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -309,6 +316,140 @@ function g6() {
   finish('ASSISTANT_ACTIONS_G6_OK')
 }
 
-const GATES = { G1: g1, G2: g2, G3: g3, G4: g4, G5: g5, G6: g6 }
-if (!GATES[gate]) { console.log('usage : node scripts/assistant-actions-gates.mjs G1|G2|G3|G4|G5|G6'); process.exit(2) }
+// ------------------------------------------------------------------ G7 : alignement des bulles (B1–B14), statique
+
+const ALIGN_DOC = 'docs/ASSISTANT-ACTIONS.md'
+const ALIGN_TITLE = '## Alignement des bulles (28.10.2026)'
+const ALIGN_POINTS = Array.from({ length: 14 }, (_, i) => `B${i + 1}`)
+/** Les scripts de tests de l'alignement, relancés par G7, et leur dernière ligne attendue. */
+const ALIGN_TESTS = { 'scripts/assistant-alignement-check.ts': 'ASSISTANT_ALIGNEMENT_CHECK_OK', 'scripts/assistant-bulle-check.ts': 'ASSISTANT_BULLE_CHECK_OK' }
+/** Les assertions G8 (aperçu) vivent dans l'essai réel. */
+const G8_SOURCE = 'scripts/e2e-assistant-actions.mjs'
+
+/**
+ * Le tableau de la section : une ligne par point (« | B1 | … »), avec
+ * - code : des références `fichier:ligne` « extrait » (l'extrait doit se trouver sur cette ligne) ;
+ * - tests : des tests `scripts/<fichier> › libellé exact` ;
+ * - g8 : des assertions `G8 › libellé exact` de l'essai réel sur l'aperçu.
+ * null si la section manque.
+ */
+function parseAlignment(doc) {
+  const start = doc.indexOf(ALIGN_TITLE)
+  if (start < 0) return null
+  const rest = doc.slice(start + ALIGN_TITLE.length)
+  const end = rest.search(/\n## /)
+  const section = end < 0 ? rest : rest.slice(0, end)
+  return section.split('\n').filter((l) => /^\|\s*B\d+\s*\|/.test(l)).map((line) => ({
+    id: line.match(/^\|\s*(B\d+)\s*\|/)[1],
+    code: [...line.matchAll(/`([\w./[\]-]+):(\d+)` «\s*([^»]+?)\s*»/g)].map((x) => ({ file: x[1], line: Number(x[2]), excerpt: x[3] })),
+    tests: [...line.matchAll(/`(scripts\/[\w.-]+\.(?:ts|mjs)) › ([^`]+)`/g)].map((x) => ({ file: x[1], title: x[2] })),
+    g8: [...line.matchAll(/`G8 › ([^`]+)`/g)].map((x) => x[1]),
+  }))
+}
+
+/** Tout ce qui ne va pas entre le tableau, le code, les tests passés (`passed` : « fichier › libellé ») et l'essai G8. */
+function alignmentProblems(doc, passed) {
+  const rows = parseAlignment(doc)
+  if (!rows) return [`section « ${ALIGN_TITLE.slice(3)} » absente de ${ALIGN_DOC}`]
+  const problems = []
+  const ids = rows.map((r) => r.id)
+  if (JSON.stringify(ids) !== JSON.stringify(ALIGN_POINTS)) problems.push(`points du tableau : ${ids.join(' ')} (attendu : B1 à B14, une fois chacun, dans l’ordre)`)
+  const g8src = readFileSync(join(ROOT, G8_SOURCE), 'utf8')
+  for (const r of rows) {
+    if (!r.code.length) problems.push(`${r.id} : aucune référence fichier:ligne « extrait »`)
+    if (!r.tests.length) problems.push(`${r.id} : aucun test automatique nommé`)
+    for (const c of r.code) {
+      const path = join(ROOT, c.file)
+      const lines = path.startsWith(`${ROOT}/`) && existsSync(path) ? readFileSync(path, 'utf8').split('\n') : null
+      if (!lines) problems.push(`${r.id} : fichier introuvable ${c.file}`)
+      else if (c.line < 1 || c.line > lines.length) problems.push(`${r.id} : ${c.file}:${c.line} hors du fichier (${lines.length} lignes)`)
+      else if (!lines[c.line - 1].includes(c.excerpt)) problems.push(`${r.id} : ${c.file}:${c.line} ne contient pas « ${c.excerpt} » (ligne : ${lines[c.line - 1].trim().slice(0, 120)})`)
+    }
+    for (const x of r.tests) {
+      if (!ALIGN_TESTS[x.file]) { problems.push(`${r.id} : ${x.file} n’est pas un script de tests de l’alignement`); continue }
+      if (!readFileSync(join(ROOT, x.file), 'utf8').includes(`check('${x.title}'`)) problems.push(`${r.id} : test introuvable dans ${x.file} : « ${x.title} »`)
+      else if (!passed.has(`${x.file} › ${x.title}`)) problems.push(`${r.id} : test non passé : ${x.file} › « ${x.title} »`)
+    }
+    for (const label of r.g8) if (!g8src.includes(`check('${label}'`)) problems.push(`${r.id} : assertion G8 introuvable dans ${G8_SOURCE} : « ${label} »`)
+  }
+  return problems
+}
+
+function g7() {
+  console.log('G7 — alignement des bulles (B1–B14) : tableau de la doc ↔ code ↔ tests relancés')
+  const doc = readFileSync(join(ROOT, ALIGN_DOC), 'utf8')
+  const rows = parseAlignment(doc) ?? []
+  expect(`section « ${ALIGN_TITLE.slice(3)} » de ${ALIGN_DOC} : ${rows.length} lignes (${rows.map((r) => r.id).join(' ')})`, rows.length === 14)
+
+  // Les tests nommés, relancés maintenant : leurs deux scripts, en entier (base de test locale, faux service de modèle).
+  const env = { TEST_DATABASE_URL: testDatabaseUrl() }
+  const passed = new Set()
+  for (const [file, token] of Object.entries(ALIGN_TESTS)) {
+    const r = run('npx', ['tsx', file], env, 1_500_000)
+    const verts = r.out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
+    const reds = r.out.split('\n').filter((l) => l.startsWith('  ✗ ')).join(' / ')
+    expect(`${file} : ${verts ? `${verts[1]} verts, ${verts[2]} rouges` : 'pas de bilan'}, dernière ligne ${lastLine(r.out)}`,
+      r.code === 0 && verts && verts[2] === '0' && Number(verts[1]) >= 25 && lastLine(r.out) === token, reds || r.err.slice(-300))
+    for (const l of r.out.split('\n')) if (l.startsWith('  ✓ ')) passed.add(`${file} › ${l.slice(4)}`)
+  }
+  const cited = rows.flatMap((r) => r.tests)
+  expect(`tests nommés dans le tableau : ${cited.length} (au moins un par point), dans les deux scripts`, cited.length >= 50
+    && Object.keys(ALIGN_TESTS).every((f) => cited.some((x) => x.file === f)))
+
+  const problems = alignmentProblems(doc, passed)
+  for (const r of rows) {
+    const mine = problems.filter((p) => p.startsWith(`${r.id} :`))
+    expect(`${r.id} : ${r.code.length} référence(s) de code vérifiée(s) sur leur ligne, ${r.tests.length} test(s) passé(s)${r.g8.length ? `, ${r.g8.length} assertion(s) G8` : ''}`,
+      !mine.length && r.code.length > 0 && r.tests.length > 0, mine.join(' | '))
+  }
+  for (const p of problems.filter((x) => !/^B\d+ :/.test(x))) expect(p, false)
+
+  // Quelques preuves lues directement dans le code, indépendantes du tableau.
+  const maxDuration = Number(readFileSync(join(ROOT, 'scripts/vercel-build.mjs'), 'utf8').match(/maxDuration: (\d+)/)?.[1]) * 1000
+  const routeSrc = readFileSync(join(ROOT, 'server/routes/assistant.ts'), 'utf8')
+  const turn = Number(routeSrc.match(/export const TURN_TIMEOUT_MS = ([\d_]+)/)?.[1].replace(/_/g, ''))
+  expect(`B1 : délai du tour ${turn} ms = maxDuration ${maxDuration / 1000} s (scripts/vercel-build.mjs) moins 5 à 15 s`, maxDuration - turn >= 5000 && maxDuration - turn <= 15000)
+  expect('B1 : un seul AbortSignal.timeout dans la route, passé aux options du runner ; erreurs classées sans le nom des classes',
+    (routeSrc.match(/AbortSignal\.timeout\(/g) ?? []).length === 1 && /\}, \{ signal: deadline \}\)/.test(routeSrc) && !/constructor\??\.name/.test(routeSrc))
+  const bubble = ['src/components/Assistant.tsx', 'src/components/assistantText.tsx'].map((f) => readFileSync(join(ROOT, f), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')).join('\n')
+  expect('B6 : la bulle n’écrit jamais de HTML brut (ni innerHTML ni dangerouslySetInnerHTML dans son code)', !/innerHTML|dangerouslySetInnerHTML/.test(bubble))
+
+  // Contre-épreuves : le contrôle voit une ligne décalée, un extrait faux, un test inconnu ou non passé, un point
+  // retiré, une assertion G8 inventée.
+  const b1 = rows.find((r) => r.id === 'B1')
+  const ref = b1?.code[0]
+  const shifted = ref ? doc.replace(`\`${ref.file}:${ref.line}\``, `\`${ref.file}:${ref.line + 1}\``) : doc
+  expect('contre-épreuve : une référence décalée d’une ligne est vue', shifted !== doc && alignmentProblems(shifted, passed).some((p) => p.startsWith('B1 :')))
+  const unknown = doc.replace(/`scripts\/assistant-alignement-check\.ts › ([^`]+)`/, '`scripts/assistant-alignement-check.ts › test qui n’existe pas`')
+  expect('contre-épreuve : un test inconnu est vu', unknown !== doc && alignmentProblems(unknown, passed).some((p) => p.includes('test introuvable')))
+  const first = b1?.tests[0]
+  const oneMissing = new Set([...passed].filter((x) => x !== `${first?.file} › ${first?.title}`))
+  expect('contre-épreuve : un test nommé qui n’a pas passé est vu', Boolean(first) && alignmentProblems(doc, oneMissing).some((p) => p.includes('test non passé')))
+  const noB9 = doc.split('\n').filter((l) => !/^\|\s*B9\s*\|/.test(l)).join('\n')
+  expect('contre-épreuve : un point retiré du tableau (B9) est vu', noB9 !== doc && alignmentProblems(noB9, passed).some((p) => p.includes('points du tableau')))
+  const withG8 = rows.find((r) => r.g8.length)
+  const fakeG8 = withG8 ? doc.replace(`\`G8 › ${withG8.g8[0]}\``, '`G8 › assertion inventée`') : doc
+  expect('contre-épreuve : une assertion G8 inventée est vue', fakeG8 !== doc && alignmentProblems(fakeG8, passed).some((p) => p.includes('assertion G8 introuvable')))
+  finish('ASSISTANT_ACTIONS_G7_OK')
+}
+
+// ------------------------------------------------------------------ G8 : alignement sur l'aperçu (vrai modèle, compte TEST)
+
+function g8() {
+  const started = Date.now()
+  const out = e2e(['--scenario', 'alignement'], 'ASSISTANT_ACTIONS_G8_OK', 'G8 — aperçu Vercel : alignement des bulles, vrai modèle, compte TEST')
+  // Chaque assertion G8 citée dans le tableau de la doc a été vue « ✓ » pendant cet essai.
+  const cited = (parseAlignment(readFileSync(join(ROOT, ALIGN_DOC), 'utf8')) ?? []).flatMap((r) => r.g8)
+  const unseen = cited.filter((label) => !out.includes(`  ✓ ${label}`))
+  expect(`les ${cited.length} assertions G8 du tableau vues « ✓ » pendant cet essai`, cited.length >= 8 && !unseen.length, unseen.join(' / '))
+  const shots = join(CHANTIER, 'captures/projectlead')
+  const fresh = existsSync(shots) ? readdirSync(shots).filter((f) => /^alignement-.+\.png$/.test(f)
+    && statSync(join(shots, f)).mtimeMs >= started && statSync(join(shots, f)).size > 10_000) : []
+  expect(`captures alignement-*.png écrites pendant cette porte : ${fresh.join(', ') || 'aucune'}`, fresh.length >= 4)
+  finish('ASSISTANT_ACTIONS_G8_OK')
+}
+
+const GATES = { G1: g1, G2: g2, G3: g3, G4: g4, G5: g5, G6: g6, G7: g7, G8: g8 }
+if (!GATES[gate]) { console.log('usage : node scripts/assistant-actions-gates.mjs G1|G2|G3|G4|G5|G6|G7|G8'); process.exit(2) }
 try { GATES[gate]() } catch (e) { console.log(`  ✗ ${gate} interrompue : ${String(e?.message ?? e).slice(0, 300)}`); process.exit(1) }
