@@ -212,8 +212,9 @@ export default function Layout({ children }: { children: ReactNode }) {
             <UserMenu />
           </div>
         </header>
-        {/* En bas, la place de la bulle de l'Assistant IA : rien du contenu ne reste caché dessous. */}
-        <main key={saved} className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-5 sm:px-6">{children}</main>
+        {/* En bas, la place de la bulle de l'Assistant IA (alignement B9) : 96 px ≥ bulle (56 px) + sa marge (16 ou 24 px) + 16 px,
+            plus la zone sûre du téléphone : rien du contenu ne reste caché dessous. */}
+        <main key={saved} className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-5 sm:px-6">{children}</main>
       </div>
       <Assistant />
     </div>
