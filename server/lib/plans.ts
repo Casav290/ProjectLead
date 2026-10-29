@@ -1,4 +1,5 @@
 import type { Db } from '../db.js'
+import { FREE_MONTHLY_TOKENS } from './assistant/budget.js'
 import { leadIdOn, publicUrl } from './env.js'
 import { HttpError } from './http.js'
 
@@ -7,9 +8,11 @@ import { HttpError } from './http.js'
  * payant, ce sont les quantités. Les limites portent sur les actions, jamais sur les données déjà créées : un
  * projet de trop n'est ni caché ni bloqué, on ne peut simplement pas en ouvrir un autre.
  *
- * - Gratuit : 3 projets en cours à la fois, 1 personne.
+ * - Gratuit : 3 projets en cours à la fois, 1 personne, l'Assistant IA pour l'équivalent de 10 demandes par mois
+ *   (200 000 jetons pondérés par mois civil, server/lib/assistant/budget.ts ; Ève, 29.10.2026).
  * - Pro : projets sans limite, 1 personne (19 € par mois ou 190 € par an).
  * - Pro+ : projets sans limite, 5 personnes (39 € par mois ou 390 € par an).
+ * Un essai Pro en cours (abonnement `trialing`) est une formule Pro, pas Gratuit (GRANTING, lib/subscription.ts).
  * Les demandes « à qualifier », les projets terminés ou abandonnés, archivés et les modèles ne comptent pas
  * (même liste de statuts dans db/005_plan_usage.sql et db/008_billing.sql).
  *
@@ -26,10 +29,11 @@ import { HttpError } from './http.js'
  */
 export type Tier = 'free' | 'pro' | 'pro_plus'
 
-export const LIMITS: Record<Tier, { openProjects: number; seats: number }> = {
-  free: { openProjects: 3, seats: 1 },
-  pro: { openProjects: Number.POSITIVE_INFINITY, seats: 1 },
-  pro_plus: { openProjects: Number.POSITIVE_INFINITY, seats: 5 },
+/** `assistantTokens` : jetons pondérés de l'Assistant IA par mois civil (sans limite : seuls les quotas par heure et par jour). */
+export const LIMITS: Record<Tier, { openProjects: number; seats: number; assistantTokens: number }> = {
+  free: { openProjects: 3, seats: 1, assistantTokens: FREE_MONTHLY_TOKENS },
+  pro: { openProjects: Number.POSITIVE_INFINITY, seats: 1, assistantTokens: Number.POSITIVE_INFINITY },
+  pro_plus: { openProjects: Number.POSITIVE_INFINITY, seats: 5, assistantTokens: Number.POSITIVE_INFINITY },
 }
 
 export const TIER_NAME: Record<Tier, string> = { free: 'Gratuit', pro: 'Pro', pro_plus: 'Pro+' }
@@ -84,6 +88,8 @@ export async function planOf(db: Db, accountId: string, lock = false) {
   const erpSeats = erpValid && Number.isInteger(u.plan_seats) ? (u.plan_seats as number) : 0
   const seats = linked ? Math.max(LIMITS[tier].seats, erpSeats) : Number.POSITIVE_INFINITY
   const limit = linked ? LIMITS[tier].openProjects : Number.POSITIVE_INFINITY
+  // L'Assistant IA suit la même règle que les projets : la formule appliquée, et aucune limite sans Compte Lead.
+  const assistant = linked ? LIMITS[tier].assistantTokens : Number.POSITIVE_INFINITY
   // Formule héritée d'un abonnement payé ailleurs avant la bascule : jusqu'à une date figée, puis Gratuit.
   const inherited = RANK[tier] > RANK[paidTier]
     ? { tier, app: (u.plan_family_app as string | null) ?? null, until: until ? until.toISOString() : null } : null
@@ -93,6 +99,7 @@ export async function planOf(db: Db, accountId: string, lock = false) {
     paidTier, inherited, lead,
     seats: Number.isFinite(seats) ? seats as number : null,
     openProjects: (u.open_projects ?? 0) as number, projectLimit: Number.isFinite(limit) ? limit : null,
+    assistantBudget: Number.isFinite(assistant) ? assistant : null,
     members: (u.members ?? 0) as number, invited: (u.invited ?? 0) as number,
   }
 }

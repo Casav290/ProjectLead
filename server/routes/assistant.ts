@@ -5,9 +5,10 @@ import { SESSION_COOKIE } from '../auth.js'
 import { withTenant, type Db } from '../db.js'
 import { body, HttpError, router } from '../lib/http.js'
 import { localDay } from '../lib/time.js'
+import { publicUrl } from '../lib/env.js'
 import { asLocale, isLocale, tr } from '../lib/i18n.js'
 import { dynamicSystem, STABLE_SYSTEM } from '../lib/assistant/prompt.js'
-import { completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
+import { allowanceFor, completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
 import { doneLine, OpFailure, routeOutcome, runOps } from '../lib/assistant/run.js'
 import { labelOf, scrubPaths } from '../lib/assistant/pages.js'
 import { buildTools, pageAllowed, type AssistantAction } from '../lib/assistant/tools.js'
@@ -16,8 +17,9 @@ import { MAX_TOKEN_CHARS, opAllowed, opLabel, verifyConfirm } from '../lib/assis
 /**
  * Assistant IA (bulle en bas à droite, cahier commun des applications Lead du 24.10.2026).
  *
- * POST /api/assistant          { messages, page, locale } → { messages, reply, actions }
+ * POST /api/assistant          { messages, page, locale } → { messages, reply, actions, allowance }
  * POST /api/assistant/confirm  { token }                  → exécute l'écriture proposée, une seule fois
+ * GET  /api/assistant/allowance                           → { allowance } : la formule gratuite et ce qu'il en reste
  *
  * Session obligatoire (garde de server/index.ts : 401 sinon). Clé ANTHROPIC_API_KEY absente : 503, et la bulle est
  * masquée (`features.assistant` de /api/me). Rien de la conversation n'est gardé en base : le navigateur renvoie
@@ -179,6 +181,13 @@ app.post('/', async (c) => {
 
   const ctx = c.get('ctx')
   const reservation = await reserveMessage(ctx)
+  if (!reservation.ok && reservation.scope === 'free_limit') {
+    // Formule gratuite, budget du mois atteint (29.10.2026, L4) : refusé AVANT tout appel au modèle, rien de réservé.
+    // 402 comme les autres limites de la formule (lien vers la page Formule) ; la bulle dit quand il revient.
+    const a = reservation.allowance
+    throw new HttpError(402, 'free_limit', { limit: a.limited ? a.budget : null, plan: 'free',
+      upgrade_url: `${publicUrl()}${reservation.upgradeUrl}`, resets_on: a.limited ? a.resets_on : null, allowance: a })
+  }
   if (!reservation.ok) throw new HttpError(429, 'assistant_quota', { scope: reservation.scope })
 
   const account = await withTenant(ctx, async (db) => (await db.query('select name, timezone, locale from accounts where id = app_account()')).rows[0])
@@ -269,7 +278,10 @@ app.post('/', async (c) => {
     }
     await completeUsage(ctx, reservation.id, { ok: true, ...usage, tools: used, duration_ms: Date.now() - started,
       error: final.stop_reason === 'end_turn' ? null : final.stop_reason })
-    return c.json({ messages, reply, actions })
+    // Ce qu'il reste de la formule gratuite après ce tour (L5) ; sans limite, rien à relire. Une relecture qui échoue ne
+    // gâche pas la réponse : la bulle relit le compteur à sa prochaine ouverture.
+    const allowance = reservation.budget === null ? { limited: false } : await allowanceFor(ctx).catch(() => null)
+    return c.json({ messages, reply, actions, allowance })
   } catch (e: any) {
     const f = failureOf(e, deadline)
     console.error('[assistant]', f.code)
@@ -278,6 +290,12 @@ app.post('/', async (c) => {
     throw new HttpError(status, code)
   }
 })
+
+/**
+ * La formule gratuite et ce qu'il en reste ce mois-ci (29.10.2026, L5), lu par la bulle à son ouverture. Une formule
+ * sans limite : `{ limited: false }`. Lecture seule, sans appel au modèle.
+ */
+app.get('/allowance', async (c) => c.json({ allowance: await allowanceFor(c.get('ctx')) }))
 
 /** Les refus des routes dits sur la carte, dans la langue de la personne (server/i18n, `assistant.error.*`). */
 const CONFIRM_ERRORS = new Set(['forbidden', 'not_found', 'invalid_input', 'plan_limit_projects', 'already_invoiced', 'other_project',
