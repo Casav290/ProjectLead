@@ -22,8 +22,15 @@ l'Assistant IA, ou un interdit nommé. L'outil prépare une carte « À confirme
 - **Jeton.** HMAC (APP_SECRET), personne + entreprise, 10 minutes, usage unique (`assistant_confirmations`), liste
   fermée des routes et refus par champ (`server/lib/assistant/token.ts`, `RULES`), revérifiés à la confirmation sur
   le chemin réel.
+- **Ce qui sort attend la validation** (28.10). Un email qu'une écriture déclenche pendant « Confirmer » (automatisation
+  « écrire au client » de l'entreprise, qui joue comme à l'écran) part APRÈS la validation de toute la carte
+  (`afterSharedCommit`, `server/db.ts`, appelé par `sendMail`) : si une écriture suivante est refusée, tout est annulé et
+  rien ne part. Pendant l'essai, rien ne part du tout.
 - **Seules sur leur carte** (mode `route`) : les écritures qui appellent une autre application ou un fournisseur
-  (CRMlead, InvoiceLead, boîte mail) ; pas d'essai, pas de transaction ouverte pendant l'appel.
+  (CRMlead, InvoiceLead, boîte mail) ; pas d'essai, pas de transaction ouverte pendant l'appel. Ces routes répondent 200
+  même quand rien n'a abouti (facturation : un résultat par projet ; synchronisation : `ok: false`) : la carte ne dit
+  « fait » que si quelque chose a été fait, et dit quoi (« 2 brouillons créés ; 1 sans rien à facturer », « 3 rendez-vous
+  lus ») ; sinon elle passe en « Non enregistré » avec la raison (`routeOutcome`, `server/lib/assistant/run.ts`, 502).
 - **Après « Confirmer ».** La page ouverte se recharge, la vue qui montre le résultat s'ouvre (plan : Gantt, avec les
   liens Étapes, Liste, Gantt) et la carte dit en une ligne ce qui a été créé.
 
@@ -241,5 +248,14 @@ avec `propose_duplicate_project` (`as_template`).
 ## Contrôles
 
 - `TEST_DATABASE_URL=… npx tsx scripts/assistant-actions-check.ts` → `ASSISTANT_ACTIONS_CHECK_OK` (faux service de
-  modèle : chaque outil, le lot, le plan, le tout ou rien, les interdits même signés, la taille).
+  modèle : chaque outil, le lot, le plan, le tout ou rien, les interdits même signés, la taille). Pour CHACUN des outils
+  `propose_*` : proposition sans écriture, autre personne et autre entreprise 403, confirmation, rejeu 403 (G2 le vérifie
+  outil par outil, registre lu dans le code). Les outils seuls sur leur carte sans autre application à joindre en local :
+  la synchronisation d'un agenda lit un faux agenda iCalendar local ; la facturation du mois s'arrête avant l'envoi à
+  InvoiceLead (projet sans client, projet sans rien à facturer) ; la reprise d'un lead CRMlead appelle la route de
+  l'écran, qui refuse sans Compte Lead exactement comme l'écran. Leur écriture réelle chez CRMlead et InvoiceLead est
+  contrôlée par `scripts/smoke.ts` (faux CRMlead, faux InvoiceLead, faux Compte Lead).
+- Cartes dans les cinq langues : dates au format de la langue, pays, langues, genre et taux de TVA en toutes lettres,
+  automatisations dites avec la phrase de l'écran Réglages → Automatisations, heures des rendez-vous dans le fuseau de
+  l'entreprise ; mêmes mots que l'interface (« stage » en anglais, « Etappe » en allemand).
 - `node scripts/assistant-actions-gates.mjs G1` … `G6` (en-tête du fichier).

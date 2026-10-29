@@ -192,12 +192,29 @@ function g2() {
   const a = run('npx', ['tsx', 'scripts/assistant-actions-check.ts'], env)
   const verts = a.out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
   expect(`assistant-actions-check : ${verts ? `${verts[1]} verts, ${verts[2]} rouges` : 'pas de bilan'}`, a.code === 0 && verts && verts[2] === '0'
-    && Number(verts[1]) >= 200 && lastLine(a.out) === 'ASSISTANT_ACTIONS_CHECK_OK', lastLine(a.out))
+    && Number(verts[1]) >= 300 && lastLine(a.out) === 'ASSISTANT_ACTIONS_CHECK_OK', lastLine(a.out))
   for (const must of ['proposition : RIEN d’écrit (essai annulé), aucun email, jeton non consommé', 'rejeu du même jeton → 403 token_used, rien de plus',
     'jeton d’Ann présenté par Bob → 403', 'jeton présenté depuis une autre entreprise → 403',
     'lot dont la 4e écriture est refusée → 400, message clair, NI étape NI tâche écrites', 'en base : les 10 tâches, étape, début, échéance, estimation, jalon exacts',
-    'lot : autre entreprise → 403', 'deux « Confirmer » simultanés : un 200, un 403, une seule tâche'])
+    'lot : autre entreprise → 403', 'deux « Confirmer » simultanés : un 200, un 403, une seule tâche',
+    // Tout ou rien, email compris (28.10) : l'email d'une automatisation attend la validation de toute la carte.
+    'lot refusé à la 4e écriture après une tâche qui déclenche le suivi client : AUCUN email parti, aucun suivi, aucune tâche',
+    'lot validé : l’email du suivi part APRÈS la validation (une fois, au contact qui reçoit le suivi)',
+    // La carte ne dit « fait » que si quelque chose a été fait (outils seuls sur leur carte, 28.10).
+    'propose_monthly_billing confirmée, projet sans client : la route note l’erreur, la carte ne dit pas « fait » (502, « Aucun brouillon créé »)',
+    'propose_sync_now, agenda en panne : 502, message clair dans la langue (de), aucun rendez-vous perdu'])
     expect(`vu vert : « ${must} »`, a.out.includes(`✓ ${must}`))
+  // A8 pour CHAQUE outil d'écriture enregistré (registre lu dans le code) : proposition sans écriture, autre personne et
+  // autre entreprise 403, confirmation, rejeu 403 — chacun vu vert dans le bilan. Le plan et le lot ont leurs lignes ci-dessus.
+  const registry = readFileSync(join(ROOT, 'server/lib/assistant/tools.ts'), 'utf8').match(/export const TOOL_NAMES = \[([\s\S]*?)\] as const/)
+  const tools = [...(registry?.[1] ?? '').matchAll(/'(propose_[a-z_]+)'/g)].map((m) => m[1]).filter((t) => !['propose_batch', 'propose_project_plan'].includes(t))
+  const greens = a.out.split('\n').filter((l) => l.startsWith('  ✓ ')).map((l) => l.slice(4))
+  const PROOFS = { proposition: /proposition sans écriture|rien d’écrit/, 'autre personne et autre entreprise 403': /autre personne 403, autre entreprise 403/,
+    confirmation: /confirmation exacte|confirmée|la confirmation appelle la route/, rejeu: /rejeu 403/ }
+  const incomplete = tools.map((t) => ({ t, miss: Object.entries(PROOFS).filter(([, re]) =>
+    !greens.some((l) => (l.startsWith(`${t} `) || l.startsWith(`${t} (`)) && re.test(l))).map(([k]) => k) })).filter((x) => x.miss.length)
+  expect(`A8 pour chacun des ${tools.length} outils d’écriture (hors plan et lot) : proposition, autre personne / entreprise 403, confirmation, rejeu`,
+    tools.length >= 38 && !incomplete.length, incomplete.map((x) => `${x.t} : ${x.miss.join(', ')}`).join(' / '))
   const b = run('npx', ['tsx', 'scripts/assistant-check.ts'], env)
   expect('assistant-check (bulle du 24.10, jetons, quotas, droits) toujours vert', b.code === 0 && lastLine(b.out) === 'ASSISTANT_CHECK_OK', lastLine(b.out))
   finish('ASSISTANT_ACTIONS_G2_OK')

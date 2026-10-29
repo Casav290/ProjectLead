@@ -14,6 +14,9 @@ process.env.PUBLIC_URL ||= 'http://localhost:5174'
 // Les quotas de l'assistant ont leurs propres contrôles (assistant-check.ts) : ici, des centaines de demandes.
 process.env.ASSISTANT_USER_PER_HOUR = '5000'
 process.env.ASSISTANT_ACCOUNT_PER_DAY = '50000'
+// Le faux agenda extérieur (propose_sync_now) répond sur 127.0.0.1 : permis aux contrôles seulement, jamais en production
+// (lib/netguard.ts, lib/extcal.ts ; même réglage que scripts/smoke.ts).
+process.env.MAILBOX_ALLOW_PRIVATE_HOSTS = '1'
 
 import 'dotenv/config'
 import { createServer, type Server } from 'node:http'
@@ -57,6 +60,19 @@ const fake = createServer((req, res) => {
 const fakePort = await listen(fake)
 process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${fakePort}`
 process.env.ANTHROPIC_API_KEY = 'cle-factice-pour-le-faux-service'
+
+// ------------------------------------------------------------------ faux agenda extérieur (adresse iCalendar)
+// `icsEvents` rendez-vous à venir (dans la fenêtre lue : 7 jours avant, 120 après) ; `icsStatus` ≠ 200 : agenda en panne.
+const ics = { events: 1, status: 200 }
+const icsAt = (days: number, hour: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10).replace(/-/g, '') + `T${String(hour).padStart(2, '0')}0000Z`
+const calendar = createServer((_req, res) => {
+  res.statusCode = ics.status
+  res.setHeader('content-type', 'text/calendar')
+  const events = Array.from({ length: ics.events }, (_, i) => ['BEGIN:VEVENT', `UID:essai-${i}@agenda.test`, `SUMMARY:Rendez-vous extérieur ${i + 1}`,
+    `DTSTART:${icsAt(i + 2, 9)}`, `DTEND:${icsAt(i + 2, 10)}`, 'END:VEVENT'].join('\r\n'))
+  res.end(['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//essai//FR', ...events, 'END:VCALENDAR'].join('\r\n'))
+})
+const calendarUrl = `http://127.0.0.1:${await listen(calendar)}/agenda.ics`
 
 const { migrate } = await import('../server/migrate.js')
 await migrate(() => {})
@@ -278,12 +294,12 @@ const siteDe = (await ann.post('/api/projects', { name: 'Website TEST', status: 
 const de = await ask(ann, 'propose_project_plan', { ...PLAN, project_id: siteDe }, 'de')
 check('langue de l’interface (de) : carte en allemand', de.card?.summary.title === '«Website TEST» planen'
   && de.card.summary.lines.some((l: string) => l.includes('Arbeitstage (Montag bis Freitag)'))
-  && de.card.summary.lines.some((l: string) => l.startsWith('6 Phasen, 10 Aufgaben, davon 2 Meilensteine, 9 Abhängigkeiten'))
+  && de.card.summary.lines.some((l: string) => l.startsWith('6 Etappen, 10 Aufgaben, davon 2 Meilensteine, 9 Abhängigkeiten'))
   && de.card.summary.groups[2].lines[0].includes('(Meilenstein)') && de.card.summary.groups[1].lines.some((l: string) => l.includes('nach «Arborescence»')),
   { t: de.card?.summary.title, l: de.card?.summary.lines, g: de.card?.summary.groups?.[1] })
 r = await ann.post('/api/assistant/confirm', { token: de.card.token, locale: 'de' })
 check('langue de l’interface (de) : la ligne « fait » en allemand', r.status === 200
-  && r.body.message === '«Website TEST» planen: erledigt. Erstellt: 6 Phasen, 10 Aufgaben (davon 2 Meilensteine), 9 Abhängigkeiten, 3 Checklistenpunkte; Projektdaten gesetzt.', r.body)
+  && r.body.message === '«Website TEST» planen: erledigt. Erstellt: 6 Etappen, 10 Aufgaben (davon 2 Meilensteine), 9 Abhängigkeiten, 3 Checklistenpunkte; Projektdaten gesetzt.', r.body)
 const en = await ask(ann, 'propose_create_task', { project_id: siteDe, title: 'Call the client', due_date: '2026-11-03' }, 'en')
 check('langue de l’interface (en) : carte en anglais', en.card?.summary.title === 'Create a task' && en.card.summary.lines[0] === 'Task: “Call the client”'
   && en.card.summary.lines.some((l: string) => l.startsWith('Due: Tue 3 Nov')), en.card?.summary)
@@ -397,6 +413,33 @@ async function cycle(name: string, who: Client, tool: string, input: unknown, ve
 }
 const one = async (sql: string, args: unknown[] = []) => (await q(sql, args))[0] ?? null
 
+// Les outils déjà là le 24.10, réécrits le 27.10 (mêmes routes, cartes en cinq langues) : le même cycle complet.
+const tFresh = (await ann.post('/api/tasks', { project_id: other, title: `À modifier ${stamp}` })).body.id
+await cycle('propose_create_task', ann, 'propose_create_task', { project_id: other, title: `Créée seule ${stamp}`, due_date: '2026-11-06', priority: 'high', estimate_minutes: 90 },
+  async () => { const t = await one('select due_date, priority, estimate_minutes, created_by from tasks where title = $1', [`Créée seule ${stamp}`])
+    return t?.due_date === '2026-11-06' && t.priority === 'high' && t.estimate_minutes === 90 && t.created_by === annId })
+await cycle('propose_update_task', ann, 'propose_update_task', { task_id: tFresh, title: `Modifiée ${stamp}`, start_date: '2026-11-02', due_date: '2026-11-04', assignee_ids: [miaId] },
+  async () => { const t = await one('select title, start_date, due_date from tasks where id = $1', [tFresh])
+    return t?.title === `Modifiée ${stamp}` && t.start_date === '2026-11-02' && t.due_date === '2026-11-04'
+      && (await n('select count(*)::int as n from task_assignees where task_id = $1 and user_id = $2', [tFresh, miaId])) === 1 })
+await cycle('propose_add_task_comment', ann, 'propose_add_task_comment', { task_id: tFresh, body: `Commentaire ${stamp}` },
+  async () => (await n('select count(*)::int as n from comments where task_id = $1 and body = $2 and author_id = $3', [tFresh, `Commentaire ${stamp}`, annId])) === 1)
+await cycle('propose_add_checklist_item', ann, 'propose_add_checklist_item', { task_id: tFresh, label: `Point ${stamp}` },
+  async () => (await n('select count(*)::int as n from checklist_items where task_id = $1 and label = $2', [tFresh, `Point ${stamp}`])) === 1)
+await cycle('propose_create_project', ann, 'propose_create_project', { name: `Projet seul ${stamp}`, status: 'planned', start_date: '2026-11-09', priority: 'high' },
+  async () => { const p = await one('select status, start_date, priority, owner_id from projects where name = $1', [`Projet seul ${stamp}`])
+    return p?.status === 'planned' && p.start_date === '2026-11-09' && p.priority === 'high' && p.owner_id === annId })
+const reportsBefore = await n('select count(*)::int as n from client_reports where account_id = $1', [accountId])
+await cycle('propose_project_update (point interne)', ann, 'propose_project_update', { project_id: other, health: 'at_risk', body: `Retard fournisseur ${stamp}` },
+  async () => (await n(`select count(*)::int as n from project_updates where project_id = $1 and health = 'at_risk' and body = $2 and not share_with_client`,
+    [other, `Retard fournisseur ${stamp}`])) === 1)
+check('propose_project_update : jamais partagé avec le client (aucun suivi)', (await n('select count(*)::int as n from client_reports where account_id = $1', [accountId])) === reportsBefore)
+await cycle('propose_create_client', ann, 'propose_create_client', { name: `Client créé ${stamp}`, email: `cree-${stamp}@exemple.test`, town: 'Bulle', postal_code: '1630' },
+  async () => { const c = await one('select email, town, postal_code, country from clients where name = $1', [`Client créé ${stamp}`])
+    return c?.town === 'Bulle' && c.postal_code === '1630' && c.country === 'CH' })
+await cycle('propose_log_time (pour soi, membre)', bob, 'propose_log_time', { project_id: site, entry_date: '2026-11-05', minutes: 75, note: `Saisie ${stamp}` },
+  async () => (await n('select count(*)::int as n from time_entries where user_id = $1 and project_id = $2 and minutes = 75 and note = $3', [bobId, site, `Saisie ${stamp}`])) === 1)
+
 const tA = (await q(`select id from tasks where project_id = $1 and title = 'Appeler le client'`, [other]))[0].id
 const tB = (await q(`select id from tasks where project_id = $1 and title = 'Préparer la réunion'`, [other]))[0].id
 await cycle('propose_update_tasks (plusieurs tâches)', ann, 'propose_update_tasks', { task_ids: [tA, tB], priority: 'urgent', due_date: '2026-11-10' },
@@ -459,6 +502,15 @@ check('propose_log_time pour un collègue : refusé à un membre', !bobForOther.
 const cli = (await ann.post('/api/clients', { name: `Client ${stamp}`, email: `client-${stamp}@exemple.test` })).body.id
 await cycle('propose_update_client', ann, 'propose_update_client', { client_id: cli, town: 'Fribourg', postal_code: '1700', phone: '+41 26 000 00 00' },
   async () => { const c = await one('select town, postal_code from clients where id = $1', [cli]); return c?.town === 'Fribourg' && c.postal_code === '1700' })
+// Les cartes en toutes lettres, dans la langue de l'interface : pays, langue, genre, avant → après (jamais « DE », « de »).
+const cliFr = await ask(ann, 'propose_update_client', { client_id: cli, country: 'DE', language: 'de', kind: 'person' })
+check('carte client (fr) : pays, langue et genre en toutes lettres, avec l’avant', JSON.stringify(cliFr.card?.summary.lines.slice(1))
+  === JSON.stringify(['Genre : personne (avant : entreprise)', 'Pays : Allemagne (avant : Suisse)', 'Langue : allemand (avant : français)']), cliFr.card?.summary.lines)
+const cliEn = await ask(ann, 'propose_create_client', { name: `Client EN ${stamp}`, country: 'AT', language: 'it' }, 'en')
+check('carte client (en) : « Country: Austria », « Language: Italian »', Boolean(cliEn.card?.summary.lines.includes('Country: Austria'))
+  && Boolean(cliEn.card?.summary.lines.includes('Language: Italian')), cliEn.card?.summary.lines)
+const vatDe = await ask(ann, 'propose_update_project', { project_id: other, vat_code: 'reduced' }, 'de')
+check('carte projet (de) : le taux de TVA en toutes lettres (« Reduzierter Satz »)', Boolean(vatDe.card?.summary.lines.some((l: string) => l.endsWith('Reduzierter Satz'))), vatDe.card?.summary.lines)
 await cycle('propose_client_contact (ajouter)', ann, 'propose_client_contact', { client_id: cli, name: 'Paul Test', email: `paul-${stamp}@exemple.test`, receives_updates: false },
   async () => (await n(`select count(*)::int as n from client_contacts where client_id = $1 and name = 'Paul Test' and not receives_updates`, [cli])) === 1)
 const contact = (await q(`select id from client_contacts where client_id = $1 and name = 'Paul Test'`, [cli]))[0]?.id
@@ -497,8 +549,16 @@ await cycle('propose_intake_form (créer)', ann, 'propose_intake_form', { slug: 
 const fm = (await q('select id from intake_forms where slug = $1', [`demande-${stamp}`]))[0]?.id
 await cycle('propose_intake_form (modifier)', ann, 'propose_intake_form', { form_id: fm, intro: 'Décrivez votre projet.' },
   async () => (await one('select intro from intake_forms where id = $1', [fm]))?.intro === 'Décrivez votre projet.')
-await cycle('propose_automation (créer : prévenir le responsable)', ann, 'propose_automation', { name: `Auto ${stamp}`, trigger: 'task_completed', action: 'notify', params: { to: 'owner' } },
+const autoCard = await cycle('propose_automation (créer : prévenir le responsable)', ann, 'propose_automation', { name: `Auto ${stamp}`, trigger: 'task_completed', action: 'notify',
+  params: { to: 'owner', message: 'Tâche terminée' } },
   async () => (await n('select count(*)::int as n from automations where name = $1', [`Auto ${stamp}`])) === 1)
+check('carte automatisation : la phrase de l’écran (« Alors : prévenir le chef de projet », message lisible, pas de JSON)',
+  Boolean(autoCard?.summary.lines.includes('Alors : prévenir le chef de projet')) && Boolean(autoCard?.summary.lines.includes('Message : Tâche terminée'))
+  && !autoCard?.summary.lines.some((l: string) => l.includes('{')), autoCard?.summary.lines)
+const autoEs = await ask(ann, 'propose_automation', { name: 'Asignar', trigger: 'task_created', action: 'notify', params: { to: 'owner' } }, 'es')
+check('carte automatisation (es) : « Entonces: avisar al jefe de proyecto »', Boolean(autoEs.card?.summary.lines.some((l: string) => l.endsWith('avisar al jefe de proyecto'))), autoEs.card?.summary.lines)
+const autoGhost = await ask(ann, 'propose_automation', { name: 'Fantôme', trigger: 'task_created', action: 'assign', params: { user_id: eveAccount } })
+check('propose_automation : une personne hors de l’équipe → pas de carte', !autoGhost.card && autoGhost.reply.includes('unknown_person'), autoGhost.reply.slice(0, 200))
 const au = (await q('select id from automations where name = $1', [`Auto ${stamp}`]))[0]?.id
 await cycle('propose_automation (modifier)', ann, 'propose_automation', { automation_id: au, active: false },
   async () => (await one('select active from automations where id = $1', [au]))?.active === false)
@@ -520,18 +580,77 @@ const msg3 = (await q('select id from email_messages where subject = $1', [`Suit
 await cycle('propose_link_email (route seule)', ann, 'propose_link_email', { message_id: msg3, project_id: site, as_task: true },
   async () => (await one('select project_id from email_messages where id = $1', [msg3]))?.project_id === site
     && (await n('select count(*)::int as n from tasks where project_id = $1 and source_email_id = $2', [site, msg3])) === 1)
-const imp = await ask(ann, 'propose_import_client', { source: 'crmlead', external_id: 'lead-123' })
+// La reprise d'un lead CRMlead : la route même de l'écran (Clients → Importer). Ici sans Compte Lead relié : la route
+// refuse, comme à l'écran (son écriture réelle, lead relu puis client créé, est contrôlée par scripts/smoke.ts).
 before = await footprint(accountId)
-r = imp.card ? await ann.post('/api/assistant/confirm', { token: imp.card.token }) : { status: 0, body: null }
+const imp = await ask(ann, 'propose_import_client', { source: 'crmlead', external_id: 'lead-123' })
+after = await footprint(accountId)
+check('propose_import_client : carte seule, rien d’écrit à la proposition (aucun appel à CRMlead)', Boolean(imp.card) && same(before, after), imp.reply.slice(0, 200))
+const impX = await bob.post('/api/assistant/confirm', { token: imp.card.token })
+const impY = await eve.post('/api/assistant/confirm', { token: imp.card.token })
+check('propose_import_client : autre personne 403, autre entreprise 403', impX.status === 403 && impY.status === 403, [impX, impY])
+before = await footprint(accountId)
+r = await ann.post('/api/assistant/confirm', { token: imp.card.token })
 after = await footprint(accountId)
 // Carte seule : le numéro du jeton est noté AVANT l'appel à l'autre application (usage unique) ; aucune donnée métier.
-check('propose_import_client sans Compte Lead : carte, puis refus clair de la route, aucune donnée écrite', Boolean(imp.card) && r.status === 400 && r.body?.ok === false
+check('propose_import_client sans Compte Lead : refus clair de la route, aucune donnée écrite', r.status === 400 && r.body?.ok === false
   && r.body.message.startsWith('ProjectLead n’est pas relié au Compte Lead') && same({ ...before, confirmations: 0 }, { ...after, confirmations: 0 })
   && after.confirmations === before.confirmations + 1, { r, d: diff(before, after) })
+const screenImport = await ann.post('/api/clients/crmlead/import', { leadId: 'lead-123' })
+check('propose_import_client : la confirmation appelle la route de l’écran (même réponse que l’écran)', screenImport.status === r.status
+  && screenImport.body?.error === r.body?.error, { screen: screenImport, card: r.body })
+r = await ann.post('/api/assistant/confirm', { token: imp.card.token })
+check('propose_import_client : rejeu 403', r.status === 403 && r.body.error === 'token_used', r)
+const refreshManual = await ask(ann, 'propose_import_client', { source: 'crmlead', client_id: cli })
+check('propose_import_client : « mettre à jour depuis CRMlead » un client qui n’en vient pas → pas de carte', !refreshManual.card
+  && refreshManual.reply.includes('not_from_crmlead'), refreshManual.reply.slice(0, 200))
+
+// Les brouillons du mois dans InvoiceLead (responsables) : la route de l'écran Facturation, avec un résultat par projet.
+// La carte ne dit « fait » que si quelque chose a été fait, et dit quoi (lib/assistant/run.ts, routeOutcome).
 const bill = await ask(bob, 'propose_monthly_billing', { period: '2026-10' })
 check('propose_monthly_billing : refusé à un membre', !bill.card && bill.reply.includes('forbidden'), bill.reply.slice(0, 200))
-const billMia = await ask(mia, 'propose_monthly_billing', { period: '2026-10' })
-check('propose_monthly_billing : carte pour une responsable, « brouillons seulement »', Boolean(billMia.card) && billMia.card.summary.lines.some((l: string) => l.includes('Brouillons seulement')), billMia.reply.slice(0, 300))
+const billP = (await ann.post('/api/projects', { name: `Facturé à l’heure ${stamp}`, status: 'active', billing_mode: 'hourly', hourly_rate_cents: 12000 })).body.id
+await ann.post('/api/time/entries', { project_id: billP, entry_date: '2026-10-15', minutes: 120, note: 'Atelier', billable: true })
+const emptyP = (await ann.post('/api/projects', { name: `Rien à facturer ${stamp}`, status: 'active', billing_mode: 'hourly', hourly_rate_cents: 12000 })).body.id
+const runs = async (pid: string) => q('select status, error from invoice_runs where project_id = $1 and period = $2', [pid, '2026-10'])
+// Sans Compte Lead relié, la route refuse comme à l'écran (lead_required). Le temps de ces cartes, l'entreprise est donc
+// reliée (organisation ERPlead fictive) et la session de Mia porte une preuve fraîche (scellée, comme après une connexion
+// par le Compte Lead). AUCUN appel extérieur : ces deux projets s'arrêtent avant l'envoi à InvoiceLead (l'un sans
+// client, l'autre sans rien à facturer) ; l'envoi réel est contrôlé par scripts/smoke.ts avec un faux InvoiceLead.
+const { sealProof } = await import('../server/lib/personProof.js')
+const { hashToken } = await import('../server/auth.js')
+const b64u = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+const leadOn = async (on: boolean) => {
+  if (on) { process.env.LEAD_ID_CLIENT_SECRET = 'essai-sans-appel'; process.env.LEAD_ID_ISSUER = 'http://127.0.0.1:9' }
+  else { delete process.env.LEAD_ID_CLIENT_SECRET; delete process.env.LEAD_ID_ISSUER }
+  await pool.query('update accounts set lead_org = $2 where id = $1', [accountId, on ? `org-essai-${stamp}` : null])
+  await pool.query('update sessions set lead_id_token = $2 where token_hash = $1', [hashToken(mia.cookie.split('=')[1]),
+    on ? sealProof(`${b64u({ alg: 'none' })}.${b64u({ sub: 'essai', iat: Math.floor(Date.now() / 1000) })}.essai`) : null])
+}
+before = await footprint(accountId)
+const billMia = await ask(mia, 'propose_monthly_billing', { period: '2026-10', project_ids: [billP] })
+after = await footprint(accountId)
+check('propose_monthly_billing : carte pour une responsable, « brouillons seulement », rien d’écrit', Boolean(billMia.card)
+  && billMia.card.summary.lines.some((l: string) => l.includes('Brouillons seulement')) && same(before, after) && !(await runs(billP)).length, billMia.reply.slice(0, 300))
+const billX = await bob.post('/api/assistant/confirm', { token: billMia.card.token })
+const billY = await eve.post('/api/assistant/confirm', { token: billMia.card.token })
+check('propose_monthly_billing : autre personne 403, autre entreprise 403', billX.status === 403 && billY.status === 403, [billX, billY])
+await leadOn(true)
+r = await mia.post('/api/assistant/confirm', { token: billMia.card.token })
+check('propose_monthly_billing confirmée, projet sans client : la route note l’erreur, la carte ne dit pas « fait » (502, « Aucun brouillon créé »)',
+  r.status === 502 && r.body.ok === false && r.body.message === 'Aucun brouillon créé : 1 projet en erreur (détail dans Facturation).'
+  && JSON.stringify(await runs(billP)) === '[{"status":"error","error":"client_missing"}]', { r: r.body, runs: await runs(billP) })
+r = await mia.post('/api/assistant/confirm', { token: billMia.card.token })
+check('propose_monthly_billing : rejeu 403', r.status === 403 && r.body.error === 'token_used', r)
+const billEmpty = await ask(mia, 'propose_monthly_billing', { period: '2026-10', project_ids: [emptyP] })
+r = billEmpty.card ? await mia.post('/api/assistant/confirm', { token: billEmpty.card.token }) : { status: 0, body: null }
+check('propose_monthly_billing confirmée, rien à facturer : « fait », et la ligne dit pourquoi aucun brouillon', r.status === 200
+  && r.body.message === `Brouillons de facture 2026-10 : fait. 1 sans rien à facturer.` && JSON.stringify(await runs(emptyP)) === '[{"status":"empty","error":null}]',
+  { r: r.body, runs: await runs(emptyP) })
+r = billEmpty.card ? await mia.post('/api/assistant/confirm', { token: billEmpty.card.token }) : r
+check('propose_monthly_billing (rien à facturer) : rejeu 403', r.status === 403 && r.body?.error === 'token_used', r)
+await leadOn(false)
+check('entreprise de nouveau sans Compte Lead (la suite des contrôles inchangée)', !(await one('select lead_org from accounts where id = $1', [accountId]))?.lead_org)
 // La langue de l'interface : seule sur sa carte (écrite hors transaction par la route du sélecteur, db/032).
 before = await footprint(accountId)
 const lang = await ask(bob, 'propose_set_language', { locale: 'de' })
@@ -539,7 +658,8 @@ after = await footprint(accountId)
 check('propose_set_language : carte seule, rien d’écrit à la proposition', Boolean(lang.card) && same(before, after)
   && (await one('select locale, locale_chosen from users where id = $1', [bobId]))?.locale_chosen === false, lang.reply.slice(0, 200))
 r = await ann.post('/api/assistant/confirm', { token: lang.card.token })
-check('propose_set_language : autre personne 403', r.status === 403, r)
+const langEve = await eve.post('/api/assistant/confirm', { token: lang.card.token })
+check('propose_set_language : autre personne 403, autre entreprise 403', r.status === 403 && langEve.status === 403, [r, langEve])
 r = await bob.post('/api/assistant/confirm', { token: lang.card.token })
 const bobLang = await one('select locale, locale_chosen from users where id = $1', [bobId])
 check('propose_set_language confirmée : langue « de » choisie, l’écran la reçoit', r.status === 200 && r.body.locale === 'de' && bobLang?.locale === 'de' && bobLang.locale_chosen === true, { r: r.body, bobLang })
@@ -548,6 +668,26 @@ check('propose_set_language : rejeu 403', r.status === 403 && r.body.error === '
 check('la langue de l’interface ne passe jamais dans un lot (écriture hors transaction)', !opAllowed({ method: 'POST', path: '/api/me/locale', body: { locale: 'de' } }, 'tx'))
 const sync = await ask(ann, 'propose_sync_now', { kind: 'mailbox', id: '00000000-0000-4000-8000-000000000001' })
 check('propose_sync_now : boîte inconnue → pas de carte', !sync.card && sync.reply.includes('mailbox_not_found'), sync.reply.slice(0, 200))
+// Un agenda extérieur (faux agenda iCalendar local) : branché par l'écran (1 rendez-vous lu), puis il en a 2.
+ics.events = 1
+r = await ann.post('/api/calendar/feeds', { name: `Agenda extérieur ${stamp}`, url: calendarUrl })
+const feed = r.body?.id
+const extEvents = async () => n('select count(*)::int as n from external_events where feed_id = $1', [feed])
+check('agenda extérieur branché à l’écran : 1 rendez-vous lu', r.status === 201 && (await extEvents()) === 1, r.body)
+ics.events = 2
+await cycle('propose_sync_now (agenda extérieur, route seule)', ann, 'propose_sync_now', { kind: 'calendar_feed', id: feed }, async () => (await extEvents()) === 2)
+const syncOk = await ask(ann, 'propose_sync_now', { kind: 'calendar_feed', id: feed })
+ics.events = 3
+r = await ann.post('/api/assistant/confirm', { token: syncOk.card.token })
+check('propose_sync_now : la carte dit ce qui a été lu (« 3 rendez-vous lus »)', r.status === 200 && r.body.message === 'Synchroniser un agenda : fait. 3 rendez-vous lus.'
+  && (await extEvents()) === 3, r.body)
+// L'agenda est en panne : la route répond 200 avec ok: false ; la carte ne dit pas « fait » et rien ne change.
+ics.status = 503
+const syncKo = await ask(ann, 'propose_sync_now', { kind: 'calendar_feed', id: feed })
+r = await ann.post('/api/assistant/confirm', { token: syncKo.card.token, locale: 'de' })
+check('propose_sync_now, agenda en panne : 502, message clair dans la langue (de), aucun rendez-vous perdu', r.status === 502 && r.body.ok === false
+  && r.body.message.startsWith('Die Synchronisierung ist fehlgeschlagen') && (await extEvents()) === 3, r.body)
+ics.status = 200
 
 // ------------------------------------------------------------------ 6. l'essai n'envoie rien (automatisation « écrire au client »)
 section('essai sans effet extérieur')
@@ -562,6 +702,28 @@ check('essai d’une tâche dont l’automatisation écrit au client : AUCUN ema
   && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports0)
 await ann.post('/api/assistant/confirm', { token: wt.card.token })
 check('après « Confirmer », l’automatisation de l’entreprise joue comme à l’écran (suivi journalisé)', (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports0 + 1)
+// Tout ou rien, email compris : dans un lot, l'email d'une automatisation attend la validation de TOUTE la carte.
+const mails1 = await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])
+const reports1 = await n('select count(*)::int as n from client_reports where project_id = $1', [watched])
+r = await ann.post('/api/assistant/confirm', { token: sign(annId, [
+  { method: 'POST', path: '/api/tasks', body: { project_id: watched, title: `Déclenche le suivi ${stamp}` } },   // l'automatisation écrit au client
+  { method: 'POST', path: '/api/tasks', body: { project_id: other, title: `Tâche A ${stamp}` }, ref: 'a' },
+  { method: 'POST', path: '/api/tasks', body: { project_id: site, title: `Tâche B ${stamp}` }, ref: 'b' },
+  { method: 'POST', path: '/api/tasks/@a/dependencies', body: { depends_on_id: '@b' } },                       // deux projets : refusée
+]) })
+check('lot refusé à la 4e écriture après une tâche qui déclenche le suivi client : AUCUN email parti, aucun suivi, aucune tâche', r.status === 400
+  && (await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])) === mails1
+  && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports1
+  && (await n('select count(*)::int as n from tasks where title = $1', [`Déclenche le suivi ${stamp}`])) === 0, r.body)
+r = await ann.post('/api/assistant/confirm', { token: sign(annId, [
+  { method: 'POST', path: '/api/tasks', body: { project_id: watched, title: `Déclenche le suivi, validé ${stamp}` } },
+  { method: 'POST', path: '/api/tasks', body: { project_id: other, title: `Accompagne ${stamp}` } },
+]) })
+const sentAfter = await q('select to_emails, via from sent_emails where account_id = $1 order by created_at desc limit 1', [accountId])
+check('lot validé : l’email du suivi part APRÈS la validation (une fois, au contact qui reçoit le suivi)', r.status === 200
+  && (await n('select count(*)::int as n from sent_emails where account_id = $1', [accountId])) === mails1 + 1
+  && (await n('select count(*)::int as n from client_reports where project_id = $1', [watched])) === reports1 + 1
+  && sentAfter[0]?.to_emails.includes(`suivi-${stamp}@exemple.test`), { r: r.body, sentAfter })
 
 // ------------------------------------------------------------------ 7. la liste fermée : jamais ces écritures, même signées
 section('interdits, même avec un jeton signé')

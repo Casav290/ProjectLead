@@ -304,6 +304,12 @@ donnait un plan en texte. Cahier : `~/projets/.unlazy/assistant-actions/CAHIER.m
   seules sur leur carte (mode `route`).
 - Essai avant la carte : les écritures sont jouées dans une transaction annulée (`dryRun`) ; `sendMail` ne fait rien et
   aucune tâche de fond ne part pendant ce temps. Une proposition qui échouerait n'est jamais montrée.
+- Tout ou rien, email compris (28.10) : pendant « Confirmer », un email déclenché par une automatisation de l'entreprise
+  (« écrire au client ») attend la validation de toute la carte (`afterSharedCommit`, `server/db.ts` ; `sendMail`) ; si
+  une écriture suivante est refusée, rien ne part.
+- Outils seuls sur leur carte (28.10) : facturation du mois et synchronisations répondent 200 même sans résultat ; la carte
+  ne dit « fait » que si quelque chose a été fait, et dit quoi (`routeOutcome`, `server/lib/assistant/run.ts`) ; sinon
+  « Non enregistré » avec la raison (502).
 - Consigne (`server/lib/assistant/prompt.ts`) : plus de « je ne peux pas » pour une action permise ; un plan ou une liste
   de changements = la carte applicable dans la même réponse ; interdits inchangés (supprimer, payer, formule, membres et
   droits, clés et identifiants, envoyer à l'extérieur, fichier).
