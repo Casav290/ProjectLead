@@ -9,7 +9,7 @@ import { newMessageId } from '../lib/mailbox/types.js'
 import { assertCanOpenProject, isOpenStatus } from '../lib/plans.js'
 import { assertInProject, assertProjectVisible } from '../lib/visibility.js'
 import { body, cents, email, forbidden, HttpError, notFound, optDate, router, setClause, tx, uuid } from '../lib/http.js'
-import { LOCALES, tr } from '../lib/i18n.js'
+import { LOCALES, newProjectCurrency, tr } from '../lib/i18n.js'
 import { docLocale } from '../lib/locales.js'
 
 /**
@@ -133,8 +133,8 @@ export async function createProject(db: Db, ctx: Ctx, b: z.infer<typeof projectS
   if (!b.is_template && isOpenStatus(b.status)) await assertCanOpenProject(db, ctx.accountId)
   // Sans devise ni langue choisies : celles du modèle, sinon la devise de l'entreprise (celle de son pays à sa création).
   const tpl = b.template_id ? (await db.query('select currency, doc_locale from projects where id = $1', [b.template_id])).rows[0] : null
-  if (b.currency === undefined) b = { ...b, currency: tpl?.currency
-    ?? (await db.query('select currency from accounts where id = $1', [ctx.accountId])).rows[0]?.currency ?? 'CHF' }
+  if (b.currency === undefined) b = { ...b, currency: await newProjectCurrency(b.currency, tpl?.currency,
+    async () => (await db.query('select currency from accounts where id = $1', [ctx.accountId])).rows[0]?.currency) }
   if (b.doc_locale === undefined && tpl?.doc_locale) b = { ...b, doc_locale: tpl.doc_locale }
   const fields = PROJECT_FIELDS.filter((k) => (b as any)[k] !== undefined)
   const p = (await db.query(

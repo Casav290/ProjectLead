@@ -996,6 +996,29 @@ check('nouvelle étape sans choix de visibilité : la carte dit « Visible par l
   stg.card?.summary.lines ?? stg.reply.slice(0, 200))
 r = await ann.post('/api/assistant/confirm', { token: stg.card?.token })
 check('… confirmée : l’étape est bien visible par le client', r.status === 200 && (await one('select visible_to_client from stages where name = $1', [`Étape par défaut ${stamp}`]))?.visible_to_client === true, r.body)
+// La devise d'un nouveau projet sans devise donnée : celle du modèle, sinon celle de l'entreprise (createProject). La carte
+// la calcule avec la même règle (relecture du 29.10 : une entreprise en EUR voyait « Taux horaire : CHF 120 »).
+const zoe = new Client()
+await zoe.post('/api/auth/signup', { name: 'Zoé Euro', email: `zoe-${stamp}@exemple.test`, password: 'motdepasse-solide', company: `Euro ${stamp}` })
+const eurAccount = await zoe.patch('/api/account', { currency: 'EUR' })
+const eur = await ask(zoe, 'propose_create_project', { name: `Projet en euros ${stamp}`, billing_mode: 'hourly', hourly_rate_cents: 12000, budget_cents: 500000 })
+const eurLines: string[] = eur.card?.summary.lines ?? []
+check('entreprise en EUR, aucune devise donnée : la carte « Créer un projet » montre les montants en EUR (taux horaire EUR 120, budget EUR 5 000), aucun CHF',
+  eurAccount.status === 200 && eurLines.includes('Taux horaire : EUR 120') && eurLines.some((l) => /^Budget : EUR 5\D?000$/.test(l))
+  && !eurLines.some((l) => l.includes('CHF')), eurLines.length ? eurLines : eur.reply.slice(0, 200))
+r = await zoe.post('/api/assistant/confirm', { token: eur.card?.token })
+const eurP = await one('select currency, hourly_rate_cents, budget_cents from projects where name = $1', [`Projet en euros ${stamp}`])
+check('… confirmée : le projet est écrit en EUR, la devise montrée par la carte', r.status === 200 && eurP?.currency === 'EUR' && eurP.hourly_rate_cents === 12000
+  && Number(eurP.budget_cents) === 500000, { r: r.body, eurP })
+const gbpTpl = (await zoe.post('/api/projects', { name: `Modèle en livres ${stamp}`, is_template: true, currency: 'GBP' })).body.id
+const gbp = await ask(zoe, 'propose_create_project', { name: `Depuis le modèle en livres ${stamp}`, template_id: gbpTpl, billing_mode: 'fixed', fixed_cents: 300000 })
+const gbpLines: string[] = gbp.card?.summary.lines ?? []
+check('entreprise en EUR, depuis un modèle en GBP, aucune devise donnée : la carte montre le forfait en GBP (celle du modèle)',
+  gbpLines.some((l) => /^Forfait global : GBP 3\D?000$/.test(l)) && !gbpLines.some((l) => /EUR|CHF/.test(l)), gbpLines.length ? gbpLines : gbp.reply.slice(0, 200))
+r = await zoe.post('/api/assistant/confirm', { token: gbp.card?.token })
+const gbpP = await one('select currency, fixed_cents from projects where name = $1', [`Depuis le modèle en livres ${stamp}`])
+check('… confirmée : le projet est écrit en GBP, la devise montrée par la carte', r.status === 200 && gbpP?.currency === 'GBP' && Number(gbpP.fixed_cents) === 300000,
+  { r: r.body, gbpP })
 // Un rendez-vous relu seul avant sa modification (plus tout l'agenda de l'entreprise, de 2000 à 2100).
 const evOne = await ann.get(`/api/calendar/events?id=${meet}`)
 const evOther = await eve.get(`/api/calendar/events?id=${meet}`)

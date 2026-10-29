@@ -65,6 +65,16 @@ export function currencyForCountry(country: string | null | undefined): 'CHF' | 
   return 'CHF'
 }
 
+/**
+ * La devise d'un nouveau projet : celle choisie, sinon celle du modèle, sinon celle de l'entreprise (lue seulement s'il le
+ * faut). Une seule règle pour l'écriture (createProject, routes/projects.ts) et pour la carte « À confirmer » de
+ * l'assistant (propose_create_project, lib/assistant/tools.ts) : la carte montre la devise qui sera écrite.
+ */
+export async function newProjectCurrency(chosen: string | null | undefined, template: string | null | undefined,
+  account: () => Promise<string | null | undefined>): Promise<'CHF' | 'EUR' | 'USD' | 'GBP'> {
+  return (chosen ?? template ?? (await account()) ?? 'CHF') as 'CHF' | 'EUR' | 'USD' | 'GBP'
+}
+
 /** Le pays de la personne : en-tête Vercel x-vercel-ip-country d'abord, sinon la région d'Accept-Language (« de-AT »). */
 export function requestCountry(h: (name: string) => string | undefined | null): string | null {
   const v = h('x-vercel-ip-country')

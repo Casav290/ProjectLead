@@ -1,7 +1,7 @@
 import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod'
 import * as z from 'zod/v4'
 import type { Ctx } from '../../db.js'
-import { tr, type Locale } from '../i18n.js'
+import { newProjectCurrency, tr, type Locale } from '../i18n.js'
 import { callApi } from './internal.js'
 import { OpFailure, runOps } from './run.js'
 import { schedulePlan, workdayFrom, workdaysBetween } from './schedule.js'
@@ -208,7 +208,7 @@ export function buildTools(s: ToolScope) {
     : field === 'kind' && KIND_K[String(v)] ? L(KIND_K[String(v)])
       : field === 'country' ? region(v)
         : field === 'language' && LANG_K[String(v)] ? L(LANG_K[String(v)]) : String(v))
-  const money = (cents: number | null | undefined, cur = 'CHF') => (cents == null ? L('assistant.card.none')
+  const money = (cents: number | null | undefined, cur: string) => (cents == null ? L('assistant.card.none')
     : `${cur} ${(cents / 100).toLocaleString(INTL[l], { minimumFractionDigits: cents % 100 ? 2 : 0 })}`)
   const noun = (key: string, n: number) => L(key, { n })
 
@@ -568,23 +568,25 @@ export function buildTools(s: ToolScope) {
     build: async (a) => {
       let cl: string | null = null
       if (a.client_id) { const c = await client(a.client_id); if (!c) return { error: 'client_not_found' }; cl = c.name }
-      let template: string | null = null
+      let template: any = null
       if (a.template_id) {
         const t = await project(a.template_id)
         if (!t || !t.is_template) return { error: 'template_not_found' }
         if (t.visibility === 'members') return reservedCopy
-        template = t.name
+        template = t
       }
+      // Les montants dans la devise qui sera écrite, par la règle même de createProject : la devise donnée, sinon celle du modèle, sinon celle de l'entreprise.
+      const cur = await newProjectCurrency(a.currency, template?.currency, async () => (await get('/api/me')).body?.account?.currency)
       const body = { ...a, ...(a.is_template ? { status: 'planned' } : {}) }
       return {
         title: L(a.is_template ? 'assistant.card.title.createTemplate' : 'assistant.card.title.createProject'),
         ops: [{ method: 'POST', path: '/api/projects', body, ref: 'project' }],
         lines: [L(a.is_template ? 'assistant.card.templateName' : 'assistant.card.projectName', { name: a.name }), cl && L('assistant.card.client', { name: cl }),
-          template && L('assistant.card.fromTemplate', { name: template }),
+          template && L('assistant.card.fromTemplate', { name: template.name }),
           !a.is_template && L('assistant.card.status', { value: L(STATUS_K[a.status ?? 'planned']) }), a.code && L('assistant.card.code', { value: a.code }),
           a.priority && L('assistant.card.priority', { value: L(PRIORITY_K[a.priority]) }), a.color && L('assistant.card.color', { value: a.color }),
           a.start_date && L('assistant.card.start', { date: D(a.start_date) }), a.due_date && L('assistant.card.due', { date: D(a.due_date) }),
-          a.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(a.budget_minutes) }), ...billingLines(a, a.currency ?? 'CHF'),
+          a.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(a.budget_minutes) }), ...billingLines(a, cur),
           a.description && L('assistant.card.description', { text: a.description })],
         open: '/projets/@project',
       }
@@ -632,7 +634,7 @@ export function buildTools(s: ToolScope) {
           patch.due_date !== undefined && L('assistant.card.dueChanged', { value: D(patch.due_date), old: D(p.due_date) }),
           patch.budget_minutes !== undefined && L('assistant.card.budgetHoursChanged', { value: patch.budget_minutes == null ? L('assistant.card.none') : hm(patch.budget_minutes),
             old: p.budget_minutes == null ? L('assistant.card.none') : hm(p.budget_minutes) }),
-          ...billingLines(patch, patch.currency ?? p.currency ?? 'CHF', p),
+          ...billingLines(patch, patch.currency ?? p.currency, p),
           patch.portal_show_tasks !== undefined && L('assistant.card.portalTasks', { value: before(yesNo(patch.portal_show_tasks), yesNo(Boolean(p.portal_show_tasks))) }),
           patch.portal_show_time !== undefined && L('assistant.card.portalTime', { value: before(yesNo(patch.portal_show_time), yesNo(Boolean(p.portal_show_time))) }),
           patch.description !== undefined && L('assistant.card.description', { text: before(patch.description || empty, clip(p.description, 200) || empty) })],
@@ -666,7 +668,7 @@ export function buildTools(s: ToolScope) {
           !a.as_template && L('assistant.card.newStart', { date: D(String(body.start_date)) }),
           !a.as_template && L('assistant.card.client', { name: cl ?? p.client_name ?? L('assistant.card.none') }),
           !a.as_template && L('assistant.card.status', { value: L(STATUS_K.active) }),
-          ...billingLines(copied, p.currency ?? 'CHF'),
+          ...billingLines(copied, p.currency),
           p.budget_minutes != null && L('assistant.card.budgetHours', { value: hm(p.budget_minutes) }),
           a.as_template && L('assistant.card.templateNoClient')],
         open: '/projets/@copy',
@@ -1371,7 +1373,7 @@ export function buildTools(s: ToolScope) {
         ops: [{ method: 'POST', path: '/api/integrations/billing/run', body: { period, ...(project_ids ? { project_ids } : {}) } }],
         lines: [L('assistant.card.drafts', { n: fresh.length, done: list.length - fresh.length }),
           // Chaque brouillon et son montant, tous : aucun caché sous « + N autres ».
-          ...fresh.map((x: any) => `${x.project.name}${x.client ? ` (${x.client.name})` : ''} : ${money(x.total_cents, x.project.currency ?? 'CHF')}`),
+          ...fresh.map((x: any) => `${x.project.name}${x.client ? ` (${x.client.name})` : ''} : ${money(x.total_cents, x.project.currency)}`),
           L('assistant.card.draftsOnly')],
         open: '/facturation' }
     },
