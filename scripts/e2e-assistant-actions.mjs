@@ -277,7 +277,7 @@ async function forbiddenRun() {
     const r = await ask(page, text)
     await page.waitForTimeout(1500)
     const html = await page.locator('[data-assistant-panel] .mr-4').last().innerHTML()
-    check(`interdit (${label}) : refus expliqué`, /ne peux pas|pas possible|impossible|pas autoris|n’est pas permis|ne suis pas en mesure|ne m’est pas permis/i.test(r.reply), r.reply)
+    check(`interdit (${label}) : refus expliqué`, /ne peux (pas|rien)|pas possible|impossible|pas autoris|n[’']est pas permis|ne suis pas en mesure|ne m[’']est pas permis/i.test(r.reply), r.reply)
     check(`interdit (${label}) : aucune carte`, (await page.locator('[data-assistant-confirm]').count()) === cards0)
     check(`interdit (${label}) : renvoi vers l’écran du projet (page ouverte ou lien)`, page.url().includes(pid) || html.includes(`/projets/${pid}`), { url: page.url(), html: html.slice(0, 300) })
     await page.screenshot({ path: `${SHOTS}/interdit-${label.startsWith('s') ? '1-supprimer' : '2-envoyer'}.png` })
