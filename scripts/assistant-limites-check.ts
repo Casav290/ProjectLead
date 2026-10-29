@@ -251,7 +251,8 @@ check('L3 essai terminé (abonnement annulé) : Gratuit, limité', r.status === 
 
 // Remise à zéro au changement de mois (UTC).
 const F = await company('Fay')
-const start = monthStart()
+// Le premier instant du mois (UTC) vu par la base elle-même : un repère indépendant du code contrôlé (budget.ts).
+const start = new Date((await one(`select date_trunc('month', now() at time zone 'utc') at time zone 'utc' as s`)).s)
 await pose(F.id, 1_000_000, new Date(start.getTime() - 1000))
 al = await allowance(F.cl)
 fake.seen.length = 0
