@@ -13,7 +13,9 @@
  *     propose_* réellement enregistrés, et la liste fermée (token.ts) l'accepte ; chaque ligne interdite est refusée par
  *     cette liste ; chaque outil propose_* enregistré figure dans l'inventaire.
  * G2  scripts/assistant-actions-check.ts (lot, plan, chaque outil nouveau : proposition sans écriture, confirmation
- *     exacte, rejeu 403, autre personne / autre entreprise 403, échec au milieu d'un lot = rien) + assistant-check.ts.
+ *     exacte, rejeu 403, autre personne / autre entreprise 403, échec au milieu d'un lot = rien ; rien ne sort, même
+ *     indirectement ; la carte montre tout ce qui est écrit) + assistant-check.ts + assistant-pool-check.ts (pool de 2
+ *     connexions, 8 outils d'écriture dans un même message, 6 « Confirmer » simultanés : aucun blocage).
  * G3  contrôles complets : cinq langues (i18n-check), types, npm test (smoke), contrôles de l'assistant, suites, build, aucune clé dans le paquet du
  *     navigateur (témoin positif), aucune clé ni fichier d'environnement dans le dépôt.
  * G4  essai réel sur l'APERÇU Vercel (vrai modèle, compte TEST) : scripts/e2e-assistant-actions.mjs --scenario plan.
@@ -204,9 +206,20 @@ function g2() {
     'jeton d’Ann présenté par Bob → 403', 'jeton présenté depuis une autre entreprise → 403',
     'lot dont la 4e écriture est refusée → 400, message clair, NI étape NI tâche écrites', 'en base : les 10 tâches, étape, début, échéance, estimation, jalon exacts',
     'lot : autre entreprise → 403', 'deux « Confirmer » simultanés : un 200, un 403, une seule tâche',
-    // Tout ou rien, email compris (28.10) : l'email d'une automatisation attend la validation de toute la carte.
-    'lot refusé à la 4e écriture après une tâche qui déclenche le suivi client : AUCUN email parti, aucun suivi, aucune tâche',
-    'lot validé : l’email du suivi part APRÈS la validation (une fois, au contact qui reçoit le suivi)',
+    // Rien ne sort, même indirectement (relecture du 29.10) : une écriture qui ferait écrire au client (automatisation
+    // de l'entreprise) n'a pas de carte, et « Confirmer » refuse la carte entière si l'automatisation est apparue après.
+    'tâche terminée (task_completed) : pas de carte (« sends_outside » dit au modèle), rien d’écrit, aucun email, aucun suivi',
+    'étape terminée (stage_completed) — la carte aurait dit « le client n’est pas prévenu » : pas de carte (« sends_outside » dit au modèle), rien d’écrit, aucun email, aucun suivi',
+    'jeton signé dont la 2e écriture ferait écrire au client : 409, « écriture 2 sur 2 », RIEN d’écrit (pas même la 1re), aucun email',
+    'projet en pause, suivi hebdomadaire, remis « en cours » : pas de carte (« restarts_client_updates »), rien d’écrit',
+    // Ni intervenants ni visibilité, même indirectement ; la carte montre tout ce qui est écrit (B7, lots et plans).
+    'projet réservé, assigner la tâche à Bob : pas de carte (« opens_reserved_project »), rien d’écrit',
+    'dupliquer le projet réservé : pas de carte (« reserved_project_copy » : la copie serait visible de toute l’entreprise), rien d’écrit',
+    'lot : « Modifier un projet » montre chaque champ avant → après (échéance, taux horaire CHF 120 → CHF 0, client A → B)',
+    'lot de 12 tâches : les 12 lignes sur la carte, aucune cachée sous « + N autres »',
+    'signature du suivi client (≈1 600 caractères) : en entier sur la carte, jusqu’à l’IBAN, avant → après',
+    'plan : la note pour le client et la description de l’étape sont sur la carte',
+    'rendez-vous, « ajoute Marie » mal compris (liste réduite à Mia) : la carte montre Bob retiré (avant → après), les extérieurs gardés',
     // La carte ne dit « fait » que si quelque chose a été fait (outils seuls sur leur carte, 28.10).
     'propose_monthly_billing confirmée, projet sans client : la route note l’erreur, la carte ne dit pas « fait » (502, « Aucun brouillon créé »)',
     'propose_sync_now, agenda en panne : 502, message clair dans la langue (de), aucun rendez-vous perdu'])
@@ -224,6 +237,10 @@ function g2() {
     tools.length >= 38 && !incomplete.length, incomplete.map((x) => `${x.t} : ${x.miss.join(', ')}`).join(' / '))
   const b = run('npx', ['tsx', 'scripts/assistant-check.ts'], env)
   expect('assistant-check (bulle du 24.10, jetons, quotas, droits) toujours vert', b.code === 0 && lastLine(b.out) === 'ASSISTANT_CHECK_OK', lastLine(b.out))
+  const pl = run('npx', ['tsx', 'scripts/assistant-pool-check.ts'], env, 120_000)
+  const pv = pl.out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
+  expect(`assistant-pool-check (pool de 2 connexions, 8 outils d’écriture dans un même message, 6 « Confirmer » simultanés) : ${pv ? `${pv[1]} verts, ${pv[2]} rouges` : 'pas de bilan'}`,
+    pl.code === 0 && pv && pv[2] === '0' && Number(pv[1]) >= 5 && lastLine(pl.out) === 'ASSISTANT_POOL_CHECK_OK', lastLine(pl.out))
   finish('ASSISTANT_ACTIONS_G2_OK')
 }
 
@@ -246,6 +263,8 @@ function g3() {
   expect('scripts/assistant-check.ts', ac.code === 0 && lastLine(ac.out) === 'ASSISTANT_CHECK_OK', lastLine(ac.out))
   const aa = run('npx', ['tsx', 'scripts/assistant-actions-check.ts'], env)
   expect('scripts/assistant-actions-check.ts', aa.code === 0 && lastLine(aa.out) === 'ASSISTANT_ACTIONS_CHECK_OK', lastLine(aa.out))
+  const ap = run('npx', ['tsx', 'scripts/assistant-pool-check.ts'], env, 120_000)
+  expect('scripts/assistant-pool-check.ts', ap.code === 0 && lastLine(ap.out) === 'ASSISTANT_POOL_CHECK_OK', lastLine(ap.out))
   const su = run('npx', ['tsx', 'scripts/suites-check.ts'])
   expect('scripts/suites-check.ts', su.code === 0 && su.out.includes('PROJECTLEAD_SUITES_UNIT_OK'), lastLine(su.out))
   expect('pas de linter dans package.json (rien à lancer)', !/"lint"/.test(readFileSync(join(ROOT, 'package.json'), 'utf8')))

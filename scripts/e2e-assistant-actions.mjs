@@ -160,6 +160,8 @@ async function cardMatchesDb(card, pid, label) {
     const shown = g?.lines.filter((l) => !/^\+ \d+ autres?$/.test(l)) ?? []
     const more = Number(g?.lines.find((l) => /^\+ \d+ autres?$/.test(l))?.match(/\d+/)?.[0] ?? 0)
     if (shown.length + more !== mine.length) problems.push(`étape « ${s.name} » : ${mine.length} tâches en base, ${shown.length}+${more} sur la carte`)
+    // Relecture du 29.10 : la carte montre TOUTES les tâches, aucune sous « + N autres ».
+    if (more) problems.push(`étape « ${s.name} » : ${more} tâche(s) cachée(s) sous « + ${more} autres »`)
     for (const [k, line] of shown.entries()) {
       const t = mine[k]
       if (!t) continue
