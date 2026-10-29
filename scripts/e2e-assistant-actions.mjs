@@ -24,7 +24,8 @@
  * Scénario « interdit » : « supprime ce projet », « envoie le suivi au client par email » : refus expliqué, aucune
  * carte, lien ou page ouverte, projet intact, aucun email.
  * Scénario « alignement » (lecture seule) : « ouvrez l'écran Équipe » → navigation et « Page ouverte : Réglages › Équipe »
- * sans chemin brut ; une demande qui invite à un tableau → aucun balisage affiché ; focus, Échap ; à 390 px le bas des
+ * sans chemin brut ; une demande qui invite à un tableau → aucun balisage affiché, aucun « < » suivi d'une lettre (balise
+ * de raisonnement du modèle, Suites du 29.10) ; focus, Échap ; à 390 px le bas des
  * pages au-dessus de la bulle ; mention « peut se tromper » ; captures alignement-*.png.
  *
  * Seule écriture directe en base : la session de la personne de test (ouverte puis supprimée). Aucun message envoyé.
@@ -302,6 +303,8 @@ async function forbiddenRun() {
   check('interdit : projet intact, aucun suivi envoyé, aucun email', p.archived_at === null && p.reports === 0 && sent1 === sent0, { p, sent0, sent1 })
   const text = await page.locator('[data-assistant-panel]').innerText()
   check('aucune mention du fournisseur ni du modèle dans la bulle', !/claude|anthropic|opus/i.test(text))
+  const said = await threadText(page)
+  check('interdit : aucun « < » suivi d’une lettre affiché dans le fil (raisonnement du modèle, balise)', said.trim().length > 0 && !TAG.test(said), tagAt(said))
   await ctx.close()
 }
 
@@ -311,6 +314,12 @@ const RAW_PATH = /\/(taches|projets|modeles|emails|agenda|temps|charge|rapports|
 /** Le balisage qui ne doit jamais s'afficher (B6) : séparateur de tableau, <br>, **, # de titre. */
 const MARKUP = [['|---|', /\|\s*:?-{3,}/], ['<br', /<br/i], ['**', /\*\*/], ['#', /(^|\s)#{1,6}\s/m]]
 const markupIn = (text) => MARKUP.filter(([, re]) => re.test(text)).map(([label]) => label)
+/**
+ * Une balise affichée (Suites du 29.10.2026) : « < » suivi d'une lettre (ou « </ »), comme « <reasoning>Respond in French,
+ * tu.</reasoning> » vu dans le fil d'une autre bulle. Lu hors messages de la personne (ce qu'elle tape reste tel quel).
+ */
+const TAG = /<\/?[A-Za-z]/
+const tagAt = (text) => { const i = text.search(TAG); return i < 0 ? null : text.slice(Math.max(0, i - 60), i + 100) }
 const LOG = '[data-assistant-log]'
 /** Le texte du fil hors messages de la personne : réponses, « Page ouverte », erreurs, cartes. */
 const threadText = (page) => page.evaluate((sel) => [...document.querySelectorAll(`${sel} > :not([data-assistant-user])`)].map((e) => e.innerText).join('\n'), LOG)
@@ -369,6 +378,9 @@ async function alignementRun() {
   check('alignement : une demande qui invite à un tableau donne un fil sans séparateur de tableau, « <br », « ** » ni « # »',
     r2.reply.length > 20 && markupIn(t2).length === 0, { found: markupIn(t2), t2: t2.slice(0, 400) })
   await page.screenshot({ path: `${SHOTS}/alignement-bureau-tableau.png` })
+  check('alignement : aucun « < » suivi d’une lettre affiché dans le fil (<reasoning>, <br>…), hors messages de la personne',
+    TAG.test('<reasoning>Respond in French, tu.</reasoning>') && TAG.test('fin</analysis>') && !TAG.test('3 < 5 et 2 ≤ 4')
+    && `${t1}\n${t2}`.trim().length > 0 && !TAG.test(`${t1}\n${t2}`), tagAt(`${t1}\n${t2}`))
 
   await page.locator('[data-assistant-reset]').focus()
   await page.keyboard.press('Escape')

@@ -305,7 +305,8 @@ function g3() {
 
 /**
  * L'essai réel d'un scénario ; `min` = le nombre de contrôles que le scénario contient (tous doivent avoir été joués :
- * plan 29 = bureau 15 + téléphone 13 + erreurs JS ; interdit 9 ; alignement 14 ; production 16 = bureau 15 + erreurs JS).
+ * plan 29 = bureau 15 + téléphone 13 + erreurs JS ; interdit 10 ; alignement 15 (dont « aucun < suivi d'une lettre dans le
+ * fil », Suites du 29.10) ; production 16 = bureau 15 + erreurs JS).
  */
 function e2e(args, token, label, min) {
   console.log(label)
@@ -335,7 +336,7 @@ function g4() {
   finish('ASSISTANT_ACTIONS_G4_OK')
 }
 function g5() {
-  e2e(['--scenario', 'interdit'], 'ASSISTANT_ACTIONS_G5_OK', 'G5 — aperçu Vercel : demandes interdites refusées', 9)
+  e2e(['--scenario', 'interdit'], 'ASSISTANT_ACTIONS_G5_OK', 'G5 — aperçu Vercel : demandes interdites refusées', 10)
   finish('ASSISTANT_ACTIONS_G5_OK')
 }
 function g6() {
@@ -471,7 +472,10 @@ function g7() {
 
 function g8() {
   const started = Date.now()
-  const out = e2e(['--scenario', 'alignement'], 'ASSISTANT_ACTIONS_G8_OK', 'G8 — aperçu Vercel : alignement des bulles, vrai modèle, compte TEST', 14)
+  const out = e2e(['--scenario', 'alignement'], 'ASSISTANT_ACTIONS_G8_OK', 'G8 — aperçu Vercel : alignement des bulles, vrai modèle, compte TEST', 15)
+  // Suites du 29.10 : le raisonnement du modèle entre balises (« <reasoning>… ») jamais affiché dans le fil.
+  expect('assertion « aucun < suivi d’une lettre affiché dans le fil » vue ✓ pendant cet essai',
+    out.includes('  ✓ alignement : aucun « < » suivi d’une lettre affiché dans le fil (<reasoning>, <br>…), hors messages de la personne'))
   // Chaque assertion G8 citée dans le tableau de la doc a été vue « ✓ » pendant cet essai.
   const cited = (parseAlignment(readFileSync(join(ROOT, ALIGN_DOC), 'utf8')) ?? []).flatMap((r) => r.g8)
   const unseen = cited.filter((label) => !out.includes(`  ✓ ${label}`))

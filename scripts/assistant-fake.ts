@@ -13,6 +13,8 @@
  *   REFUS                       stop_reason « refusal » ;
  *   COUPE                       stop_reason « max_tokens » au milieu d'un appel d'outil ;
  *   CHEMIN                      un texte qui écrit des chemins bruts de l'application ;
+ *   RAISONNEMENT                un raisonnement entre balises avant le texte (<reasoning>, <thinking>, <analysis>, balise
+ *                               ouvrante orpheline), avec un outil au milieu (Suites du 29.10.2026) ;
  *   sinon                       « Bonjour. ».
  */
 import { createServer, type Server } from 'node:http'
@@ -57,6 +59,12 @@ export async function startFake() {
       if (text.includes('CHEMIN')) {
         const id = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)?.[0] ?? '00000000-0000-4000-8000-000000000000'
         return msg([{ type: 'text', text: `Allez dans /reglages/equipe, ou sur https://projectlead.io/projets/${id}/gantt. Voir aussi [le Gantt](/projets/${id}/gantt).` }], 'end_turn')
+      }
+      if (text.includes('RAISONNEMENT')) {
+        if (results.length) return msg([{ type: 'text', text: '<thinking>\nLa personne veut supprimer.\n</thinking>\n<Analysis>Pas d’outil pour cela.</Analysis>'
+          + 'Je ne supprime rien moi-même.\n<reasoning>note orpheline jusqu’à la fin de la ligne\nOuvrez le projet pour le faire.' }], 'end_turn')
+        return msg([{ type: 'text', text: '<reasoning>Respond in French, tu.</reasoning>Je regarde vos projets.' },
+          { type: 'tool_use', id: 'toolu_raison', name: 'list_projects', input: {} }], 'tool_use')
       }
       if (text.includes('MULTI')) {
         if (results.length) return msg([{ type: 'text', text: 'Je regarde vos projets.' }, { type: 'text', text: 'Voici le résumé.' }], 'end_turn')

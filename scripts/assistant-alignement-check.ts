@@ -197,6 +197,33 @@ check('B6 consigne : texte simple, listes « - », gras rare, jamais de tableau,
   STABLE_SYSTEM.includes('texte simple, phrases courtes') && STABLE_SYSTEM.includes('avec « - »') && STABLE_SYSTEM.includes('gras rare en **…**')
   && STABLE_SYSTEM.includes('Jamais de tableau') && STABLE_SYSTEM.includes('de titre (#), de bloc de code ni de HTML'))
 
+// ------------------------------------------------------------------ Suites A (29.10.2026) : jamais le raisonnement du modèle
+// Vu sur l'aperçu d'une autre bulle : « <reasoning>Respond in French, tu.</reasoning> » affiché tel quel dans le fil.
+{
+  const typed = 'RAISONNEMENT <thinking>tapé par la personne</thinking>'
+  fake.seen.length = 0
+  r = await ask(ann, typed)
+  check('Suites A raisonnement : <reasoning>, <thinking>, <analysis> et balise orpheline retirés du texte affiché, texte du tour gardé', r.status === 200
+    && r.body.reply === 'Je regarde vos projets.\n\nJe ne supprime rien moi-même.\n\nOuvrez le projet pour le faire.', r.body?.reply)
+  const msgs: any[] = r.body?.messages ?? []
+  const modelTexts = msgs.filter((m) => m.role === 'assistant').flatMap((m) => (Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]))
+    .filter((x: any) => x.type === 'text').map((x: any) => x.text)
+  check('Suites A raisonnement : historique renvoyé sans balise de raisonnement ; ce que la personne a tapé reste tel quel', r.status === 200
+    && modelTexts.length === 2 && modelTexts.every((x) => !/<\/?(reasoning|thinking|analysis)\b/i.test(x)) && modelTexts[0] === 'Je regarde vos projets.'
+    && msgs[0]?.role === 'user' && msgs[0].content === typed && msgs.some((m) => m.role === 'assistant' && m.content.some?.((x: any) => x.type === 'tool_use')),
+    msgs)
+  const plain = 'Texte simple : 3 projets.  \n\n\n- fin <b>gras</b>'
+  const onlyThinking = route.withoutReasoning([{ role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text: '<reasoning>rien d’autre</reasoning>' }] }])
+  check('Suites A raisonnement : texte sans balise inchangé ; message réduit à sa réflexion gardé valide (« … »)', route.stripReasoning(plain) === plain
+    && route.stripReasoning('<THINKING>x</THINKING>') === '' && route.stripReasoning('Bonjour.</analysis>') === 'Bonjour.'
+    && JSON.stringify(onlyThinking[0].content) === JSON.stringify([{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text: '…' }])
+    && route.withoutReasoning([{ role: 'user', content: '<reasoning>tapé</reasoning>' }])[0].content === '<reasoning>tapé</reasoning>', onlyThinking)
+  const sent = fake.seen[0]?.body
+  check('Suites A cause : consigne générique « aucune balise interne », aucune balise de réflexion nommée, réflexion adaptative envoyée au service',
+    STABLE_SYSTEM.includes('aucune balise interne ou système (XML) dans ta réponse') && !/<\/?(reasoning|thinking|analysis)/i.test(STABLE_SYSTEM)
+    && sent?.thinking?.type === 'adaptive' && sent?.fallbacks === 'default', { thinking: sent?.thinking, fallbacks: sent?.fallbacks })
+}
+
 // ------------------------------------------------------------------ B7 carte « À confirmer » lisible
 {
   const d = (iso: string, l: string) => new Intl.DateTimeFormat(l, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${iso}T12:00:00Z`))

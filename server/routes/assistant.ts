@@ -100,11 +100,54 @@ const FAILURE: Record<ReturnType<typeof failureOf>['kind'], [number, string]> = 
   timeout: [504, 'assistant_timeout'], history: [400, 'assistant_history'], busy: [503, 'assistant_busy'], upstream: [502, 'assistant_unavailable'],
 }
 
-/** Les textes de TOUS les messages du modèle pendant le tour, dans l'ordre, sans doublon (B4). */
+/**
+ * Le raisonnement du modèle n'est jamais montré ni renvoyé (Suites du 29.10.2026 : « <reasoning>Respond in French,
+ * tu.</reasoning> » affiché tel quel dans le fil d'une autre bulle Lead). Un bloc <reasoning>…</reasoning>,
+ * <thinking>…</thinking> ou <analysis>…</analysis> est retiré ; une balise ouvrante orpheline l'est jusqu'à la fin de sa
+ * ligne, une balise fermante orpheline seule. Un texte sans ces balises est rendu tel quel (mêmes octets).
+ */
+const REASONING = 'reasoning|thinking|analysis'
+const REASONING_BLOCK = new RegExp(`<(${REASONING})\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi')
+const REASONING_OPEN = new RegExp(`<(?:${REASONING})\\b[^>]*>[^\\n]*`, 'gi')
+const REASONING_CLOSE = new RegExp(`<\\/(?:${REASONING})\\s*>`, 'gi')
+export function stripReasoning(text: string): string {
+  const out = text.replace(REASONING_BLOCK, '').replace(REASONING_OPEN, '').replace(REASONING_CLOSE, '')
+  return out === text ? text : out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/**
+ * L'historique renvoyé au navigateur (et donc au modèle au tour suivant), sans raisonnement dans les textes du modèle.
+ * Les messages de la personne ne sont jamais touchés (ce qu'elle a tapé reste tel quel). Un message du modèle qui n'aurait
+ * plus que des blocs de réflexion garde un texte « … » (un message vide serait refusé au tour suivant).
+ */
+export function withoutReasoning<M extends { role: string; content?: unknown }>(messages: M[]): M[] {
+  return messages.map((m): M => {
+    if (m.role !== 'assistant') return m
+    if (typeof m.content === 'string') {
+      const t = stripReasoning(m.content)
+      return t === m.content ? m : { ...m, content: t || '…' }
+    }
+    if (!Array.isArray(m.content)) return m
+    let changed = false
+    const content: any[] = []
+    for (const b of m.content as any[]) {
+      if (b?.type === 'text' && typeof b.text === 'string') {
+        const t = stripReasoning(b.text)
+        if (t !== b.text) { changed = true; if (t) content.push({ ...b, text: t }); continue }
+      }
+      content.push(b)
+    }
+    if (!changed) return m
+    if (!content.some((b) => b?.type !== 'thinking' && b?.type !== 'redacted_thinking')) content.push({ type: 'text', text: '…' })
+    return { ...m, content }
+  })
+}
+
+/** Les textes de TOUS les messages du modèle pendant le tour, dans l'ordre, sans doublon (B4), sans raisonnement. */
 export function turnText(messages: { content: unknown[] }[]): string {
   const texts: string[] = []
   for (const m of messages) for (const b of m.content as any[]) {
-    const x = b?.type === 'text' && typeof b.text === 'string' ? b.text.trim() : ''
+    const x = b?.type === 'text' && typeof b.text === 'string' ? stripReasoning(b.text).trim() : ''
     if (x && !texts.includes(x)) texts.push(x)
   }
   return texts.join('\n\n')
@@ -159,6 +202,9 @@ app.post('/', async (c) => {
       model: MODEL,
       max_tokens: MAX_TOKENS,
       output_config: { effort: 'low' },
+      // Réflexion adaptative DITE (c'est déjà le cas par défaut de ce modèle) : un modèle de repli (`fallbacks`) reçoit la
+      // même requête et réfléchit lui aussi, au lieu d'écrire son raisonnement dans le texte (Suites du 29.10.2026).
+      thinking: { type: 'adaptive' },
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',
       system: [
@@ -208,7 +254,7 @@ app.post('/', async (c) => {
       // Refus (B4) : une phrase polie tout de suite ; le tour entier (la demande et ses étapes) sort de l'historique
       // renvoyé, la conversation continue depuis le tour précédent ; aucune carte ni page ouverte.
       reply = tr(l, 'assistant.refusal')
-      messages = history.slice(0, -1)
+      messages = withoutReasoning(history.slice(0, -1))
       actions.length = 0
     } else {
       // Le texte de TOUT le tour (B4), chemins bruts remplacés par le nom de l'écran (B5).
@@ -218,7 +264,8 @@ app.post('/', async (c) => {
       // Jamais muette : une carte se présente, un écran ouvert se dit dans le fil (« Page ouverte »), sinon une phrase.
       if (!reply) reply = actions.some((a) => a.type === 'confirm') ? tr(l, 'assistant.proposal')
         : actions.some((a) => a.type === 'navigate') ? '' : tr(l, 'assistant.empty')
-      messages = [...history, ...turn]
+      // Sans raisonnement du modèle dans l'historique renvoyé, comme dans le texte affiché.
+      messages = withoutReasoning([...history, ...turn])
     }
     await completeUsage(ctx, reservation.id, { ok: true, ...usage, tools: used, duration_ms: Date.now() - started,
       error: final.stop_reason === 'end_turn' ? null : final.stop_reason })
