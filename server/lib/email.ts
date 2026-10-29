@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer'
-import { anon, isDryRun } from '../db.js'
+import { afterSharedCommit, anon, isDryRun } from '../db.js'
 import { newMessageId } from './mailbox/types.js'
 import { sendVia } from './mailbox/index.js'
 
@@ -46,6 +46,9 @@ export async function sendMail(m: Mail): Promise<{ via: string }> {
   if (!m.to.length) throw new Error('no_recipient')
   // Essai d'une proposition de l'Assistant IA (transaction toujours annulée) : rien ne part, rien n'est journalisé.
   if (isDryRun()) return { via: 'essai' }
+  // « Confirmer » d'une carte (transaction partagée) : l'email part après la validation de toute la carte, jamais si une
+  // écriture suivante est refusée (tout ou rien, db.ts). Hors carte, il part tout de suite, comme à l'écran.
+  if (afterSharedCommit(() => sendMail(m))) return { via: 'after_commit' }
   // 1. Une boîte branchée : celle de la personne, sinon celle par défaut de l'entreprise.
   if (m.accountId) {
     const mb = await anon(async (db) => (await db.query(

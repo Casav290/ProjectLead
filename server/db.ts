@@ -30,13 +30,24 @@ export type Db = pg.PoolClient
  * la transaction commune, dans un point de sauvegarde (SAVEPOINT), au lieu d'ouvrir la sienne. Tout est validé à la fin,
  * ou tout est annulé. `dryRun` : la même chose, toujours annulée (essai d'une proposition avant de l'afficher).
  */
-type Shared = { client: pg.PoolClient; ctx: Ctx; n: number; dryRun: boolean }
+type Shared = { client: pg.PoolClient; ctx: Ctx; n: number; dryRun: boolean; afterCommit: (() => Promise<unknown>)[] }
 const shared = new AsyncLocalStorage<Shared>()
 
 /** Vrai pendant une transaction partagée (les tâches de fond n'y démarrent pas). */
 export const inSharedTransaction = () => shared.getStore() !== undefined
 /** Vrai pendant un essai : rien ne doit sortir (emails), et tout sera annulé. */
 export const isDryRun = () => shared.getStore()?.dryRun === true
+/**
+ * Pendant une transaction partagée validée (« Confirmer » de l'Assistant IA) : ce qui sort de la base (un email d'une
+ * automatisation de l'entreprise) attend la validation de TOUTE la carte. Si une écriture suivante est refusée, tout est
+ * annulé et rien ne part. Rend faux hors transaction partagée (l'appelant agit tout de suite, comme à l'écran).
+ */
+export function afterSharedCommit(fn: () => Promise<unknown>): boolean {
+  const s = shared.getStore()
+  if (!s) return false
+  if (!s.dryRun) s.afterCommit.push(fn)
+  return true
+}
 
 const begin = async (client: pg.PoolClient, ctx: Ctx) => {
   await client.query('begin')
@@ -86,17 +97,21 @@ export async function withTenant<T>(ctx: Ctx, fn: (db: Db) => Promise<T>): Promi
 export async function sharedTransaction<T>(ctx: Ctx, fn: (db: Db) => Promise<T>, opts: { dryRun?: boolean } = {}): Promise<T> {
   if (shared.getStore()) throw new Error('shared_transaction_nested')
   const client = await pool.connect()
+  const store: Shared = { client, ctx, n: 0, dryRun: Boolean(opts.dryRun), afterCommit: [] }
+  let out: T
   try {
     await begin(client, ctx)
-    const out = await shared.run({ client, ctx, n: 0, dryRun: Boolean(opts.dryRun) }, () => fn(client))
+    out = await shared.run(store, () => fn(client))
     await client.query(opts.dryRun ? 'rollback' : 'commit')
-    return out
   } catch (e) {
     await client.query('rollback').catch(() => {})
     throw e
   } finally {
     client.release()
   }
+  // Validé : ce qui attendait part maintenant, hors de la transaction (et hors du contexte partagé), dans l'ordre.
+  for (const job of store.afterCommit) await job().catch((e) => console.error('[lot] après validation', (e as Error)?.message))
+  return out
 }
 
 /**
