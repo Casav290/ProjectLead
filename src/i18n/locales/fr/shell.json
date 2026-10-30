@@ -24,6 +24,7 @@
  "shell.assistant.err.timeout": "La demande a pris trop de temps. Essayez une demande plus courte ou réessayez.",
  "shell.assistant.err.tooLong": "La conversation est devenue trop longue : commencez une nouvelle conversation.",
  "shell.assistant.err.used": "Cette proposition a déjà été utilisée : rien de plus n’a été enregistré.",
+ "shell.assistant.err.wait": "Une demande est déjà en cours : réessayez dans un instant.",
  "shell.assistant.free.left": "Formule gratuite : il vous reste environ {n|{n} demande|{n} demandes} ce mois-⁠ci.",
  "shell.assistant.free.lessThanOne": "Formule gratuite : il vous reste moins d’une demande ce mois-⁠ci.",
  "shell.assistant.free.plans": "Voir les formules",

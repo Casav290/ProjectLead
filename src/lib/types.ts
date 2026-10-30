@@ -30,11 +30,12 @@ export type Plan = { linked: boolean; tier: 'free' | 'pro' | 'pro_plus'; name: s
 
 /**
  * La formule gratuite de l'Assistant IA et ce qu'il en reste ce mois-ci (server/lib/assistant/budget.ts, `Allowance`) :
- * `requests`, environ combien de demandes restent ; `total`, l'équivalent du mois ; `exhausted`, budget atteint ;
- * `resets_on`, le 1er du mois suivant (AAAA-MM-JJ).
+ * `requests`, environ combien de demandes restent ; `total`, l'équivalent du mois ; `exhausted`, budget atteint (tours
+ * finis seulement) ; `pending`, ce que réservent les tours en cours (pas de la consommation) ; `resets_on`, le 1er du
+ * mois suivant (AAAA-MM-JJ).
  */
 export type Allowance = { limited: false }
-  | { limited: true; budget: number; used: number; remaining: number; requests: number; total: number; exhausted: boolean; resets_on: string }
+  | { limited: true; budget: number; used: number; pending: number; remaining: number; requests: number; total: number; exhausted: boolean; resets_on: string }
 
 /** L'abonnement ProjectLead (server/routes/billing.ts, GET /api/billing). */
 export type Billing = {

@@ -17,7 +17,9 @@
  * aucune carte ni page ouverte, sortie < 600 jetons (journal) ; puis 2 demandes du périmètre : une lecture juste
  * (nombre de tâches d'un projet TEST créé pour l'essai, relu en base) et une carte « À confirmer » (annulée : rien écrit).
  * « limite » : une entreprise TEST GRATUITE (TEST Par app ScanLead seul) voit « il vous reste environ N demandes », le
- * compteur suit un vrai tour ; la consommation du mois est POSÉE sur la base d'aperçu jusqu'au budget ; la demande
+ * compteur suit un vrai tour ; un tour EN COURS (ligne réservée posée, à une demi-demande du budget) ne fait pas annoncer
+ * la fin du mois (L9 : « moins d'une demande », champ ouvert, « Une demande est déjà en cours : réessayez dans un
+ * instant. », 429 free_wait) ; la consommation du mois est POSÉE sur la base d'aperçu jusqu'au budget ; la demande
  * suivante est refusée SANS appel au modèle (aucune ligne réservée au journal, 402 free_limit immédiat) avec le message
  * et le lien des formules ; une entreprise TEST PAYANTE, même consommation posée, passe ; la page /formules montre la
  * ligne de l'assistant dans les cinq langues ; une personne non administratrice (rôle changé le temps d'une page) lit
@@ -324,9 +326,46 @@ async function limiteRun() {
     check(`gratuite : un vrai tour est servi et compté (${Math.round(used1 - used0)} jetons pondérés), le compteur suit : « ${counterFr(n1).replace('\u2060', '')} »`,
       Boolean(reply) && used1 > used0 && c1 === counterFr(n1), { reply, c1, used0, used1 })
 
+    // L9 : un tour en cours (un autre onglet) n'est pas la fin du mois. Consommation posée à une demi-demande du budget et
+    // une ligne de tour EN COURS (réservée, jetons pas encore connus), sur la base d'APERÇU ; la ligne est close ensuite.
+    await w.query(`insert into assistant_usage (account_id, user_id, kind, ok, input_tokens, error) values ($1, null, 'message', true, $2, 'pose-ia-limites-G4')`,
+      [FREE_ORG, Math.ceil(BUDGET - REQUEST / 2 - used1)])
+    const openId = (await w.query(`insert into assistant_usage (account_id, user_id, kind, error) values ($1, null, 'message', null) returning id`, [FREE_ORG])).rows[0].id
+    try {
+      const a9 = await api(freeTok, 'GET', '/assistant/allowance')
+      check('gratuite, tour en cours, par l’API : /api/assistant/allowance ne dit PAS « limite atteinte » (exhausted faux, moins d’une demande, tour réservé à part)',
+        a9.status === 200 && a9.body?.allowance?.exhausted === false && a9.body.allowance.requests === 0 && a9.body.allowance.pending >= REQUEST, a9.body)
+      const g = await open(freeTok)
+      await bubble(g.page)
+      const c9 = (await g.page.locator('[data-assistant-allowance]').count()) ? (await g.page.locator('[data-assistant-allowance]').innerText()).trim() : null
+      check('gratuite, tour en cours : la bulle dit « moins d’une demande », pas la limite, champ ouvert',
+        c9 === counterFr(0) && (await g.page.locator('[data-assistant-free-limit]').count()) === 0 && !(await g.page.locator('[data-assistant-panel] textarea').isDisabled()), c9)
+      const rows9 = await messageRows(FREE_ORG)
+      const waiting = 'Combien de tâches sont en retard ?'
+      await g.page.fill('[data-assistant-panel] textarea', waiting)
+      await g.page.keyboard.press('Enter')
+      await g.page.waitForSelector(`${LOG} [role=alert]`, { timeout: 30_000 }).catch(() => {})
+      await g.page.waitForFunction(() => !document.querySelector('[data-assistant-panel] [role=status]'), null, { timeout: 30_000 }).catch(() => {})
+      await g.page.waitForTimeout(500)
+      const alert = (await g.page.locator(`${LOG} [role=alert]`).count()) ? (await g.page.locator(`${LOG} [role=alert]`).last().innerText()).trim() : ''
+      check('gratuite, tour en cours : la demande dit « Une demande est déjà en cours : réessayez dans un instant. », revient dans le champ ouvert, rien sur le mois, aucune ligne réservée',
+        alert === 'Une demande est déjà en cours : réessayez dans un instant.' && (await g.page.locator('[data-assistant-free-limit], [data-assistant-plans]').count()) === 0
+        && (await g.page.locator(`${LOG} > [data-assistant-user]`, { hasText: waiting }).count()) === 0
+        && (await g.page.locator('[data-assistant-panel] textarea').inputValue()) === waiting && !(await g.page.locator('[data-assistant-panel] textarea').isDisabled())
+        && (await messageRows(FREE_ORG)) === rows9, { alert, value: await g.page.locator('[data-assistant-panel] textarea').inputValue() })
+      await g.page.screenshot({ path: `${SHOTS}/limite-6-en-cours.png` })
+      await g.ctx.close()
+      const r9 = await api(freeTok, 'POST', '/assistant', { messages: [{ role: 'user', content: 'Bonjour' }], page: '/', locale: 'fr' })
+      check(`gratuite, tour en cours, par l’API : 429 free_wait immédiat (${r9.ms} ms), sans date de retour ni lien des formules, rien de réservé`,
+        r9.status === 429 && r9.body?.error === 'free_wait' && r9.body.resets_on === undefined && r9.body.upgrade_url === undefined && r9.ms < 5000
+        && (await messageRows(FREE_ORG)) === rows9, { status: r9.status, body: r9.body, ms: r9.ms })
+    } finally {
+      await w.query(`update assistant_usage set ok = true, error = 'pose-ia-limites-G4' where id = $1`, [openId])
+    }
+
     // La consommation du mois posée jusqu'au budget, sur la base d'APERÇU.
     await w.query(`insert into assistant_usage (account_id, user_id, kind, ok, input_tokens, error) values ($1, null, 'message', true, $2, 'pose-ia-limites-G4')`,
-      [FREE_ORG, Math.ceil(BUDGET - used1) + 1])
+      [FREE_ORG, Math.ceil(BUDGET - (await monthUsed(FREE_ORG))) + 1])
     const used2 = await monthUsed(FREE_ORG)
     check(`consommation posée sur la base d’aperçu : ${Math.round(used2)} ≥ ${BUDGET}`, used2 >= BUDGET, used2)
     const rows0 = await messageRows(FREE_ORG)
@@ -414,7 +453,7 @@ try {
   else await limiteRun()
   check('aucune erreur JavaScript dans les pages', !jsErrors.length, jsErrors.slice(0, 3))
   const shots = SCENARIO === 'perimetre' ? ['perimetre-1-poeme', 'perimetre-2-capitale', 'perimetre-3-python', 'perimetre-4-blague', 'perimetre-5-lecture', 'perimetre-6-carte']
-    : ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules', 'limite-5-membre']
+    : ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules', 'limite-5-membre', 'limite-6-en-cours']
   for (const s of shots) {
     const path = `${SHOTS}/${s}.png`
     check(`capture ${s}.png écrite pendant cet essai`, existsSync(path) && statSync(path).size > 10_000 && statSync(path).mtimeMs >= START)

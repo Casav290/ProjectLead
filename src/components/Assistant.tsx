@@ -24,7 +24,10 @@ import { CardText, Rich } from './assistantText'
  * ce mois-ci », relu à l'ouverture et après chaque tour ; budget du mois atteint → le message qui dit quand l'assistant
  * revient (avec la formule Pro et le lien vers les formules pour une personne administratrice, hors de l'app mobile) et le
  * champ désactivé ; une demande refusée par la limite revient dans le champ. Les cartes déjà proposées se confirment
- * toujours : « Confirmer » n'appelle pas le modèle.
+ * toujours : « Confirmer » n'appelle pas le modèle. Moins d'une demande entière : « moins d'une demande », champ OUVERT
+ * (seul le refus du serveur pour budget atteint le ferme). Une demande refusée seulement parce qu'un autre tour est en
+ * cours (`free_wait`, L9 du 30.10.2026) : « Une demande est déjà en cours : réessayez dans un instant. », rien d'annoncé
+ * sur le mois, la demande revient dans le champ, qui reste ouvert.
  */
 
 type Group = { title: string; lines: string[]; notes?: string[]; more?: number }
@@ -67,6 +70,7 @@ const errorItem = (e: unknown): Extract<Item, { kind: 'error' }> => {
     if (e.code === 'assistant_timeout') return { kind: 'error', text: t('shell.assistant.err.timeout') }
     if (e.code === 'assistant_busy') return { kind: 'error', text: t('shell.assistant.err.busy') }
     if (e.code === 'assistant_quota') return { kind: 'error', text: e.body?.scope === 'account' ? t('shell.assistant.err.quotaAccount') : t('shell.assistant.err.quotaUser') }
+    if (e.code === 'free_wait') return { kind: 'error', text: t('shell.assistant.err.wait') }
     if (e.code === 'assistant_not_configured') return { kind: 'error', text: t('shell.assistant.err.notConfigured') }
     if (e.status === 401) return { kind: 'error', text: t('shell.assistant.err.session') }
   }
@@ -180,6 +184,12 @@ export default function Assistant() {
         update((s) => ({ ...s, items: s.items.filter((i) => i !== asked) }))
         setInput(raw)
         setAllowance(e.body.allowance)
+      } else if (e instanceof ApiError && e.code === 'free_wait') {
+        // Un autre tour de l'entreprise est en cours (un autre onglet) : ce n'est pas la fin du mois (L9). La demande n'est
+        // pas partie : elle revient dans le champ, qui reste ouvert ; le fil dit de réessayer dans un instant.
+        update((s) => ({ ...s, items: [...s.items.filter((i) => i !== asked), errorItem(e)] }))
+        setInput(raw)
+        if (e.body?.allowance?.limited) setAllowance(e.body.allowance)
       } else {
         update((s) => ({ ...s, items: [...s.items, errorItem(e)] }))
         readAllowance()

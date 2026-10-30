@@ -1,6 +1,6 @@
 import { withTenant, type Ctx } from '../../db.js'
 import { planOf } from '../plans.js'
-import { allowanceOf, monthlyUsage, type Allowance } from './budget.js'
+import { allowanceOf, budgetDecision, monthlyUsage, type Allowance } from './budget.js'
 
 /**
  * Quota de l'assistant (cahier commun) : 40 messages par heure et par personne, 400 par 24 heures et par entreprise.
@@ -10,8 +10,10 @@ import { allowanceOf, monthlyUsage, type Allowance } from './budget.js'
  * En plus, la limite de la formule gratuite (29.10.2026, lib/assistant/budget.ts) : la formule de l'entreprise (`planOf`,
  * la même fonction que les autres limites) donne un budget du mois en jetons pondérés, ou aucun ; budget atteint →
  * `free_limit`, rien n'est réservé et le modèle n'est pas appelé. Ces quotas restent : ils valent pour toutes les formules.
- * Sous le même verrou, chaque tour encore en cours compte pour une demande-type (`monthlyUsage`, `OPEN_TURN_MS`) : des
- * demandes lancées ensemble ne voient pas toutes la même consommation sous le budget.
+ * Sous le même verrou, chaque tour encore en cours est réservé (`monthlyUsage`, `openTurnTokens` : au moins une
+ * demande-type, plus pour un long historique) : des demandes lancées ensemble ne voient pas toutes le même reste. Une
+ * demande refusée SEULEMENT à cause de tours en cours reçoit `free_wait` (L9 : réessayer dans un instant), jamais la fin
+ * du budget du mois.
  */
 export const USER_PER_HOUR = () => Number(process.env.ASSISTANT_USER_PER_HOUR) || 40
 export const ACCOUNT_PER_DAY = () => Number(process.env.ASSISTANT_ACCOUNT_PER_DAY) || 400
@@ -20,16 +22,25 @@ export const ACCOUNT_PER_DAY = () => Number(process.env.ASSISTANT_ACCOUNT_PER_DA
 export type Reservation = { ok: true; id: string; budget: number | null }
   | { ok: false; scope: 'user' | 'account' }
   | { ok: false; scope: 'free_limit'; allowance: Allowance; upgradeUrl: string }
+  | { ok: false; scope: 'free_wait'; allowance: Allowance }
 
-export async function reserveMessage(ctx: Ctx): Promise<Reservation> {
+/**
+ * `historyBytes` : les octets (UTF-8) de l'historique envoyé au modèle ; la ligne réservée les porte dans `input_tokens`
+ * jusqu'à la fin du tour (`openTurnTokens`, L10), `completeUsage` y écrit ensuite les vrais jetons.
+ */
+export async function reserveMessage(ctx: Ctx, historyBytes = 0): Promise<Reservation> {
   return withTenant(ctx, async (db) => {
     await db.query(`select pg_advisory_xact_lock(hashtext('assistant:' || $1))`, [ctx.accountId])
-    // La formule gratuite d'abord (L4) : le budget du mois atteint, aucun appel au modèle, rien de réservé.
+    // La formule gratuite d'abord (L4, L9) : budget du mois atteint, ou reste occupé par des tours en cours ; aucun appel
+    // au modèle, rien de réservé.
     const plan = await planOf(db, ctx.accountId)
     const budget = plan.assistantBudget
     if (budget !== null) {
-      const allowance = allowanceOf(budget, await monthlyUsage(db, ctx.accountId))
-      if (allowance.limited && allowance.exhausted) return { ok: false, scope: 'free_limit', allowance, upgradeUrl: plan.upgradeUrl } as const
+      const month = await monthlyUsage(db, ctx.accountId)
+      const allowance = allowanceOf(budget, month.used, new Date(), month.pending)
+      const decision = budgetDecision(budget, month)
+      if (decision === 'free_limit') return { ok: false, scope: 'free_limit', allowance, upgradeUrl: plan.upgradeUrl } as const
+      if (decision === 'free_wait') return { ok: false, scope: 'free_wait', allowance } as const
     }
     const r = (await db.query(
       `select count(*) filter (where user_id = $1 and created_at > now() - interval '1 hour')::int as user_hour,
@@ -38,8 +49,8 @@ export async function reserveMessage(ctx: Ctx): Promise<Reservation> {
     if (r.user_hour >= USER_PER_HOUR()) return { ok: false, scope: 'user' } as const
     if (r.account_day >= ACCOUNT_PER_DAY()) return { ok: false, scope: 'account' } as const
     const id = (await db.query(
-      `insert into assistant_usage (account_id, user_id, kind) values ($1, $2, 'message') returning id`,
-      [ctx.accountId, ctx.userId])).rows[0].id as string
+      `insert into assistant_usage (account_id, user_id, kind, input_tokens) values ($1, $2, 'message', $3) returning id`,
+      [ctx.accountId, ctx.userId, Math.max(0, Math.round(historyBytes))])).rows[0].id as string
     return { ok: true, id, budget } as const
   })
 }
@@ -48,7 +59,10 @@ export async function reserveMessage(ctx: Ctx): Promise<Reservation> {
 export async function allowanceFor(ctx: Ctx): Promise<Allowance> {
   return withTenant(ctx, async (db) => {
     const budget = (await planOf(db, ctx.accountId)).assistantBudget
-    return allowanceOf(budget, budget === null ? 0 : await monthlyUsage(db, ctx.accountId))
+    if (budget === null) return allowanceOf(null, 0)
+    // Un tour en cours (autre onglet) n'est pas de la consommation : jamais « budget atteint » à cause de lui (L9).
+    const month = await monthlyUsage(db, ctx.accountId)
+    return allowanceOf(budget, month.used, new Date(), month.pending)
   })
 }
 

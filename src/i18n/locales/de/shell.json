@@ -24,6 +24,7 @@
  "shell.assistant.err.timeout": "Die Anfrage hat zu lange gedauert. Versuchen Sie eine kürzere Anfrage oder versuchen Sie es erneut.",
  "shell.assistant.err.tooLong": "Die Unterhaltung ist zu lang geworden: Beginnen Sie eine neue Unterhaltung.",
  "shell.assistant.err.used": "Dieser Vorschlag wurde bereits verwendet: Es wurde nichts weiter gespeichert.",
+ "shell.assistant.err.wait": "Eine Anfrage läuft bereits: Versuchen Sie es gleich noch einmal.",
  "shell.assistant.free.left": "Tarif Gratis: {n|Ihnen bleibt diesen Monat noch etwa {n} Anfrage|Ihnen bleiben diesen Monat noch etwa {n} Anfragen}.",
  "shell.assistant.free.lessThanOne": "Tarif Gratis: Ihnen bleibt diesen Monat weniger als eine Anfrage.",
  "shell.assistant.free.plans": "Tarife ansehen",

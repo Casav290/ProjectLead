@@ -1,6 +1,6 @@
 /**
  * Assistant IA : périmètre du logiciel et limite de la formule gratuite (Ève, 29.10.2026 ; cahier commun
- * ~/projets/.unlazy/ia-limites/CAHIER.md, P1–P3 et L1–L8). Vraie base PostgreSQL de test (TEST_DATABASE_URL), FAUX
+ * ~/projets/.unlazy/ia-limites/CAHIER.md, P1–P3, L1–L10). Vraie base PostgreSQL de test (TEST_DATABASE_URL), FAUX
  * service de modèle local (scripts/assistant-fake.ts : aucune clé réelle, aucun appel extérieur), puis la vraie bulle
  * dans un navigateur sans tête (Playwright, lancé ici ; jamais un Chrome existant) sur l'application construite.
  *
@@ -10,8 +10,10 @@
  * 2. Consigne (P1, P3 statique) : le périmètre dans le bloc STABLE mis en cache, rien dans le bloc variable.
  * 3. Serveur : qui est limité (la formule de l'entreprise, `planOf`) ; refus au-delà du budget SANS appel au modèle ;
  *    payant, essai, formule d'ERPlead et entreprise sans Compte Lead non limités ; remise à zéro au changement de mois ;
- *    « Confirmer » permis et gratuit ; quotas existants inchangés ; budget par entreprise.
- * 4. Bulle (L5) et formules (L7) dans le navigateur, cinq langues ; app mobile sans prix.
+ *    « Confirmer » permis et gratuit ; quotas existants inchangés ; budget par entreprise ; tours en cours réservés,
+ *    jamais annoncés comme la fin du mois (L9, `free_wait`) ; historique du navigateur : rien que du texte, des appels
+ *    d'outil et leurs résultats en texte, à tous les niveaux, taille bornée, même plafond de sortie pour tous (L10).
+ * 4. Bulle (L5, L9) et formules (L7) dans le navigateur, cinq langues ; app mobile sans prix.
  *
  * Chaque contrôle porte un libellé FIXE, cité dans docs/ASSISTANT-ACTIONS.md (« Périmètre et limite gratuite ») ; la
  * porte G1 de scripts/ia-limites-gates.mjs vérifie qu'il est imprimé « ✓ ». Dernière ligne : ASSISTANT_LIMITES_CHECK_OK.
@@ -42,7 +44,8 @@ function check(name: string, cond: unknown, detail?: unknown) {
 const LANGS = ['fr', 'de', 'en', 'it', 'es'] as const
 const shell = (l: string) => JSON.parse(readFileSync(join(ROOT, `src/i18n/locales/${l}/shell.json`), 'utf8')) as Record<string, string>
 const budget = await import('../server/lib/assistant/budget.js')
-const { WEIGHTS, REQUEST_TOKENS, FREE_MONTHLY_TOKENS, FREE_REQUESTS, weightedTokens, allowanceOf, monthStart, nextMonthStart, monthlyUsage, WEIGHTED_SQL } = budget
+const { WEIGHTS, REQUEST_TOKENS, FREE_MONTHLY_TOKENS, FREE_REQUESTS, weightedTokens, allowanceOf, monthStart, nextMonthStart, monthlyUsage, WEIGHTED_SQL,
+  openTurnTokens, budgetDecision } = budget
 
 // ================================================================== 1. constantes et calcul, sans base
 console.log('1. Constantes et calcul')
@@ -68,6 +71,18 @@ check('L4 seuil : 199 999,9 → pas encore atteint (0 demande entière) ; 200 00
   aEdge.limited && !aEdge.exhausted && aEdge.requests === 0 && aFull.limited && aFull.exhausted && aFull.remaining === 0
   && aOver.limited && aOver.exhausted && aOver.remaining === 0 && aOver.requests === 0, { aEdge, aFull, aOver })
 check('L3 sans budget (formule payante) : pas de limite', JSON.stringify(allowanceOf(null, 9_999_999)) === '{"limited":false}')
+{
+  // L9 : un tour en cours n'est pas de la consommation. 190 000 consommés + 20 000 réservés : ni épuisé ni décompté, et
+  // la demande suivante attend (« free_wait »), elle n'apprend pas la fin du mois.
+  const aWait = allowanceOf(FREE_MONTHLY_TOKENS, 190_000, oct, REQUEST_TOKENS)
+  check('L9 décision : consommation ≥ budget → free_limit ; consommation + tours en cours ≥ budget → free_wait (pas la fin du mois) ; sinon le tour passe ; le compteur ne décompte que la consommation',
+    budgetDecision(FREE_MONTHLY_TOKENS, { used: 200_000, pending: 0 }) === 'free_limit' && budgetDecision(FREE_MONTHLY_TOKENS, { used: 200_000, pending: 50_000 }) === 'free_limit'
+    && budgetDecision(FREE_MONTHLY_TOKENS, { used: 190_000, pending: 20_000 }) === 'free_wait' && budgetDecision(FREE_MONTHLY_TOKENS, { used: 0, pending: 200_000 }) === 'free_wait'
+    && budgetDecision(FREE_MONTHLY_TOKENS, { used: 0, pending: 180_000 }) === 'ok' && budgetDecision(FREE_MONTHLY_TOKENS, { used: 199_999, pending: 0 }) === 'ok'
+    && aWait.limited && !aWait.exhausted && aWait.requests === 0 && aWait.pending === REQUEST_TOKENS && aWait.used === 190_000 && aWait.remaining === 10_000, aWait)
+}
+check('L10 réservation d’un tour en cours : une demande-type, ou les octets de l’historique × 1,25 (écriture du cache) s’il est long',
+  openTurnTokens(0) === REQUEST_TOKENS && openTurnTokens(16_000) === REQUEST_TOKENS && openTurnTokens(150_000) === 187_500 && openTurnTokens(400_000) === 500_000)
 check('L2 mois civil UTC : début, mois suivant, passage d’année',
   monthStart(new Date('2026-11-01T00:00:00Z')).toISOString() === '2026-11-01T00:00:00.000Z'
   && monthStart(new Date('2026-10-31T23:59:59.999Z')).toISOString() === '2026-10-01T00:00:00.000Z'
@@ -157,7 +172,7 @@ const A = await company('Ann')
     values ($1, 'message', true, $2, $3, $4, $5, 'pose-limites')`, [A.id, u.input_tokens, u.cache_write_tokens, u.cache_read_tokens, u.output_tokens])
   const sql = await pool.connect()
   try {
-    const got = await monthlyUsage(sql, A.id)
+    const got = (await monthlyUsage(sql, A.id)).used
     const want = rows.reduce((s, u) => s + weightedTokens(u), 0)
     check('L1 calcul pondéré : la somme du mois en SQL (journal assistant_usage) = le calcul JS, mêmes champs', Math.abs(got - want) < 1e-6, { got, want })
   } finally { sql.release() }
@@ -262,8 +277,8 @@ check('L2 remise à zéro : 1 000 000 consommés le mois précédent (1 s avant 
 {
   const db = await pool.connect()
   try {
-    const last = await monthlyUsage(db, F.id, new Date(start.getTime() - 1000))
-    const next = await monthlyUsage(db, F.id, nextMonthStart())
+    const last = (await monthlyUsage(db, F.id, new Date(start.getTime() - 1000))).used
+    const next = (await monthlyUsage(db, F.id, nextMonthStart())).used
     check('L2 remise à zéro : le mois précédent garde sa consommation, le mois suivant repart de 0', last >= 1_000_000 && next === 0
       && allowanceOf(FREE_MONTHLY_TOKENS, last).limited && (allowanceOf(FREE_MONTHLY_TOKENS, next) as any).requests === 10, { last, next })
   } finally { db.release() }
@@ -281,23 +296,24 @@ check('L6 quotas existants inchangés : sous le budget gratuit, la limite par he
   q1.status === 200 && q2.status === 200 && q3.status === 429 && q3.body?.error === 'assistant_quota' && q3.body.scope === 'user', [q1.status, q2.status, q3])
 
 // Des demandes lancées en même temps (plusieurs onglets, ou Promise.all de fetch depuis la console du navigateur) : un tour
-// en cours (ligne réservée, jetons pas encore connus) compte pour une demande-type ; au plus autant de tours en même temps
-// qu'il reste de demandes (arrondi supérieur). Le faux service répond en 3 s (LENT) : tous les tours se chevauchent.
+// en cours (ligne réservée, jetons pas encore connus) est réservé pour une demande-type (plus pour un long historique) ;
+// au plus autant de tours en même temps qu'il reste de demandes (arrondi supérieur). Les autres reçoivent « free_wait »
+// (L9 : réessayer dans un instant), pas la fin du mois. Le faux service répond en 3 s (LENT) : les tours se chevauchent.
 const route = await import('../server/routes/assistant.js')
 const { OPEN_TURN_MS } = budget as typeof budget & { OPEN_TURN_MS?: number }
 const tally = (xs: { status: number; body: any }[]) => ({ served: xs.filter((x) => x.status === 200).length,
-  refused: xs.filter((x) => x.status === 402 && x.body?.error === 'free_limit').length, statuses: xs.map((x) => x.status).join(' ') })
+  refused: xs.filter((x) => x.status === 429 && x.body?.error === 'free_wait' && x.body.allowance?.exhausted === false).length, statuses: xs.map((x) => x.status).join(' ') })
 {
   const Z = await company('Zoe')
   fake.seen.length = 0
   const t = tally(await Promise.all(Array.from({ length: 12 }, (_, i) => ask(Z.cl, `LENT:3000 question ${i}`))))
-  check('L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours compte pour une demande-type), 2 refusées (402 free_limit) sans appel au modèle',
+  check('L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours est réservé pour une demande-type), 2 refusées (429 free_wait, pas la fin du mois) sans appel au modèle',
     t.served === 10 && t.refused === 2 && fake.seen.length === 10, { ...t, calls: fake.seen.length })
   const Z2 = await company('Zia')
   await pose(Z2.id, 150_000)
   fake.seen.length = 0
   const t2 = tally(await Promise.all(Array.from({ length: 6 }, (_, i) => ask(Z2.cl, `LENT:3000 question ${i}`))))
-  check('L4 demandes simultanées : à 150 000 consommés, 6 lancées ensemble → 3 servies (150 000, 170 000, 190 000 comptés), 3 refusées sans appel au modèle',
+  check('L4 demandes simultanées : à 150 000 consommés, 6 lancées ensemble → 3 servies (150 000, 170 000, 190 000 comptés), 3 refusées (429 free_wait) sans appel au modèle',
     t2.served === 3 && t2.refused === 3 && fake.seen.length === 3, { ...t2, calls: fake.seen.length })
   const Y = await company('Yan')
   // Une ligne restée ouverte plus longtemps que la fonction ne peut tourner (fonction arrêtée, journal jamais complété).
@@ -305,10 +321,135 @@ const tally = (xs: { status: number; body: any }[]) => ({ served: xs.filter((x) 
   const y1 = await allowance(Y.cl)
   await pool.query(`insert into assistant_usage (account_id, user_id, kind) values ($1, $2, 'message')`, [Y.id, Y.userId])
   const y2 = await allowance(Y.cl)
-  check('L4 un tour en cours compte pour une demande-type (20 000) tant que ses jetons ne sont pas connus ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus',
-    y1?.requests === 10 && y1.used === 0 && y2?.requests === 9 && y2.used === REQUEST_TOKENS, { y1, y2 })
+  check('L9 un tour en cours est réservé (20 000) tant que ses jetons ne sont pas connus, sans être de la consommation (compteur inchangé, jamais épuisé) ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus',
+    y1?.requests === 10 && y1.used === 0 && y1.pending === 0 && y2?.requests === 10 && y2.used === 0 && y2.pending === REQUEST_TOKENS && !y2.exhausted, { y1, y2 })
   check('L4 un tour en cours compte tant que la fonction peut tourner : OPEN_TURN_MS (budget.ts) = MAX_DURATION_MS (server/routes/assistant.ts)',
     OPEN_TURN_MS === route.MAX_DURATION_MS, { OPEN_TURN_MS, MAX_DURATION_MS: route.MAX_DURATION_MS })
+}
+
+// L9 : un refus dû SEULEMENT à un tour en cours (un autre onglet) n'est pas la fin du budget du mois.
+const openRow = (accountId: string, userId: string | null = null) => pool.query(
+  `insert into assistant_usage (account_id, user_id, kind) values ($1, $2, 'message') returning id`, [accountId, userId]).then((x) => x.rows[0].id as string)
+const closeRow = (id: string) => pool.query(`update assistant_usage set ok = true, error = 'pose-limites' where id = $1`, [id])
+const W9 = await company('Wes')
+{
+  await pose(W9.id, 190_000)
+  const open1 = await openRow(W9.id)
+  const a = await allowance(W9.cl)
+  check('L9 GET /api/assistant/allowance pendant un tour en cours (190 000 consommés + 20 000 réservés) : PAS « limite atteinte » (exhausted faux), moins d’une demande, la réservation à part',
+    a?.limited && a.exhausted === false && a.requests === 0 && a.used === 190_000 && a.pending === REQUEST_TOKENS, a)
+  const before9 = await messages(W9.id)
+  fake.seen.length = 0
+  const r9 = await ask(W9.cl, 'Bonjour')
+  check('L9 demande pendant ce tour : 429 free_wait (réessayer dans un instant), rien sur le mois (ni free_limit, ni date de retour, ni lien), aucun appel au modèle, rien de réservé',
+    r9.status === 429 && r9.body?.error === 'free_wait' && r9.body.allowance?.exhausted === false && r9.body.resets_on === undefined && r9.body.upgrade_url === undefined
+    && fake.seen.length === 0 && (await messages(W9.id)) === before9, { status: r9.status, body: r9.body, calls: fake.seen.length })
+  await closeRow(open1)
+  fake.seen.length = 0
+  const r9b = await ask(W9.cl, 'Bonjour')
+  check('L9 l’autre tour fini (sous le budget), la demande suivante passe : le champ n’était pas fermé pour le mois',
+    r9b.status === 200 && fake.seen.length === 1 && r9b.body.allowance?.limited && !r9b.body.allowance.exhausted, { status: r9b.status, a: r9b.body?.allowance })
+}
+
+// L10 : l'historique venu du navigateur. Une entreprise gratuite neuve (budget entier) : un refus vient de l'historique.
+const L = await company('Lia')
+const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF').toString('base64')
+const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tinyPng } }
+const urlImg = { type: 'image', source: { type: 'url', url: 'https://exemple.test/a.png' } }
+const doc = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf } }
+const urlDoc = { type: 'document', source: { type: 'url', url: 'https://exemple.test/a.pdf' } }
+const nested = { type: 'document', source: { type: 'content', content: [{ type: 'text', text: 'x' }, img] } }
+const toolTurn = (content: unknown) => [
+  { role: 'user', content: 'Mes projets ?' },
+  { role: 'assistant', content: [{ type: 'text', text: 'Je regarde.' }, { type: 'tool_use', id: 'toolu_forge', name: 'list_projects', input: {} }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_forge', content }] },
+  { role: 'assistant', content: [{ type: 'text', text: 'Voilà.' }] },
+  { role: 'user', content: 'Et maintenant ?' },
+]
+const FORGED: [string, unknown[]][] = [
+  ['image dans le contenu d’un tool_result', toolTurn([{ type: 'text', text: 'résultat' }, img])],
+  ['PDF dans le contenu d’un tool_result', toolTurn([doc])],
+  ['PDF par adresse dans le contenu d’un tool_result', toolTurn([{ type: 'text', text: 'résultat' }, urlDoc])],
+  ['document à contenu imbriqué (image) dans un tool_result', toolTurn([nested])],
+  ['résultat de recherche dans un tool_result', toolTurn([{ type: 'search_result', source: 'x', title: 'x', content: [{ type: 'text', text: 'x' }] }])],
+  ['image par adresse dans un message de la personne', [{ role: 'user', content: [urlImg, { type: 'text', text: 'Décris.' }] }, { role: 'assistant', content: 'Bien.' }, { role: 'user', content: 'Bonjour' }]],
+  ['PDF dans le dernier message', [{ role: 'user', content: [doc, { type: 'text', text: 'Résume.' }] }]],
+  ['image dans un message du modèle', [{ role: 'user', content: 'a' }, { role: 'assistant', content: [img] }, { role: 'user', content: 'Bonjour' }]],
+  ['texte avec citations', [{ role: 'user', content: 'a' }, { role: 'assistant', content: [{ type: 'text', text: 'x', citations: [{ type: 'char_location', cited_text: 'x', document_index: 0, start_char_index: 0, end_char_index: 1 }] }] }, { role: 'user', content: 'Bonjour' }]],
+  ['bloc d’outil serveur', [{ role: 'user', content: 'a' }, { role: 'assistant', content: [{ type: 'server_tool_use', id: 'srvtoolu_x', name: 'web_fetch', input: { url: 'https://exemple.test/a.pdf' } }] }, { role: 'user', content: 'Bonjour' }]],
+  ['tool_result dans un message du modèle', [{ role: 'user', content: 'a' }, { role: 'assistant', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'x' }] }, { role: 'user', content: 'Bonjour' }]],
+]
+{
+  const before10 = await messages(L.id)
+  fake.seen.length = 0
+  const got: Record<string, unknown> = {}
+  for (const [label, history] of FORGED) {
+    const x = await L.cl.post('/api/assistant', { messages: history, page: '/projets', locale: 'fr' })
+    got[label] = `${x.status} ${x.body?.error}`
+  }
+  check('L10 historique fabriqué : image, PDF (en données ou par adresse), document à contenu imbriqué, résultat de recherche DANS le contenu d’un tool_result, ou image, PDF, citations, outil serveur ailleurs → refusé (400 assistant_history) AVANT l’appel : aucun appel au modèle, rien de réservé',
+    Object.values(got).every((v) => v === '400 assistant_history') && Object.keys(got).length === FORGED.length && fake.seen.length === 0 && (await messages(L.id)) === before10,
+    { got, calls: fake.seen.length })
+  // Un historique du bon type mais habillé : marqueurs de cache, champs inconnus, une « source » d'image glissée à côté du
+  // texte, un appel d'outil avec un champ de plus. Il passe, reconstruit : rien de cela ne part au service.
+  fake.seen.length = 0
+  const dressed = [
+    { role: 'user', content: [{ type: 'text', text: 'Mes projets ?', cache_control: { type: 'ephemeral', ttl: '1h' }, source: img.source }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Je regarde.', citations: null, extra: urlDoc }, { type: 'tool_use', id: 'toolu_hab', name: 'list_projects', input: {}, caller: { type: 'direct' }, cache_control: { type: 'ephemeral' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_hab', content: [{ type: 'text', text: '{"projects":[]}', cache_control: { type: 'ephemeral' } }], cache_control: { type: 'ephemeral' }, source: urlDoc.source }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Aucun projet.' }, { type: 'fallback', model: 'x' }] },
+    { role: 'user', content: 'Bonjour' },
+  ]
+  const x = await L.cl.post('/api/assistant', { messages: dressed, page: '/projets', locale: 'fr' })
+  const sent = fake.seen[0]?.body?.messages as any[] | undefined
+  const keys = new Set<string>()
+  const walk = (v: unknown) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') for (const [k, y] of Object.entries(v)) { keys.add(k); if (k !== 'input') walk(y) } }
+  walk(sent)
+  const types = new Set<string>()
+  const walkTypes = (v: unknown) => { if (Array.isArray(v)) v.forEach(walkTypes); else if (v && typeof v === 'object') { const o = v as any; if (typeof o.type === 'string') types.add(o.type); for (const [k, y] of Object.entries(o)) if (k !== 'input') walkTypes(y) } }
+  walkTypes(sent)
+  check('L10 historique habillé (marqueurs de cache, « source » d’image ou de PDF glissée, champs inconnus) : servi, mais chaque bloc reconstruit avec ses seuls champs — rien de cela ne part au service',
+    x.status === 200 && Array.isArray(sent) && sent.length === 5 && [...keys].every((k) => ['role', 'content', 'type', 'text', 'id', 'name', 'input', 'tool_use_id'].includes(k))
+    && [...types].every((t) => ['text', 'tool_use', 'tool_result'].includes(t)) && sent[2].content[0].content[0].text === '{"projects":[]}'
+    && JSON.stringify(x.body.messages).indexOf('cache_control') < 0 && JSON.stringify(x.body.messages).indexOf('"source"') < 0,
+    { status: x.status, keys: [...keys], types: [...types] })
+  // Tailles bornées : les octets UTF-8 (un « é » en vaut deux), pas les caractères.
+  const accents = Array.from({ length: 60 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'é'.repeat(3500) }))
+  fake.seen.length = 0
+  const big = await L.cl.post('/api/assistant', { messages: [...accents, { role: 'user', content: 'Bonjour' }], page: '/', locale: 'fr' })
+  check('L10 tailles bornées : 120 messages, 200 blocs par message, 400 000 octets UTF-8 (60 × 3 500 « é » = 210 000 caractères mais 420 000 octets → 413 assistant_history, aucun appel)',
+    big.status === 413 && big.body?.error === 'assistant_history' && fake.seen.length === 0, { status: big.status, body: big.body })
+}
+{
+  // Même plafond de sortie pour toutes les formules (A6 : un plan ou un lot complet tient dans un appel d'outil).
+  fake.seen.length = 0
+  await ask(L.cl, 'Bonjour')
+  await ask(B.cl, 'Bonjour')
+  const [free, paid] = fake.seen.map((x) => x.body?.max_tokens)
+  check('L10 aucun plafond de sortie propre à la formule gratuite : max_tokens = 16 000 (MAX_TOKENS, A6) pour la gratuite comme pour la payante',
+    route.MAX_TOKENS === 16_000 && free === route.MAX_TOKENS && paid === route.MAX_TOKENS && fake.seen.length === 2, { free, paid })
+}
+{
+  // Un tour en cours réserve selon la taille de son historique : un long fil (150 000 octets → 187 500) laisse passer
+  // une petite demande (187 500 + 20 000 réservés après elle), pas une deuxième (free_wait) ; la ligne réservée porte les
+  // octets de l'historique pendant le tour, puis les vrais jetons.
+  const V = await company('Vic')
+  const long = Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'z'.repeat(5000) }))
+  fake.seen.length = 0
+  const pBig = V.cl.post('/api/assistant', { messages: [...long, { role: 'user', content: 'LENT:3000 long fil' }], page: '/', locale: 'fr' })
+  await new Promise((r) => setTimeout(r, 600))
+  const during = await allowance(V.cl)
+  const row = await one(`select input_tokens, ok from assistant_usage where account_id = $1 and kind = 'message' and ok is null`, [V.id])
+  const pSmall = ask(V.cl, 'LENT:3000 petite')
+  await new Promise((r) => setTimeout(r, 600))
+  const third = await ask(V.cl, 'Bonjour')
+  const [rBig, rSmall] = await Promise.all([pBig, pSmall])
+  const doneRow = await one(`select input_tokens from assistant_usage where account_id = $1 and kind = 'message' order by created_at limit 1`, [V.id])
+  check('L10 un long historique réserve plus qu’une demande-type (octets × 1,25) : pendant son tour, 0 consommé, réservation ≥ 187 500, compteur intact ; une petite demande passe, la suivante attend (429 free_wait) ; puis les vrais jetons au journal',
+    during?.limited && during.pending >= 187_500 && during.used === 0 && during.requests === 10 && !during.exhausted && Number(row?.input_tokens) >= 150_000
+    && rBig.status === 200 && rSmall.status === 200 && third.status === 429 && third.body?.error === 'free_wait' && fake.seen.length === 2 && Number(doneRow?.input_tokens) === 100,
+    { during, row, statuses: [rBig.status, rSmall.status, third.status], third: third.body?.error, calls: fake.seen.length, doneRow })
 }
 
 // La consigne envoyée au modèle (P3 statique) : bloc stable mis en cache avec le périmètre, bloc variable sans.
@@ -334,6 +475,11 @@ check('L4/L5 textes dans les cinq langues : compteur, moins d’une demande, lim
   LANGS.every((l) => ['shell.assistant.free.left', 'shell.assistant.free.lessThanOne', 'shell.assistant.free.used', 'shell.assistant.free.pro', 'shell.assistant.free.plans']
     .every((k) => (shell(l)[k] ?? '').length > 5)) && LANGS.every((l) => shell(l)['shell.assistant.free.used'].includes('{n}') && shell(l)['shell.assistant.free.used'].includes('{month}'))
   && new Set(LANGS.map((l) => shell(l)['shell.assistant.free.used'])).size === 5)
+check('L9 texte dans les cinq langues : « Une demande est déjà en cours : réessayez dans un instant. » (rien sur le mois ni la formule)',
+  FR['shell.assistant.err.wait'] === 'Une demande est déjà en cours : réessayez dans un instant.'
+  && new Set(LANGS.map((l) => shell(l)['shell.assistant.err.wait'])).size === 5
+  && LANGS.every((l) => (shell(l)['shell.assistant.err.wait'] ?? '').length > 20 && !/\{|mois|Monat|month|mese|mes\b|Pro\b/.test(shell(l)['shell.assistant.err.wait'])),
+  LANGS.map((l) => shell(l)['shell.assistant.err.wait']))
 check('L7 ligne des formules « Assistant IA : l’équivalent de 10 demandes par mois » dans les cinq langues, 10 = FREE_REQUESTS du serveur',
   FR['shell.plan.feature.assistant10'] === 'Assistant IA : l\'équivalent de 10 demandes par mois'
   && LANGS.every((l) => (shell(l)['shell.plan.feature.assistant10'] ?? '').includes(` ${FREE_REQUESTS} `)) && new Set(LANGS.map((l) => shell(l)['shell.plan.feature.assistant10'])).size === 5)
@@ -472,6 +618,31 @@ if (browser) try {
     (await b.page.locator('[data-assistant-allowance], [data-assistant-free-limit]').count()) === 0 && !(await b.page.locator('[data-assistant-input]').isDisabled())
     && (await b.page.locator(`${LOG} > [data-item]`).last().innerText()).includes('Bonjour.'))
   await b.ctx.close()
+
+  // L9 dans la bulle : un tour en cours dans un autre onglet (190 000 consommés + 20 000 réservés).
+  const U = await company('Una')
+  await pose(U.id, 190_000)
+  const busyRow = await openRow(U.id, U.userId)
+  const u = await open(U.cl)
+  await bubbleOpen(u.page)
+  const u1 = await textOf(u.page, '[data-assistant-allowance]')
+  check('L9 bulle pendant un tour en cours : « moins d’une demande », pas le message de la limite, champ ouvert',
+    u1 === FR['shell.assistant.free.lessThanOne'] && (await u.page.locator('[data-assistant-free-limit]').count()) === 0
+    && !(await u.page.locator('[data-assistant-input]').isDisabled()), u1)
+  await askUi(u.page, 'Une question en attente')
+  const waitText = await textOf(u.page, `${LOG} [role=alert]`)
+  check('L9 bulle : la demande refusée pendant ce tour dit « Une demande est déjà en cours : réessayez dans un instant. », rien sur le mois (ni limite, ni date, ni formules)',
+    waitText === FR['shell.assistant.err.wait'] && (await u.page.locator('[data-assistant-free-limit], [data-assistant-plans]').count()) === 0, waitText)
+  check('L9 bulle : la demande n’est pas partie : elle revient dans le champ, qui reste ouvert (bouton Envoyer actif)',
+    (await u.page.locator(`${LOG} [data-assistant-user]`, { hasText: 'Une question en attente' }).count()) === 0
+    && (await u.page.locator('[data-assistant-input]').inputValue()) === 'Une question en attente'
+    && !(await u.page.locator('[data-assistant-input]').isDisabled()) && !(await u.page.locator('[data-assistant-panel] button[type=submit]').isDisabled()),
+    await u.page.locator('[data-assistant-input]').inputValue())
+  await closeRow(busyRow)
+  await askUi(u.page, 'Une question en attente')
+  check('L9 bulle : l’autre tour fini, la même demande passe (« Bonjour. »)',
+    (await u.page.locator(`${LOG} > [data-item]`).last().innerText()).includes('Bonjour.') && (await u.page.locator('[data-assistant-free-limit]').count()) === 0)
+  await u.ctx.close()
 
   // Les formules (L7) : la page publique /formules et la carte Formule, dans les cinq langues.
   const plans: Record<string, string[]> = {}

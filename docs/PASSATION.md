@@ -296,7 +296,7 @@ aucun outil, pour tout le reste) ; en formule gratuite, 200 000 jetons pondéré
 « l'équivalent de 10 demandes » (`server/lib/assistant/budget.ts`, seule source ; qui est limité : `planOf`). Budget
 atteint : 402 `free_limit` avant tout appel au modèle, la bulle dit quand il revient (« Voir les formules ») ; un
 compteur « il vous reste environ N demandes » pour les entreprises gratuites. Aucune migration (journal
-`assistant_usage` existant). Détail, tableau P1–P3 / L1–L8 et preuves : `docs/ASSISTANT-ACTIONS.md`, « Périmètre et
+`assistant_usage` existant). Détail, tableau P1–P3 / L1–L10 et preuves : `docs/ASSISTANT-ACTIONS.md`, « Périmètre et
 limite gratuite (29.10.2026) ». Contrôles : `scripts/assistant-limites-check.ts`, portes `scripts/ia-limites-gates.mjs`
 (aperçu : `scripts/apercu-vercel.mjs --env-file ~/.projectlead-ia-limites-apercu.env`). Retour arrière : revenir au
 commit précédent de `vercel` (rien à remettre en base).
@@ -307,6 +307,14 @@ lancées en même temps ne passent plus toutes sous le budget ; dans la bulle, u
 limite revient dans le champ au lieu de rester sans réponse dans le fil. **À décider par Ève avant la production** : les
 conditions d'utilisation (`legal.terms.s2.2`, cinq langues) ne parlent pas de la limite de l'assistant ; texte
 contractuel non modifié, proposition dans `docs/ASSISTANT-ACTIONS.md` (« À DÉCIDER PAR ÈVE AVANT LA PRODUCTION »).
+
+Cahier révisé du 30.10.2026 (L5, L9, L10) : un tour en cours est RÉSERVÉ (une demande-type, plus pour un long
+historique : octets × 1,25) mais n'est pas de la consommation : il ne fait plus annoncer « limite atteinte » par
+`/api/assistant/allowance` ; une demande refusée seulement à cause de lui reçoit 429 `free_wait` (« Une demande est déjà
+en cours : réessayez dans un instant. », champ ouvert, demande rendue au champ). L'historique renvoyé par le navigateur
+ne porte plus que du texte, des appels d'outil et leurs résultats en texte, à tous les niveaux
+(`server/lib/assistant/history.ts` : image, PDF, document imbriqué dans un `tool_result`… → 400 `assistant_history`
+avant l'appel ; blocs reconstruits ; 400 000 octets UTF-8). `max_tokens` reste 16 000 pour toutes les formules (A6).
 
 ## Assistant IA : tout ce qu'il propose s'applique (27.10.2026, branche `assistant-actions`)
 

@@ -24,6 +24,7 @@
  "shell.assistant.err.timeout": "La solicitud ha tardado demasiado. Pruebe con una solicitud más corta o vuelva a intentarlo.",
  "shell.assistant.err.tooLong": "La conversación es demasiado larga: inicie una nueva conversación.",
  "shell.assistant.err.used": "Esta propuesta ya se ha usado: no se ha guardado nada más.",
+ "shell.assistant.err.wait": "Ya hay una solicitud en curso: vuelva a intentarlo en un instante.",
  "shell.assistant.free.left": "Plan Gratis: {n|este mes le queda aproximadamente {n} solicitud|este mes le quedan aproximadamente {n} solicitudes}.",
  "shell.assistant.free.lessThanOne": "Plan Gratis: este mes le queda menos de una solicitud.",
  "shell.assistant.free.plans": "Ver los planes",

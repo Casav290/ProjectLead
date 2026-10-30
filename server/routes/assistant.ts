@@ -9,6 +9,7 @@ import { publicUrl } from '../lib/env.js'
 import { asLocale, isLocale, tr } from '../lib/i18n.js'
 import { dynamicSystem, STABLE_SYSTEM } from '../lib/assistant/prompt.js'
 import { allowanceFor, completeUsage, logConfirm, reserveMessage } from '../lib/assistant/quota.js'
+import { cleanHistory, MAX_HISTORY_MESSAGES } from '../lib/assistant/history.js'
 import { doneLine, OpFailure, routeOutcome, runOps } from '../lib/assistant/run.js'
 import { labelOf, scrubPaths } from '../lib/assistant/pages.js'
 import { buildTools, pageAllowed, type AssistantAction } from '../lib/assistant/tools.js'
@@ -17,7 +18,8 @@ import { MAX_TOKEN_CHARS, opAllowed, opLabel, verifyConfirm } from '../lib/assis
 /**
  * Assistant IA (bulle en bas à droite, cahier commun des applications Lead du 24.10.2026).
  *
- * POST /api/assistant          { messages, page, locale } → { messages, reply, actions, allowance }
+ * POST /api/assistant          { messages, page, locale } → { messages, reply, actions, allowance } ; formule gratuite :
+ *                                402 free_limit (budget du mois atteint), 429 free_wait (reste occupé par des tours en cours)
  * POST /api/assistant/confirm  { token }                  → exécute l'écriture proposée, une seule fois
  * GET  /api/assistant/allowance                           → { allowance } : la formule gratuite et ce qu'il en reste
  *
@@ -30,6 +32,8 @@ const app = router()
 export const MODEL = 'claude-opus-5-5'
 // Un plan de projet complet (étapes, tâches, jalons, dépendances) tient dans UN appel d'outil : 16 000 jetons de sortie
 // au plus (cahier du 27.10.2026, A6). Le tour reste sous la durée de la fonction Vercel (300 s, formule Hobby + Fluid).
+// Le même pour TOUTES les formules (L10) : la formule gratuite est protégée par la réservation et le compte du budget,
+// jamais par un plafond de sortie plus bas qui couperait un plan ou un lot complet.
 export const MAX_TOKENS = 16_000
 export const MAX_ITERATIONS = 10
 /**
@@ -44,15 +48,12 @@ export const turnTimeoutMs = () => Math.min(TURN_TIMEOUT_MS, Number(process.env.
 
 export const assistantConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY)
 
-const MAX_MESSAGES = 120
-const MAX_HISTORY_BYTES = 400_000
-
 const textBlock = z.object({ type: z.literal('text'), text: z.string().min(1).max(8000) }).passthrough()
 const chatSchema = z.object({
   messages: z.array(z.object({
     role: z.enum(['user', 'assistant']),
     content: z.union([z.string().min(1).max(8000), z.array(z.record(z.string(), z.unknown())).min(1).max(200)]),
-  })).min(1).max(MAX_MESSAGES),
+  })).min(1).max(MAX_HISTORY_MESSAGES),
   page: z.string().max(300).default('/'),
   locale: z.string().max(10).default('fr'),
 })
@@ -155,11 +156,6 @@ export function turnText(messages: { content: unknown[] }[]): string {
   return texts.join('\n\n')
 }
 
-/** Les blocs « fallback » sont de simples marqueurs (modèle de repli) : on ne les renvoie pas au tour suivant. */
-const clean = (messages: Anthropic.Beta.BetaMessageParam[]) => messages.map((m) => (Array.isArray(m.content)
-  ? { ...m, content: (m.content as any[]).filter((b) => b?.type !== 'fallback') }
-  : m))
-
 app.post('/', async (c) => {
   // Le délai du tour court dès l'arrivée de la demande (B1).
   const deadline = AbortSignal.timeout(turnTimeoutMs())
@@ -172,15 +168,23 @@ app.post('/', async (c) => {
     }
     throw e
   })
-  if (JSON.stringify(b.messages).length > MAX_HISTORY_BYTES) throw new HttpError(413, 'assistant_history')
+  // L10 : seulement du texte, des appels d'outil et leurs résultats en texte, à tous les niveaux ; blocs reconstruits ;
+  // taille bornée. Refusé AVANT la réservation et avant tout appel au modèle (lib/assistant/history.ts).
+  const cleaned = cleanHistory(b.messages)
+  if (!cleaned.ok) throw new HttpError(cleaned.status, 'assistant_history')
   // Le tour demandé : un message de la personne, en texte (les notes de l'écran, « confirmé » / « annulé », sont du texte).
-  const last = b.messages[b.messages.length - 1]
+  const last = cleaned.messages[cleaned.messages.length - 1]
   const lastOk = last.role === 'user' && (typeof last.content === 'string'
     || (last.content as unknown[]).every((x) => textBlock.safeParse(x).success))
   if (!lastOk) throw new HttpError(400, 'invalid_input', { fields: { messages: 'le dernier message doit être un texte de la personne' } }) // i18n-ok
 
   const ctx = c.get('ctx')
-  const reservation = await reserveMessage(ctx)
+  const reservation = await reserveMessage(ctx, cleaned.bytes)
+  if (!reservation.ok && reservation.scope === 'free_wait') {
+    // Formule gratuite (30.10.2026, L9) : le reste du mois est occupé par des tours EN COURS (un autre onglet) ; ce n'est
+    // pas la fin du budget : « réessayez dans un instant », rien d'annoncé sur le mois, rien de réservé.
+    throw new HttpError(429, 'free_wait', { allowance: reservation.allowance })
+  }
   if (!reservation.ok && reservation.scope === 'free_limit') {
     // Formule gratuite, budget du mois atteint (29.10.2026, L4) : refusé AVANT tout appel au modèle, rien de réservé.
     // 402 comme les autres limites de la formule (lien vers la page Formule) ; la bulle dit quand il revient.
@@ -201,7 +205,7 @@ app.post('/', async (c) => {
   const actions: AssistantAction[] = []
   const used: string[] = []
   const tools = buildTools({ cookie: sessionCookie(c), ctx, actions, used, today: day.date, locale: l, timezone: tz })
-  const history: Anthropic.Beta.BetaMessageParam[] = clean(b.messages as Anthropic.Beta.BetaMessageParam[])
+  const history: Anthropic.Beta.BetaMessageParam[] = cleaned.messages
   const started = Date.now()
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }
 

@@ -10,19 +10,22 @@
  * sont lus dans des fichiers hors dépôt (600) et ne passent qu'en variables d'environnement des sous-processus.
  *
  * G1  tests du périmètre et de la limite (scripts/assistant-limites-check.ts) relancés et verts ; tableau
- *     « Périmètre et limite gratuite (29.10.2026) » de docs/ASSISTANT-ACTIONS.md : P1–P3 et L1–L8, chaque `fichier:ligne`
+ *     « Périmètre et limite gratuite (29.10.2026) » de docs/ASSISTANT-ACTIONS.md : P1–P3 et L1–L10, chaque `fichier:ligne`
  *     « extrait » existe et porte l'extrait, chaque test nommé est passé ; quelques preuves lues dans le code (refus
- *     avant le modèle, décision « gratuit » par planOf, une seule source des constantes) ; CONTRE-ÉPREUVES RÉELLES : six
- *     copies du commit volontairement fautives (refus retiré, Pro limité, mois jamais remis à zéro, calcul SQL faux, tours
- *     en cours non comptés, consigne sans périmètre) font échouer les tests attendus ; le contrôle du tableau voit une ligne
- *     décalée et un test inconnu.
+ *     avant le modèle, historique vérifié avant la réservation, « free_wait » à part, même max_tokens pour tous, décision
+ *     « gratuit » par planOf, une seule source des constantes) ; CONTRE-ÉPREUVES RÉELLES : dix copies du commit
+ *     volontairement fautives (refus retiré, Pro limité, mois jamais remis à zéro, calcul SQL faux, tours en cours non
+ *     comptés, tour en cours annoncé comme la fin du mois par le refus ou par le compteur, image acceptée dans un
+ *     tool_result, plafond de sortie réduit en gratuite, consigne sans périmètre) font échouer les tests attendus ; le
+ *     contrôle du tableau voit une ligne décalée et un test inconnu.
  * G2  contrôles complets de l'application : les anciennes portes locales (scripts/assistant-actions-gates.mjs G1, G2, G3,
  *     G7 : inventaire, tests de l'assistant, cinq langues, types, npm test, suites, build, paquet, alignement B1–B14) ;
  *     aucune migration ni changement de db/ depuis la production (db/etape-5b intacte) ; commit au-dessus de la production.
  * G3  essai réel sur l'APERÇU (vrai modèle, compte TEST) : scripts/e2e-ia-limites.mjs --scenario perimetre ; l'aperçu
  *     est bien celui du commit courant (API Vercel : meta.commit = HEAD, pas la production) ; le contrôle du refus voit
  *     ses contre-exemples (blague, poème, script, réponse qui citent ProjectLead) ; le projet TEST de l'essai est retiré.
- * G4  essai réel sur l'APERÇU : scripts/e2e-ia-limites.mjs --scenario limite (consommation posée sur la base d'aperçu,
+ * G4  essai réel sur l'APERÇU : scripts/e2e-ia-limites.mjs --scenario limite (tour en cours posé : ni « limite atteinte »
+ *     ni champ fermé, « Une demande est déjà en cours », 429 free_wait (L9) ; consommation posée sur la base d'aperçu,
  *     refus sans appel au modèle, demande refusée rendue au champ, personne non administratrice sans lien, entreprise
  *     payante non limitée, formules dans les cinq langues, base remise).
  */
@@ -68,7 +71,7 @@ const bilan = (out) => out.match(/^(\d+) contrôles verts, (\d+) rouges$/m)
 
 const DOC = 'docs/ASSISTANT-ACTIONS.md'
 const TITLE = '## Périmètre et limite gratuite (29.10.2026)'
-const POINTS = ['P1', 'P2', 'P3', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8']
+const POINTS = ['P1', 'P2', 'P3', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10']
 const E2E = 'scripts/e2e-ia-limites.mjs'
 
 /** Les lignes du tableau : code `fichier:ligne` « extrait », tests `scripts/… › libellé`, assertions `G3 › …` / `G4 › …`. */
@@ -128,7 +131,7 @@ function mutant(file, from, to) {
 }
 const MUTANTS = [
   { what: 'refus retiré (le budget atteint ne bloque plus)', file: 'server/lib/assistant/quota.ts',
-    from: 'if (allowance.limited && allowance.exhausted)', to: 'if (false)',
+    from: "if (decision === 'free_limit')", to: 'if (false)',
     fails: ['L4 budget atteint : 402 free_limit, AUCUN appel au modèle, rien de réservé (ne compte pas dans les 40 par heure)'] },
   { what: 'une organisation payante limitée par erreur (Pro avec le budget gratuit)', file: 'server/lib/plans.ts',
     from: 'pro: { openProjects: Number.POSITIVE_INFINITY, seats: 1, assistantTokens: Number.POSITIVE_INFINITY }',
@@ -142,9 +145,25 @@ const MUTANTS = [
     from: '+ ` + cache_read_tokens * ${WEIGHTS.cacheRead} + output_tokens * ${WEIGHTS.output})`', to: '+ ` + cache_read_tokens * ${WEIGHTS.cacheRead} + output_tokens * 1)`',
     fails: ['L1 calcul pondéré : la somme du mois en SQL (journal assistant_usage) = le calcul JS, mêmes champs'] },
   { what: 'tours en cours non comptés (des demandes lancées ensemble passent toutes sous le budget)', file: 'server/lib/assistant/budget.ts',
-    from: 'then ${REQUEST_TOKENS} else ${WEIGHTED_SQL} end', to: 'then 0 else ${WEIGHTED_SQL} end',
-    fails: ['L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours compte pour une demande-type), 2 refusées (402 free_limit) sans appel au modèle',
-      'L4 un tour en cours compte pour une demande-type (20 000) tant que ses jetons ne sont pas connus ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus'] },
+    from: 'coalesce(sum(${OPEN_TURN_SQL})', to: 'coalesce(sum(0)',
+    fails: ['L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours est réservé pour une demande-type), 2 refusées (429 free_wait, pas la fin du mois) sans appel au modèle',
+      'L9 un tour en cours est réservé (20 000) tant que ses jetons ne sont pas connus, sans être de la consommation (compteur inchangé, jamais épuisé) ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus',
+      'L10 un long historique réserve plus qu’une demande-type (octets × 1,25) : pendant son tour, 0 consommé, réservation ≥ 187 500, compteur intact ; une petite demande passe, la suivante attend (429 free_wait) ; puis les vrais jetons au journal'] },
+  { what: 'un refus dû à un tour en cours présenté comme la fin du budget du mois (free_limit au lieu de free_wait)', file: 'server/lib/assistant/budget.ts',
+    from: "if (m.used + m.pending >= budget) return 'free_wait'", to: "if (m.used + m.pending >= budget) return 'free_limit'",
+    fails: ['L9 décision : consommation ≥ budget → free_limit ; consommation + tours en cours ≥ budget → free_wait (pas la fin du mois) ; sinon le tour passe ; le compteur ne décompte que la consommation',
+      'L9 demande pendant ce tour : 429 free_wait (réessayer dans un instant), rien sur le mois (ni free_limit, ni date de retour, ni lien), aucun appel au modèle, rien de réservé',
+      'L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours est réservé pour une demande-type), 2 refusées (429 free_wait, pas la fin du mois) sans appel au modèle'] },
+  { what: 'un tour en cours compté comme consommation par le compteur (« limite atteinte » annoncée par /api/assistant/allowance)', file: 'server/lib/assistant/budget.ts',
+    from: 'exhausted: used >= budget,', to: 'exhausted: used + pending >= budget,',
+    fails: ['L9 GET /api/assistant/allowance pendant un tour en cours (190 000 consommés + 20 000 réservés) : PAS « limite atteinte » (exhausted faux), moins d’une demande, la réservation à part',
+      'L9 décision : consommation ≥ budget → free_limit ; consommation + tours en cours ≥ budget → free_wait (pas la fin du mois) ; sinon le tour passe ; le compteur ne décompte que la consommation'] },
+  { what: 'une image (ou un PDF) acceptée dans le contenu d’un tool_result de l’historique du navigateur', file: 'server/lib/assistant/history.ts',
+    from: '      } else return null\n', to: '      } else content = b.content as never\n',
+    fails: ['L10 historique fabriqué : image, PDF (en données ou par adresse), document à contenu imbriqué, résultat de recherche DANS le contenu d’un tool_result, ou image, PDF, citations, outil serveur ailleurs → refusé (400 assistant_history) AVANT l’appel : aucun appel au modèle, rien de réservé'] },
+  { what: 'un plafond de sortie plus bas en formule gratuite (casserait un plan complet, A6)', file: 'server/routes/assistant.ts',
+    from: '      max_tokens: MAX_TOKENS,', to: '      max_tokens: reservation.budget === null ? MAX_TOKENS : 4096,',
+    fails: ['L10 aucun plafond de sortie propre à la formule gratuite : max_tokens = 16 000 (MAX_TOKENS, A6) pour la gratuite comme pour la payante'] },
   { what: 'consigne sans périmètre', file: 'server/lib/assistant/prompt.ts',
     from: '# Périmètre : ProjectLead seulement', to: '# Remarques',
     fails: ['P1 consigne : section « Périmètre : ProjectLead seulement » dans le bloc stable, avant le reste',
@@ -190,6 +209,14 @@ function g1() {
   expect('L3 : la décision « gratuit » vient de planOf (server/lib/plans.ts), aucune copie (« tier === \'free\' », « plan === \'free\' », trialing…) dans l’assistant',
     /import \{ planOf \} from '\.\.\/plans\.js'/.test(quota) && !/(tier|plan|paidTier|status)\s*[!=]==?\s*'(free|pro|pro_plus|trialing|active)'/.test(decision))
   expect('B1 inchangé : un seul AbortSignal.timeout dans la route', (route.match(/AbortSignal\.timeout\(/g) ?? []).length === 1)
+  const iClean = route.indexOf('cleanHistory(b.messages)'), iReserve = route.indexOf('reserveMessage(ctx, cleaned.bytes)')
+  expect('L10 : dans la route, l’historique est vérifié et reconstruit (cleanHistory) AVANT la réservation et AVANT le client du modèle ; le modèle ne reçoit que l’historique nettoyé',
+    iClean > 0 && iReserve > iClean && iModel > iReserve && route.includes('const history: Anthropic.Beta.BetaMessageParam[] = cleaned.messages') && !/messages: b\.messages/.test(route))
+  expect('L10 : un seul max_tokens dans la route, MAX_TOKENS (16 000) pour toutes les formules',
+    (route.match(/max_tokens:/g) ?? []).length === 1 && route.includes('      max_tokens: MAX_TOKENS,') && /export const MAX_TOKENS = 16_000/.test(route))
+  const iWait = route.indexOf("throw new HttpError(429, 'free_wait'")
+  expect('L9 : dans la route, « free_wait » (429) est un refus à part, avant le client du modèle ; dans le quota, vu avant la réservation',
+    iWait > 0 && iModel > iWait && quota.indexOf("scope: 'free_wait'") > 0 && quota.indexOf("scope: 'free_wait'") < quota.indexOf('insert into assistant_usage'))
 
   // Contre-épreuves réelles : une copie fautive du commit fait échouer exactement les tests attendus.
   for (const m of MUTANTS) {
@@ -304,10 +331,13 @@ async function g4() {
   for (const must of [/✓ gratuite : la bulle dit « Formule gratuite : il vous reste (environ \d+ demandes?|moins d’une demande) ce mois-ci\. »/,
     /✓ gratuite : budget atteint → « …Il revient le 1er \S+\. »/, /✓ gratuite, par l’API : 402 free_limit immédiat/, /✓ base d’aperçu remise comme avant/,
     /✓ gratuite : la demande refusée n’est pas partie : elle sort du fil et revient dans le champ/,
-    /✓ gratuite, personne non administratrice : « Un administrateur peut changer la formule/, /✓ base d’aperçu : la personne TEST gratuite est de nouveau administratrice/])
+    /✓ gratuite, personne non administratrice : « Un administrateur peut changer la formule/, /✓ base d’aperçu : la personne TEST gratuite est de nouveau administratrice/,
+    /✓ gratuite, tour en cours, par l’API : \/api\/assistant\/allowance ne dit PAS « limite atteinte »/, /✓ gratuite, tour en cours : la bulle dit « moins d’une demande », pas la limite, champ ouvert/,
+    /✓ gratuite, tour en cours : la demande dit « Une demande est déjà en cours : réessayez dans un instant\. », revient dans le champ ouvert/,
+    /✓ gratuite, tour en cours, par l’API : 429 free_wait immédiat/])
     expect(`vu vert : ${must.source.replace(/\\/g, '').slice(2, 90)}`, must.test(out))
   citedSeen(out, 'G4')
-  freshShots(started, ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules', 'limite-5-membre'])
+  freshShots(started, ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules', 'limite-5-membre', 'limite-6-en-cours'])
   finish('IA_LIMITES_G4_OK')
 }
 

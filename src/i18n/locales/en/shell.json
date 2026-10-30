@@ -24,6 +24,7 @@
  "shell.assistant.err.timeout": "The request took too long. Try a shorter request or try again.",
  "shell.assistant.err.tooLong": "This conversation has become too long: please start a new conversation.",
  "shell.assistant.err.used": "This proposal has already been used: nothing more was saved.",
+ "shell.assistant.err.wait": "A request is already in progress: try again in a moment.",
  "shell.assistant.free.left": "Free plan: you have about {n|{n} request|{n} requests} left this month.",
  "shell.assistant.free.lessThanOne": "Free plan: you have less than one request left this month.",
  "shell.assistant.free.plans": "See the plans",
