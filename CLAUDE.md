@@ -69,8 +69,9 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   refus « places » à `/login?erreur=places&formule=…` avec « Changer de compte » (`switch=1` → prompt=login), jamais un
   « Réessayer » qui ramène au même refus. Contrats `data-plan-*` et `data-seat-*` lus par le banc : ne pas les retirer.
 - Assistant IA (Ève, 29.10.2026) : il ne sert que ProjectLead (consigne du bloc stable) ; en formule gratuite,
-  200 000 jetons pondérés par mois civil et par entreprise, l'équivalent de 10 demandes. Constantes : seulement
-  `server/lib/assistant/budget.ts` ; qui est limité : `planOf` (jamais une copie de la règle). Détail et preuves :
+  200 000 jetons pondérés par mois civil et par entreprise, l'équivalent de 10 demandes ; un tour en cours y compte pour
+  une demande-type (demandes simultanées). Constantes : seulement `server/lib/assistant/budget.ts` ; qui est limité :
+  `planOf` (jamais une copie de la règle). Détail et preuves :
   `docs/ASSISTANT-ACTIONS.md`, « Périmètre et limite gratuite (29.10.2026) ».
 - Cinq langues partout (Ève, 27.10.2026) : fr, de, en, it, es. AUCUN texte en dur dans `src/` : tout passe par `t()`
   (`src/i18n/index.tsx`, textes dans `src/i18n/locales/<langue>/<partie>.json`, mêmes clés dans les cinq) ; les textes

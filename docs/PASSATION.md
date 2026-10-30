@@ -301,6 +301,13 @@ limite gratuite (29.10.2026) ». Contrôles : `scripts/assistant-limites-check.t
 (aperçu : `scripts/apercu-vercel.mjs --env-file ~/.projectlead-ia-limites-apercu.env`). Retour arrière : revenir au
 commit précédent de `vercel` (rien à remettre en base).
 
+Relecture du 30.10.2026 : un tour EN COURS compte pour une demande-type (`OPEN_TURN_MS`, `monthlyUsage`) : des demandes
+lancées en même temps ne passent plus toutes sous le budget ; dans la bulle, une personne non administratrice lit
+« Un administrateur peut changer la formule » (pas de lien vers une page qui lui est fermée), et une demande refusée par la
+limite revient dans le champ au lieu de rester sans réponse dans le fil. **À décider par Ève avant la production** : les
+conditions d'utilisation (`legal.terms.s2.2`, cinq langues) ne parlent pas de la limite de l'assistant ; texte
+contractuel non modifié, proposition dans `docs/ASSISTANT-ACTIONS.md` (« À DÉCIDER PAR ÈVE AVANT LA PRODUCTION »).
+
 ## Assistant IA : tout ce qu'il propose s'applique (27.10.2026, branche `assistant-actions`)
 
 Demande d'Ève (capture du 27.10, projet réel) : l'assistant répondait « Je ne peux pas créer d'étapes moi-même » puis
