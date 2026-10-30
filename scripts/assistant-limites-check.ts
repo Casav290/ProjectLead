@@ -661,6 +661,10 @@ if (browser) try {
 }
 if (browser) check('bulle et formules : aucune erreur JavaScript', !errors.length, errors)
 
+// Base de test partagée avec smoke.ts : les abonnements fictifs de ces essais (et ceux des passages précédents)
+// sont retirés, sinon la relecture du jour de smoke.ts les relit à la place des siens.
+await pool.query(String.raw`delete from billing_subscriptions where stripe_subscription_id like 'sub\_limites\_%'`)
+
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
 fake.close()
 server.close()
