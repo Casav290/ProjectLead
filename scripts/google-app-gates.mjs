@@ -717,6 +717,8 @@ const ANDROID_UA = `${ANDROID_WV} ${AGENT}`
 const OLD_UA = `${IPHONE} ProjectLeadApp/1.0.1`
 const V1_UA = `${IPHONE} ProjectLeadApp/1.0.2 LeadAppAuth/1`
 const PROD_HOSTS = /^https?:\/\/(www\.)?(projectlead|erplead)\.io(\/|$)/
+/** La langue que le navigateur du téléphone annonce (les requêtes de la porte hors page l'envoient elles-mêmes). */
+const ACCEPT_FR = 'fr-CH,fr;q=0.9,en;q=0.8'
 /**
  * Le pont que la coque native injecte, imité (chaque appel est noté par la porte) : App et Browser ; sous iOS, le module
  * LeadAuthSession (isAvailable selon la version d'iOS ; start attend que la porte rende l'adresse de retour ou un refus,
@@ -1026,7 +1028,7 @@ async function gateG3() {
       d1.button && records('iosD', 'session').length === 1 && navsD1[0]?.startsWith(`${t.erp.url}/login?next=`) && records('iosD', 'external').length === 0 &&
       redeems.length === 1, navsD1.slice(0, 2))
     // Le départ de A, déjà consommé, rouvert en m=auto : ERPlead renvoie le lien d'erreur vérifié (redirection, jamais suivie).
-    const replayAuto = await sysA.ctx.request.get(`${startA}&m=auto`, { maxRedirects: 0 })
+    const replayAuto = await sysA.ctx.request.get(`${startA}&m=auto`, { maxRedirects: 0, headers: { 'accept-language': ACCEPT_FR } })
     const errAuto = replayAuto.headers().location ?? ''
     check('D. départ rejoué (m=auto) : 303 vers le lien vérifié d’erreur https://projectlead.io/lead-auth/return?error=expired&locale=fr (jamais suivi)',
       replayAuto.status() === 303 && errAuto === `${RETURN}?error=expired&locale=fr`, { status: replayAuto.status(), loc: errAuto })
@@ -1073,7 +1075,7 @@ async function gateG3() {
     // Le même départ rouvert en m=auto (rejoué) : le lien d'erreur ; pendant une nouvelle connexion, il ramène à back.
     const b2 = await toRelay(and)
     await waitFor(() => records('android', 'open').length >= 2, 20_000)
-    const replayB = await tab.ctx.request.get(`${startB}&m=auto`, { maxRedirects: 0 })
+    const replayB = await tab.ctx.request.get(`${startB}&m=auto`, { maxRedirects: 0, headers: { 'accept-language': ACCEPT_FR } })
     const navsB2 = navLog(and.page)
     await fire(and.page, replayB.headers().location ?? '')
     await waitFor(() => navsB2.length > 0, 15_000)
@@ -1096,7 +1098,7 @@ async function gateG3() {
     const saf = await context(SAFARI, 'system')
     const gC = await openStart(saf, extC[0]?.arg ?? '')
     check('C. Safari : le départ m=tap mène à accounts.google.com, Google accepte la demande ; ouverture « tap » notée', gC.accepted &&
-      sqlRead(t.erp.ro, `select data->>'open' from sso_states where state = $1`, [sha256(gC.gstate)]) === 'tap', saf.page.url())
+      sqlRead(t.erp.ro, `select data->'open' from sso_states where state = $1`, [sha256(gC.gstate)]) === 'tap', saf.page.url())
     const cancelC = await cancelledReturn(saf, gC.gstate)
     const codeC = codeOf(cancelC.location)
     madeCodes.push(sha256(codeC))
