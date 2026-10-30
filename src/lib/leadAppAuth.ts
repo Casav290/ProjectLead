@@ -19,8 +19,10 @@
  *      refermé sans retour → `back`.
  *    Hors de l'app, ou coque sans le module attendu : `back`.
  *    La MÊME page relais rechargée pendant sa connexion (même `start`, moins de 15 min ; iOS : la coque recharge la page
- *    quand le processus WebContent est tué en arrière-plan) : rien n'est rouvert (le départ a déjà servi : ERPlead dirait
- *    « La demande a expiré »), la connexion en cours reste, le lien de retour est attendu (relecture du 30.10.2026).
+ *    quand le processus WebContent est tué en arrière-plan ; contrat § 3a, « Page relais rechargée ») : ouverte dans le
+ *    navigateur (Safari ou Custom Tab), rien n'est rouvert (le départ a déjà servi : ERPlead dirait « La demande a
+ *    expiré »), la connexion en cours reste et le lien de retour est attendu ; ouverte par la session iOS (son résultat
+ *    est perdu avec la page) : connexion effacée, `back` (relecture du 30.10.2026).
  * 2. Lien de retour `https://projectlead.io/lead-auth/return?code=…&locale=…` (ou `?error=expired&locale=…`), écouté au
  *    démarrage sur TOUTES les pages (`appUrlOpen`, `getLaunchUrl`) et rendu par la session iOS : chaque lien une seule
  *    fois (empreintes sans échéance), SEULEMENT pendant une connexion en cours (page relais il y a moins de 15 min, une
@@ -168,11 +170,12 @@ export type ReturnOutcome = 'ignored' | 'duplicate' | 'unexpected' | 'redeem' | 
  * L'issue de la page relais : `session` (iOS 17.4+, adresse rendue et traitée), `safari` (Safari ouvert : l'app attend le
  * lien du bouton « Ouvrir ProjectLead »), `opened` (Custom Tab, Android), `canceled` (session annulée → back), `outside`
  * (hors de l'app → back), `nomodule` (coque sans le module attendu → back), `invalid` (→ /login), `failed` (→ back),
- * `again` (déjà fait sur cette page), `resumed` (la même page relais rechargée pendant sa connexion : rien de rouvert, le
- * lien est attendu).
+ * `again` (déjà fait sur cette page), `resumed` (la même page relais rechargée pendant sa connexion ouverte dans le
+ * navigateur : rien de rouvert, le lien est attendu), `lost` (rechargée pendant la session iOS, dont le résultat est perdu
+ * → back).
  */
 export type RelayOutcome = {
-  outcome: 'session' | 'safari' | 'opened' | 'canceled' | 'outside' | 'nomodule' | 'invalid' | 'failed' | 'again' | 'resumed'
+  outcome: 'session' | 'safari' | 'opened' | 'canceled' | 'outside' | 'nomodule' | 'invalid' | 'failed' | 'again' | 'resumed' | 'lost'
   back: string | null
 }
 /** Ce que la page relais affiche pendant l'attente : le lien « Retour », et le texte de Safari s'il le faut. */
@@ -196,8 +199,14 @@ export function createLeadAppAuth(env: LeadAppEnv) {
   let pendingHere: number | null = null
   /** La lecture du lien de lancement (listen) : la page relais l'attend avant de poser l'attente. */
   let launchRead: Promise<unknown> = Promise.resolve()
-  /** Page relais rechargée pendant SA connexion (même `start`) : la connexion continue, avec l'ouverture notée. */
-  let resumed: { mode: RelayView['mode'] | null } | null = null
+  /** Page relais rechargée pendant SA connexion ouverte dans le navigateur (même `start`) : elle continue. */
+  let resumed: { mode: 'safari' | 'browser' } | null = null
+  /** Page relais rechargée pendant SA connexion ouverte par la session iOS : résultat perdu, retour à la connexion. */
+  let lost = false
+  /** Page relais d'une nouvelle connexion : le lien de lancement y est d'avant, jamais suivi. */
+  let relayFirst = false
+  /** L'empreinte du lien de lancement de cette page (noté avec la connexion par la page relais). */
+  let launchPrint: string | null = null
 
   const read = (s: Store | null, k: string) => { try { return s?.getItem(k) ?? null } catch { return null } }
   const write = (s: Store | null, k: string, v: string | null) => {
@@ -211,8 +220,8 @@ export function createLeadAppAuth(env: LeadAppEnv) {
   }
   const markDone = (f: string) => write(env.local, DONE_KEY, JSON.stringify([...doneList(), { f, t: now() }].slice(-DONE_MAX)))
   const fresh = (t: unknown) => typeof t === 'number' && now() - t >= 0 && now() - t < PENDING_TTL_MS
-  /** La connexion notée : heure, empreinte du `start` de sa page relais, ouverture choisie (valeurs abîmées : rien). */
-  const pendingRecord = (): { t?: unknown; s?: unknown; m?: unknown } | null => {
+  /** La connexion notée : heure, empreinte du `start` de sa page relais, ouverture choisie, lien de lancement d'avant. */
+  const pendingRecord = (): { t?: unknown; s?: unknown; m?: unknown; l?: unknown } | null => {
     try { const v = JSON.parse(read(env.local, PENDING_KEY) ?? 'null'); return v && typeof v === 'object' ? v : null } catch { return null }
   }
   /** Une connexion Google en cours (page relais, moins de 15 min) : vraie une seule fois, effacée aussitôt. */
@@ -222,9 +231,10 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     pendingHere = null
     return ok
   }
+  /** Connexion notée : heure, empreinte de `start` (page relais rechargée), lien de lancement d'avant (`l`, jamais son retour). */
   const setPending = (on: boolean, start?: string) => {
     pendingHere = on ? now() : null
-    write(env.local, PENDING_KEY, on ? JSON.stringify({ t: pendingHere, s: start ? fingerprint(start) : null }) : null)
+    write(env.local, PENDING_KEY, on ? JSON.stringify({ t: pendingHere, s: start ? fingerprint(start) : null, l: launchPrint }) : null)
   }
   /** L'ouverture choisie (session, Safari, Custom Tab), notée avec la connexion : une page relais rechargée la redit. */
   const noteMode = (m: RelayView['mode']) => {
@@ -237,6 +247,12 @@ export function createLeadAppAuth(env: LeadAppEnv) {
   }
   const ios = () => platformOf(env.bridge) === 'ios'
 
+  /** Le lien d'erreur d'ERPlead (`…/lead-auth/return?error=expired&locale=…`), toujours le même. */
+  const isErrorLink = (url: string) => {
+    const p = new URLSearchParams(url.slice(RETURN_PREFIX.length))
+    return p.getAll('code').length === 0 && p.getAll('error').length === 1 && p.get('error') === 'expired'
+  }
+
   async function issuer(): Promise<string> {
     try { return validIssuer(await env.issuer()) ?? DEFAULT_ISSUER } catch { return DEFAULT_ISSUER }
   }
@@ -248,11 +264,9 @@ export function createLeadAppAuth(env: LeadAppEnv) {
    */
   async function handleReturnLink(url: unknown): Promise<ReturnOutcome> {
     if (typeof url !== 'string' || url.length > 2048 || !url.startsWith(RETURN_PREFIX)) return 'ignored'
-    const p = new URLSearchParams(url.slice(RETURN_PREFIX.length))
-    const codes = p.getAll('code')
+    const codes = new URLSearchParams(url.slice(RETURN_PREFIX.length)).getAll('code')
     // Le lien d'erreur (`error=expired`) est toujours le même : gardé comme vu, il ferait ignorer la prochaine demande échue.
-    const errorLink = codes.length === 0 && p.getAll('error').length === 1 && p.get('error') === 'expired'
-    if (!errorLink) {
+    if (!isErrorLink(url)) {
       const f = fingerprint(url)
       if (seen.has(f) || doneList().some((x) => x.f === f)) return 'duplicate'
       seen.add(f)
@@ -289,15 +303,42 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     if (!app || typeof app.addListener !== 'function') return false
     if (opts.relayPage) {
       const p = pendingRecord(), s = startPrint(opts.search ?? '')
-      if (p && fresh(p.t) && s !== null && p.s === s) {
-        resumed = { mode: p.m === 'session' || p.m === 'safari' || p.m === 'browser' ? p.m : null }
-      } else setPending(false)
+      const mine = !!p && fresh(p.t) && s !== null && p.s === s
+      if (mine && (p!.m === 'safari' || p!.m === 'browser')) resumed = { mode: p!.m }
+      else {
+        // Nouvelle connexion, ou connexion de cette page encore jamais ouverte (`start` intact) : effacée, ouverture neuve.
+        // Ouverte par la session iOS : son résultat est perdu avec la page, retour à l'écran de connexion.
+        lost = mine && p!.m === 'session'
+        relayFirst = true
+        setPending(false)
+      }
     }
     try { app.addListener('appUrlOpen', (e: any) => { void handleReturnLink(e?.url) }) } catch { return false }
     try {
-      launchRead = Promise.resolve(app.getLaunchUrl?.()).then((r) => (r?.url ? handleReturnLink(r.url) : undefined)).catch(() => {})
+      launchRead = Promise.resolve(app.getLaunchUrl?.()).then((r) => {
+        const u = r?.url
+        if (typeof u !== 'string' || !u) return undefined
+        launchPrint = fingerprint(u)
+        // Page relais d'une nouvelle connexion : ce lien est d'avant elle, jamais suivi ici (même lu en retard) ; gardé
+        // comme vu (sauf le lien d'erreur) et noté avec la connexion (`l`).
+        if (relayFirst) { noteOld(u); return undefined }
+        // Le lien de lancement que la page relais a noté (iOS : getLaunchUrl rend le dernier lien ouvert, jamais effacé) :
+        // d'avant la connexion en cours, jamais son retour (c'est le cas du lien d'erreur, jamais gardé comme vu).
+        if (pendingRecord()?.l === launchPrint) return undefined
+        return handleReturnLink(u)
+      }).catch(() => {})
     } catch { /* pas de lien de lancement */ }
     return true
+  }
+
+  /** Un lien de lancement d'avant la connexion (page relais) : gardé comme vu (sauf le lien d'erreur), noté avec elle. */
+  function noteOld(url: string) {
+    if (url.startsWith(RETURN_PREFIX) && !isErrorLink(url)) {
+      const f = fingerprint(url)
+      if (!seen.has(f) && !doneList().some((x) => x.f === f)) { seen.add(f); markDone(f) }
+    }
+    const p = pendingRecord()
+    if (p && pendingHere !== null && fresh(p.t)) write(env.local, PENDING_KEY, JSON.stringify({ ...p, l: launchPrint }))
   }
 
   /**
@@ -368,11 +409,13 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     // le retour de cette connexion.
     await launchSettled()
     if (returned) return { outcome: 'again', back: null }
+    // Rechargée pendant la session iOS : son résultat ne reviendra plus à cette page ; l'écran de connexion de l'app.
+    if (lost) { env.replace(t.back); return { outcome: 'lost', back: t.back } }
     write(env.session, BACK_KEY, t.back)
     if (resumed) {
-      // La même page relais rechargée pendant sa connexion : le départ a déjà servi, rien n'est rouvert ; la page attend le
-      // lien (Universal Link, App Link) avec « Retour », comme avant le rechargement.
-      show?.({ back: t.back, mode: resumed.mode ?? (ios() ? 'session' : 'browser') })
+      // La même page relais rechargée pendant sa connexion ouverte dans le navigateur : le départ a déjà servi, rien n'est
+      // rouvert ; la page attend le lien (Universal Link, App Link) avec le même texte et « Retour ».
+      show?.({ back: t.back, mode: resumed.mode })
       if (!ios()) watchFinished(browser!, t.back)
       return { outcome: 'resumed', back: t.back }
     }

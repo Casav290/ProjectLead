@@ -253,6 +253,8 @@ await block('1. Lien vérifié https://projectlead.io/lead-auth/return', async (
     clock += 2 * 60 * 1000
     const r = fake({ launchUrl: linkOf('G'), local, now })
     r.auth.listen({ relayPage: true, search: relaySearch(START2) })
+    // … et un lien qui arrive par appUrlOpen sur cette page, avant qu'elle note sa propre connexion : rien non plus.
+    r.fire('appUrlOpen', { url: linkOf('M') })
     await flush()
     const local2 = new MemStore()
     await fake({ local: local2, now }).auth.relay(relaySearch())
@@ -809,7 +811,8 @@ await block('6. Relecture : page relais rechargée pendant sa connexion (iOS : p
     const first = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess })
     first.auth.listen({ relayPage: true, search: relaySearch() })
     const r1 = await first.auth.relay(relaySearch())
-    const byLaunch = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess, launchUrl: LINK })
+    // La coque rend le lien de lancement un peu après le chargement : la page le lit avant de redire son attente.
+    const byLaunch = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess, launchUrl: LINK, launchDelayMs: 40 })
     byLaunch.auth.listen({ relayPage: true, search: relaySearch() })
     const r2 = await byLaunch.auth.relay(relaySearch())
     await flush()
@@ -829,15 +832,20 @@ await block('6. Relecture : page relais rechargée pendant sa connexion (iOS : p
       { r3, views, log: byEvent.log })
   }
   {
-    // iOS 17.4+ (session) et Android (Custom Tab) : la même page relais rechargée ne rouvre rien non plus.
+    // iOS 17.4+ : rechargée pendant la session (ASWebAuthenticationSession), la page perd son résultat (bridge.reset()) :
+    // contrat § 3a, connexion effacée et l'écran de connexion de l'app. Android : rien de rouvert, le Custom Tab attendu.
     const lI = new MemStore(), sI = new MemStore()
     const fI = fake({ platform: 'ios', session: { https: true, start: 'wait' }, local: lI, sessionStore: sI })
     void fI.auth.relay(relaySearch())
     await flush()
-    const gI = fake({ platform: 'ios', session: { https: true, start: 'wait' }, local: lI, sessionStore: sI })
-    const vI: string[] = []
+    // (si la page rouvrait une session pour ce départ déjà servi, celle-ci serait refusée « busy » puis Safari : vu ici)
+    const gI = fake({ platform: 'ios', session: { https: true, start: { reject: 'busy' } }, local: lI, sessionStore: sI })
     gI.auth.listen({ relayPage: true, search: relaySearch() })
-    const rI = await gI.auth.relay(relaySearch(), (v) => vI.push(v.mode))
+    const rI = await gI.auth.relay(relaySearch())
+    const hI = fake({ platform: 'ios', local: lI })
+    hI.auth.listen()
+    hI.fire('appUrlOpen', { url: LINK })
+    await flush()
     const lA = new MemStore(), sA = new MemStore()
     await fake({ local: lA, sessionStore: sA }).auth.relay(relaySearch())
     const gA = fake({ local: lA, sessionStore: sA })
@@ -846,9 +854,34 @@ await block('6. Relecture : page relais rechargée pendant sa connexion (iOS : p
     const rA = await gA.auth.relay(relaySearch(), (v) => vA.push(v.mode))
     gA.fire('browserFinished')
     gA.timers.forEach((t) => t.fn())
-    check('page relais rechargée pendant sa connexion, iOS 17.4+ (session) et Android (Custom Tab) : ni session ni Custom Tab rouverts ; Android : navigateur refermé ensuite sans lien → back',
-      rI.outcome === 'resumed' && same(vI, ['session']) && gI.sessions().length === 0 && gI.externals().length === 0 &&
-      rA.outcome === 'resumed' && same(vA, ['browser']) && gA.opens().length === 0 && same(gA.replaces(), [BACK]), { gI: gI.log, gA: gA.log })
+    check('page relais rechargée pendant sa connexion, iOS 17.4+ (session : résultat perdu avec la page) → back, connexion effacée, rien de rouvert ; Android (Custom Tab) : rien de rouvert, navigateur refermé ensuite sans lien → back',
+      rI.outcome === 'lost' && same(gI.replaces(), [BACK]) && gI.sessions().length === 0 && gI.externals().length === 0 && hI.replaces().length === 0 &&
+      rA.outcome === 'resumed' && same(vA, ['browser']) && gA.opens().length === 0 && same(gA.replaces(), [BACK]), { gI: gI.log, hI: hI.log, gA: gA.log })
+  }
+  {
+    // iOS : getLaunchUrl rend le dernier lien ouvert, jamais effacé ; ici le lien d'ERREUR d'une connexion d'avant (jamais
+    // gardé comme vu). La page relais d'une nouvelle connexion le note ; rechargée, elle ne le prend pas pour son retour
+    // (il ramènerait à back pendant que la personne finit sa connexion dans Safari) ; le vrai lien est racheté ensuite.
+    const local = new MemStore(), sess = new MemStore()
+    const first = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess, launchUrl: ERROR_LINK })
+    first.auth.listen({ relayPage: true, search: relaySearch() })
+    const r1 = await first.auth.relay(relaySearch())
+    const again = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess, launchUrl: ERROR_LINK })
+    again.auth.listen({ relayPage: true, search: relaySearch() })
+    const r2 = await again.auth.relay(relaySearch())
+    await flush()
+    const before = again.replaces().length
+    again.fire('appUrlOpen', { url: LINK })
+    await flush()
+    // La coque répond en retard (après 1,5 s) sur la page relais d'une nouvelle connexion : ce lien n'est jamais suivi.
+    const slow = fake({ launchUrl: linkOf('L'), launchDelayMs: 1700 })
+    slow.auth.listen({ relayPage: true, search: relaySearch() })
+    const r3 = await slow.auth.relay(relaySearch())
+    await new Promise((r) => setTimeout(r, 400))
+    await flush()
+    check('lien de lancement d’avant (lien d’erreur d’une connexion précédente, ou rendu en retard par la coque) : jamais pris pour le retour de la nouvelle connexion, même page relais rechargée ; son vrai lien racheté ensuite',
+      r1.outcome === 'safari' && r2.outcome === 'resumed' && before === 0 && same(again.replaces(), [redeemOf()]) &&
+      r3.outcome === 'opened' && slow.replaces().length === 0, { first: first.log, again: again.log, slow: slow.log })
   }
   {
     // Ce n'est une reprise que pour la MÊME page relais encore en cours : autre départ (nouveau bouton) ou connexion de
