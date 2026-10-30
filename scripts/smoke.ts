@@ -1218,6 +1218,8 @@ r = await new Client().post('/api/auth/signup', { name: 'X', email: `x-${stamp}@
 check('Compte Lead branché : pas d’inscription locale', r.status === 403 && r.body.error === 'signup_via_lead', r.body)
 r = await new Client().get('/api/auth/options')
 check('options : Compte Lead annoncé', r.body.leadId === true, r.body)
+// « Continuer avec Google » dans l'app mobile (src/lib/leadAppAuth.ts) : l'émetteur que voit le code de l'app.
+check('options : émetteur du Compte Lead (leadIssuer = LEAD_ID_ISSUER)', r.body.leadIssuer === process.env.LEAD_ID_ISSUER, r.body)
 /** Départ, passage chez le faux Compte Lead, retour : rend la redirection finale et le cookie de session. */
 async function leadLogin(claims: (nonce: string) => Record<string, unknown>, query = '') {
   const start = await app.request(`http://localhost/auth/lead/start${query}`)
@@ -1293,6 +1295,10 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   const platformOf = (r: Response) => { try { return new URL(r.headers.get('location') ?? '').searchParams.get('platform') } catch { return 'illisible' } }
   check('app mobile : départ vers le Compte Lead avec platform=app', inApp.status === 302 && platformOf(inApp) === 'app', inApp.headers.get('location'))
   check('navigateur : départ sans platform', web.status === 302 && platformOf(web) === null, web.headers.get('location'))
+  // Nouvelle version de l'app (30.10.2026, « Continuer avec Google » dans l'app) : agent « ProjectLeadApp/1.0.2 LeadAppAuth/1 ».
+  // Même départ (platform=app) : c'est ERPlead qui lit LeadAppAuth/1 et offre alors Google par le navigateur du téléphone.
+  const newApp = await app.request('http://localhost/auth/lead/start?next=/projets', { headers: { 'user-agent': `${appUa.replace('1.0.0', '1.0.2')} LeadAppAuth/1` } })
+  check('app mobile, nouvelle version (LeadAppAuth/1) : départ avec platform=app', newApp.status === 302 && platformOf(newApp) === 'app', newApp.headers.get('location'))
 }
 {
   // Le retour d'ERPlead arrive sur l'adresse sans www : un départ depuis www y est renvoyé avant de poser son cookie.

@@ -121,7 +121,25 @@ app.post('/api/auth/logout', async (c) => {
   return c.json({ ok: true, redirect: idt && leadIdConfigured() ? logoutUrl(idt, back) : null })
 })
 
-app.get('/api/auth/options', (c) => c.json({ leadId: leadIdConfigured() }))
+/**
+ * L'émetteur du Compte Lead que voit le code de l'app mobile (« Continuer avec Google » dans l'app, src/lib/leadAppAuth.ts) :
+ * les préfixes de la page relais et l'adresse du rachat. LEAD_ID_ISSUER (crmlead.io, retiré, devient erplead.io comme
+ * dans lib/leadId.ts), https seulement (http pour localhost : contrôles) ; sinon https://erplead.io.
+ */
+const RETIRED_ISSUERS: Record<string, string> = { 'https://crmlead.io': 'https://erplead.io' }
+export function leadIssuer(): string {
+  const v = (process.env.LEAD_ID_ISSUER ?? '').trim().replace(/\/+$/, '')
+  const iss = RETIRED_ISSUERS[v] ?? v
+  try {
+    const u = new URL(iss)
+    const local = u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)
+    if ((u.protocol === 'https:' || local) && !u.username && !u.password && !u.search && !u.hash &&
+        `${u.origin}${u.pathname === '/' ? '' : u.pathname}` === iss) return iss
+  } catch { /* adresse illisible */ }
+  return 'https://erplead.io'
+}
+
+app.get('/api/auth/options', (c) => c.json({ leadId: leadIdConfigured(), leadIssuer: leadIssuer() }))
 
 // ------------------------------------------------------------------ invitations
 
