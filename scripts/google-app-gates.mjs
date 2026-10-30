@@ -827,7 +827,7 @@ async function gateG3() {
       if (/^https:\/\/accounts\.google\.com\//.test(url)) { googleInWebview.push(url); return route.abort() }
       if (url.startsWith(`${t.erp.url}/oauth/authorize?`)) authorizes.push(url)
       if (url.startsWith(`${t.erp.url}/auth/google/app/redeem?`)) redeems.push(url)
-      const r = await ctx.request.get(url, { maxRedirects: 0, headers: { 'user-agent': ua } })
+      const r = await ctx.request.get(url, { maxRedirects: 0, headers: { 'user-agent': ua, ...previewHeaders(url) } })
       const loc = r.headers().location
       if (r.status() >= 300 && r.status() < 400 && loc) { url = new URL(loc, url).toString(); continue }
       // Une page : le navigateur la charge lui-même (même adresse, aucun effet de bord : écran de connexion, compte, page de l'app).
@@ -836,6 +836,10 @@ async function gateG3() {
     prodHits.push(`trop de redirections : ${url}`)
     return route.abort()
   }
+  const isPreview = (u) => u.startsWith(`${t.pl.url}/`) || u.startsWith(`${t.erp.url}/`)
+  /** Sur un aperçu : sans la barre d'outils de Vercel, et la protection franchie par l'en-tête (au cas où un cookie manquerait). */
+  const previewHeaders = (u) => (!isPreview(u) ? {} : { 'x-vercel-skip-toolbar': '1',
+    'x-vercel-protection-bypass': u.startsWith(`${t.pl.url}/`) ? t.pl.bypass : t.erp.bypass })
   const CHAINED = new RegExp(`^(${t.erp.url.replace(/[.]/g, '\\.')}/(auth/google/app(/redeem)?\\?|oauth/authorize\\?)|${t.pl.url.replace(/[.]/g, '\\.')}/auth/lead/(start|login)(\\?|$))`)
 
   /** Un contexte : vue web de l'app (`webview`, avec son pont), navigateur du téléphone (`system`) ou ordinateur (`desktop`). */
@@ -849,8 +853,11 @@ async function gateG3() {
       await ctx.addInitScript(fakeBridge(bridge))
     }
     ctx.on('request', (r) => { if (PROD_HOSTS.test(r.url())) prodHits.push(r.url()); if (kind !== 'system' && /^https:\/\/accounts\.google\.com\//.test(r.url())) googleInWebview.push(r.url()) })
+    // Les aperçus Vercel ajoutent à leurs pages la barre d'outils de Vercel (script de vercel.live), jamais en production :
+    // x-vercel-skip-toolbar la retire, pour voir les pages comme en production. Route posée d'abord : elle passe en dernier.
+    await ctx.route((u) => isPreview(u.toString()), (route) => route.continue({ headers: { ...route.request().headers(), ...previewHeaders(route.request().url()) } }))
     await ctx.route(PROD_HOSTS, (route) => { prodHits.push(route.request().url()); return route.abort() })
-    if (kind !== 'system') await ctx.route((u) => CHAINED.test(u.toString()), (route) => (route.request().isNavigationRequest() ? chained(ctx, ua, route) : route.continue()))
+    if (kind !== 'system') await ctx.route((u) => CHAINED.test(u.toString()), (route) => (route.request().isNavigationRequest() ? chained(ctx, ua, route) : route.fallback()))
     const page = await ctx.newPage()
     await page.goto(`${t.erp.url}/healthz?x-vercel-protection-bypass=${t.erp.bypass}&x-vercel-set-bypass-cookie=true`)
     await page.goto(`${t.pl.url}/api/auth/options?x-vercel-protection-bypass=${t.pl.bypass}&x-vercel-set-bypass-cookie=true`)
