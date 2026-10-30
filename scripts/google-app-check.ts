@@ -168,23 +168,30 @@ await block('1. Lien de retour io.projectlead.app://lead-auth', async () => {
       f.replaces().length === 1 && g.replaces().length === 0 && g.closes() === 0 && h.replaces().length === 0 && h.closes() === 0, { f: f.log, g: g.log, h: h.log })
   }
   {
-    // Le lendemain, une nouvelle connexion Google : getLaunchUrl redonne toujours le lien de lundi sur la page relais.
+    // Le lendemain, deux connexions Google de suite : la première abandonnée (navigateur refermé), la seconde recharge la
+    // page relais PENDANT la connexion en cours (posée par la première) ; getLaunchUrl y redonne toujours le lien de lundi.
     let clock = Date.parse('2026-11-02T09:00:00Z')
     const now = () => clock
     const f = await armed({ now })
     f.auth.listen()
     f.fire('appUrlOpen', { url: LINK })
     await flush()
-    clock = Date.parse('2026-11-03T10:00:00Z')
+    clock = Date.parse('2026-11-03T08:58:00Z')
+    const k1 = fake({ launchUrl: LINK, local: f.local, now })
+    k1.auth.listen()
+    await k1.auth.relay(relaySearch())
+    await flush()
+    clock = Date.parse('2026-11-03T09:05:00Z')
     const k = fake({ launchUrl: LINK, local: f.local, now })
     k.auth.listen()
+    await flush()
     await k.auth.relay(relaySearch())
     await flush()
     const fresh = `${RETURN_PREFIX}code=${code('E')}`
     k.fire('appUrlOpen', { url: fresh })
     await flush()
-    check('le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré, seul le nouveau lien est racheté',
-      JSON.stringify(k.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code('E')}`]), k.log)
+    check('le lendemain, nouvelle connexion Google (deux pages relais, la première abandonnée) : le lien de lundi que getLaunchUrl redonne pendant la connexion en cours est ignoré, seul le nouveau lien est racheté',
+      k1.replaces().length === 0 && JSON.stringify(k.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code('E')}`]), { k1: k1.log, k: k.log })
   }
   {
     const f = fake()
