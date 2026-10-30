@@ -1014,26 +1014,30 @@ async function gateG3() {
       navsK.includes(`${t.pl.url}/`) && redeems.length === 1, navsK.slice(0, 3))
 
     // ================================================================ D. iOS 17.4+ : session annulée, puis départ rejoué (lien d'erreur)
-    const d1 = await toRelay(ios)
-    await waitFor(() => records('ios', 'session').length >= 2, 20_000)
-    const navsD1 = navLog(ios.page)
-    await ios.page.evaluate(() => window.__sessionDone({ code: 'canceled' }))
+    // Nouvelle vue web (la précédente a maintenant une session ERPlead : l'autorisation n'y montrerait plus l'écran de connexion).
+    await ios.ctx.close()
+    const iosD = await context(IOS_UA, 'webview', { kind: 'iosD', platform: 'ios', https: true })
+    const d1 = await toRelay(iosD)
+    await waitFor(() => records('iosD', 'session').length >= 1, 20_000)
+    const navsD1 = navLog(iosD.page)
+    await iosD.page.evaluate(() => window.__sessionDone({ code: 'canceled' }))
     await waitFor(() => navsD1.length > 0, 15_000)
     check('D. session annulée (canceled) : la vue web revient à l’écran de connexion de l’app chez ERPlead (back), jamais Safari, jamais de rachat',
-      d1.button && navsD1[0]?.startsWith(`${t.erp.url}/login?next=`) && records('ios', 'external').length === 0 && redeems.length === 1, navsD1.slice(0, 2))
+      d1.button && records('iosD', 'session').length === 1 && navsD1[0]?.startsWith(`${t.erp.url}/login?next=`) && records('iosD', 'external').length === 0 &&
+      redeems.length === 1, navsD1.slice(0, 2))
     // Le départ de A, déjà consommé, rouvert en m=auto : ERPlead renvoie le lien d'erreur vérifié (redirection, jamais suivie).
     const replayAuto = await sysA.ctx.request.get(`${startA}&m=auto`, { maxRedirects: 0 })
     const errAuto = replayAuto.headers().location ?? ''
     check('D. départ rejoué (m=auto) : 303 vers le lien vérifié d’erreur https://projectlead.io/lead-auth/return?error=expired&locale=fr (jamais suivi)',
       replayAuto.status() === 303 && errAuto === `${RETURN}?error=expired&locale=fr`, { status: replayAuto.status(), loc: errAuto })
-    const d2 = await toRelay(ios)
-    await waitFor(() => records('ios', 'session').length >= 3, 20_000)
-    const navsD2 = navLog(ios.page)
-    await ios.page.evaluate((u) => window.__sessionDone({ url: u }), errAuto)
+    const d2 = await toRelay(iosD)
+    await waitFor(() => records('iosD', 'session').length >= 2, 20_000)
+    const navsD2 = navLog(iosD.page)
+    await iosD.page.evaluate((u) => window.__sessionDone({ url: u }), errAuto)
     await waitFor(() => navsD2.length > 0, 15_000)
     check('D. session revenue avec ce lien d’erreur (pendant une connexion en cours) : l’écran de connexion de l’app (back), jamais de rachat',
       d2.button && navsD2[0]?.startsWith(`${t.erp.url}/login?next=`) && !navsD2[0]?.includes('error=') && redeems.length === 1, navsD2.slice(0, 2))
-    await ios.ctx.close(); await sysA.ctx.close()
+    await iosD.ctx.close(); await sysA.ctx.close()
 
     // ================================================================ B. Android : Custom Tab, vrai retour « annulé » (m=auto)
     const and = await context(ANDROID_UA, 'webview', { kind: 'android', platform: 'android' })
