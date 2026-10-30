@@ -45,7 +45,9 @@ suffisent. Le site ne lit ni ne garde jamais le verifier (cookie HttpOnly d'erpl
   module `LeadAuthSession` (`ios/App/App/LeadAuthSession.swift`, retour `.https(host: "projectlead.io", path:
   "/lead-auth/return")` écrit dans le Swift), enregistré par `LeadBridgeViewController` ; plus de `CFBundleURLTypes`.
 - Android : intent-filter `android:autoVerify="true"` VIEW / DEFAULT / BROWSABLE, `https://projectlead.io/lead-auth/return`,
-  seul hôte du manifeste ; plus de schéma `io.projectlead.app`.
+  seul hôte du manifeste ; plus de schéma `io.projectlead.app`. `MainActivity.onPause` → `CookieManager.flush()` : le cookie
+  verifier d'erplead.io, posé juste avant le Custom Tab, est écrit sur le disque tout de suite (la WebView ne le fait
+  qu'environ toutes les 30 s ; app tuée 5 s après le bouton : « La demande a expiré », mesuré par G4 sur 11793db).
 - Plugins `@capacitor/app` et `@capacitor/browser` ; `allowNavigation` garde erplead.io et Apple.
 
 ## À faire hors du code (comptes : par Ève ou sur son accord)
@@ -63,4 +65,11 @@ Le site part en production avant les versions des apps (sinon l'association n'ex
 - `node scripts/google-app-gates.mjs G1` (code web, contre-épreuves, contrôles complets, construction Vercel locale), `G2`
   (dépôt mobile, AAB signé), `APERCU` (aperçu Vercel relié à l'aperçu d'ERPlead), `G3` (Chromium sans tête qui imite la vue
   web de l'app iOS 17.4+, iOS 16 et Android ; vrai retour « annulé » de Google ; app relancée par son lien sur l'accueil ;
-  page relais rechargée ; page de retour et fichiers d'association de l'aperçu).
+  page relais rechargée ; page de retour et fichiers d'association de l'aperçu), `G4` (le vrai binaire Android sur un
+  émulateur, avec un vrai Custom Tab de Chrome et la vraie WebView : compte touché, page de Google qui avance seule,
+  vrai retour « annulé » d'ERPlead, app tuée pendant le Custom Tab, contre-épreuve sans App Link).
+
+Mesuré par G4 (Chrome 133, Android 16, 30.10.2026) : la 303 vers le lien vérifié ouvre l'app depuis le Custom Tab, même
+sans geste (page de Google qui avance seule 6 s ou 20 s après), rachat ~0,8 s après ; Chrome charge aussi la page de repli
+en parallèle (le Custom Tab est refermé par `Browser.close`, la page efface le code de son adresse). Sans App Link : la page
+de repli, code jamais racheté. iOS : rien d'essayé ici (aucun Mac).

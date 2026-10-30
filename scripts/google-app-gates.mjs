@@ -29,6 +29,12 @@
 //                                             web inchangés ; app relancée par son lien sur l'accueil (aucun départ seul
 //                                             pendant le rachat) ; page relais rechargée (Safari jamais rouvert) ; base
 //                                             d'aperçu remise comme avant
+//   node scripts/google-app-gates.mjs G4      le VRAI binaire Android 1.0.2 (AAB de G2, re-signé avec une clé d'essai) sur
+//                                             un émulateur (AVD pixel36, port 5588, lecture seule) : vrai Custom Tab de
+//                                             Chrome, vraie WebView, relais local vers les aperçus ; compte touché, page de
+//                                             Google qui avance seule, vrai retour « annulé » d'ERPlead (303 → App Link),
+//                                             app tuée pendant le Custom Tab (5 s et 35 s après le bouton), contre-épreuve
+//                                             sans App Link (page de repli) ; base d'aperçu remise comme avant
 //
 // Chaque porte vérifie vraiment et n'imprime son jeton GOOGLE_APP_Gx_OK qu'à la toute fin, si aucun contrôle n'a échoué.
 // Aucun secret affiché (adresses de base, jetons, codes, cookies masqués). Fichiers lus (hors dépôt, 600) :
@@ -37,7 +43,7 @@
 // du client projectlead de l'aperçu), ~/.erplead-bypass, ~/.android-signing/projectlead-upload.env, ~/projets/lead-e2e/state.json.
 // Jamais une base de production, jamais un déploiement de production, jamais un envoi aux stores.
 import { createRequire } from 'node:module'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, createPublicKey, randomBytes, verify as verifySig } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync,
   symlinkSync, writeFileSync } from 'node:fs'
@@ -553,6 +559,10 @@ function gateG2() {
     /android:name="\.MainActivity"/.test(activity) && /android:launchMode="singleTask"/.test(activity) && !!link && /^<intent-filter android:autoVerify="true">/.test(link) &&
     /android\.intent\.action\.VIEW/.test(link) && /android\.intent\.category\.DEFAULT/.test(link) && /android\.intent\.category\.BROWSABLE/.test(link) &&
     /<data android:scheme="https" android:host="projectlead\.io" android:path="\/lead-auth\/return" \/>/.test(link) && filters.length === 2, link ?? activity.slice(0, 300))
+  const mainJava = readFileSync(`${MOBILE}/android/app/src/main/java/io/projectlead/app/MainActivity.java`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  check('Android MainActivity : cookies de la WebView écrits au passage au second plan (onPause → CookieManager.flush() : le verifier d’erplead.io survit si Android tue l’app pendant le Custom Tab, porte G4)',
+    /public class MainActivity extends BridgeActivity \{\s*@Override\s*public void onPause\(\) \{\s*super\.onPause\(\);\s*CookieManager\.getInstance\(\)\.flush\(\);\s*\}\s*\}/.test(mainJava) &&
+    /import android\.webkit\.CookieManager;/.test(mainJava))
   const datas = manifest.replace(/<!--[\s\S]*?-->/g, '').match(/<data [^>]*>/g) ?? []
   check('Android : un seul hôte http(s) dans le manifeste (Android ≤ 11 : tous doivent être vérifiés), plus de schéma io.projectlead.app', datas.length === 1 && !/io\.projectlead\.app"/.test(datas.join(' ')), datas)
   const gradle = readFileSync(`${MOBILE}/android/app/build.gradle`, 'utf8')
@@ -755,6 +765,49 @@ function benchPerson(t) {
   finish('G3')
 }
 
+/** Ce que la base d'APERÇU d'ERPlead avait avant une porte (G3, G4), pour la remettre comme avant. */
+function previewBefore(t, who) {
+  return {
+    orgApp: sqlRead(t.erp.ro, `select json_build_object('last_at', last_at) from org_apps where org_id = $1 and app = 'projectlead'`, [who.org]),
+    rates: sqlRead(t.erp.ro, `select coalesce(json_agg(json_build_object('key', key, 'count', count, 'reset_at', reset_at)), '[]'::json) from rate_limits where key like 'gapp|%'`),
+  }
+}
+/**
+ * La base d'APERÇU d'ERPlead remise comme avant, autour de la personne TEST : sessions, codes et jetons OpenID, états
+ * (départs, états Google, codes de transfert, vues), freins des départs, journal de la porte ; dernière connexion, langue
+ * et dernière venue de l'organisation dans ProjectLead reprises.
+ */
+async function restorePreview(t, who, startedAt, made, orgAppBefore, ratesBefore) {
+  await previewWrite(t, who.id, async (db) => {
+    const s = await db.query(`delete from sessions where user_id = $1 and created_at >= $2`, [who.id, startedAt])
+    const c = await db.query(`delete from codes where user_id = $1 and client_id = 'projectlead' and expires_at >= $2`, [who.id, startedAt])
+    const rt = await db.query(`delete from refresh_tokens where user_id = $1 and client_id = 'projectlead' and created_at >= $2`, [who.id, startedAt])
+    const st = await db.query(`delete from sso_states where state = any($1) or data->>'vh' = any($2) or state = any($3) or state = any($4)`,
+      [made.states, made.vh, made.vh.map((v) => `gapp-view:${v}`), made.codes])
+    const au = await db.query(`delete from audit where at >= $1 and (user_id = $2 or (action like 'google_app.%' and data->>'app' = 'projectlead'))`, [startedAt, who.id])
+    await db.query(`update users set last_login_at = $2, locale = $3 where id = $1`, [who.id, who.last_login_at, who.locale])
+    if (orgAppBefore) await db.query(`update org_apps set last_at = $3 where org_id = $1 and app = $2`, [who.org, 'projectlead', orgAppBefore.last_at])
+    else await db.query(`delete from org_apps where org_id = $1 and app = $2 and first_at >= $3`, [who.org, 'projectlead', startedAt])
+    const keep = (ratesBefore ?? []).map((r) => r.key)
+    const rl = await db.query(`delete from rate_limits where key like 'gapp|%' and not (key = any($1))`, [keep])
+    for (const r of ratesBefore ?? []) await db.query(`update rate_limits set count = $2, reset_at = $3 where key = $1`, [r.key, r.count, r.reset_at])
+    note(`remise en état : ${s.rowCount} session(s), ${c.rowCount} code(s) OpenID, ${rt.rowCount} jeton(s) de rafraîchissement, ${st.rowCount} état(s), ${rl.rowCount} frein(s) des départs, ${au.rowCount} ligne(s) de journal ; dernière connexion, langue et organisation reprises`)
+  })
+}
+function checkRestored(t, who, startedAt, made, orgAppBefore, ratesBefore) {
+  const after = sqlRead(t.erp.ro, `select json_build_object('sessions', (select count(*) from sessions where user_id = $1 and created_at >= $2),
+      'codes', (select count(*) from codes where user_id = $1 and expires_at >= $2), 'refresh', (select count(*) from refresh_tokens where user_id = $1 and created_at >= $2),
+      'states', (select count(*) from sso_states where data->>'vh' = any(string_to_array($3, ',')) or state = any(string_to_array($4, ','))),
+      'last_login_at', (select last_login_at from users where id = $1), 'locale', (select locale from users where id = $1),
+      'org_app', (select last_at from org_apps where org_id = $5 and app = 'projectlead'),
+      'rates', (select coalesce(json_agg(json_build_object('key', key, 'count', count, 'reset_at', reset_at) order by key), '[]'::json) from rate_limits where key like 'gapp|%'))`,
+    [who.id, startedAt.toISOString(), made.vh.join(','), [...made.states, ...made.codes].join(','), who.org])
+  const sortRates = (x) => [...(x ?? [])].sort((p, q) => String(p.key).localeCompare(String(q.key)))
+  check('base d’APERÇU d’ERPlead remise comme avant (aucune session, aucun code ni jeton, aucun état de la porte, freins des départs d’avant ; dernière connexion, langue, organisation d’avant)',
+    after.sessions === 0 && after.codes === 0 && after.refresh === 0 && after.states === 0 && after.locale === who.locale && after.last_login_at === who.last_login_at &&
+    (orgAppBefore ? after.org_app === orgAppBefore.last_at : after.org_app === null) && same(sortRates(after.rates), sortRates(ratesBefore)), { ...after, rates: after.rates?.length })
+}
+
 const { chromium } = createRequire('/usr/lib/node_modules/')('playwright')
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
 const IPHONE_16 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
@@ -801,8 +854,7 @@ async function gateG3() {
   if (failures) finish('G3')
   const assoc = contractAssociation()
   const who = benchPerson(t)
-  const orgAppBefore = sqlRead(t.erp.ro, `select json_build_object('last_at', last_at) from org_apps where org_id = $1 and app = 'projectlead'`, [who.org])
-  const ratesBefore = sqlRead(t.erp.ro, `select coalesce(json_agg(json_build_object('key', key, 'count', count, 'reset_at', reset_at)), '[]'::json) from rate_limits where key like 'gapp|%'`)
+  const { orgApp: orgAppBefore, rates: ratesBefore } = previewBefore(t, who)
   const bypassPl = { 'x-vercel-protection-bypass': t.pl.bypass }
   const opt = await (await fetch(`${t.pl.url}/api/auth/options`, { headers: bypassPl })).json().catch(() => null)
   check('aperçu ProjectLead : Compte Lead branché, émetteur = l’aperçu d’ERPlead (/api/auth/options)', opt?.leadId === true && opt?.leadIssuer === t.erp.url, opt)
@@ -1313,38 +1365,445 @@ async function gateG3() {
     check('aucune requête des navigateurs vers la production (projectlead.io, erplead.io) : page relais et retour OpenID interceptés, liens vérifiés jamais suivis', prodHits.length === 0, prodHits.slice(0, 5))
   } finally {
     await browser.close()
-    // --- base d'APERÇU d'ERPlead remise comme avant, autour de la personne TEST : sessions, codes et jetons OpenID, états
-    // (départs, états Google, codes de transfert, vues), freins des départs, journal de la porte ; dernière connexion,
-    // langue et dernière venue de l'organisation dans ProjectLead reprises.
-    await previewWrite(t, who.id, async (db) => {
-      const s = await db.query(`delete from sessions where user_id = $1 and created_at >= $2`, [who.id, startedAt])
-      const c = await db.query(`delete from codes where user_id = $1 and client_id = 'projectlead' and expires_at >= $2`, [who.id, startedAt])
-      const rt = await db.query(`delete from refresh_tokens where user_id = $1 and client_id = 'projectlead' and created_at >= $2`, [who.id, startedAt])
-      const st = await db.query(`delete from sso_states where state = any($1) or data->>'vh' = any($2) or state = any($3) or state = any($4)`,
-        [madeStates, madeVh, madeVh.map((v) => `gapp-view:${v}`), madeCodes])
-      const au = await db.query(`delete from audit where at >= $1 and (user_id = $2 or (action like 'google_app.%' and data->>'app' = 'projectlead'))`, [startedAt, who.id])
-      await db.query(`update users set last_login_at = $2, locale = $3 where id = $1`, [who.id, who.last_login_at, who.locale])
-      if (orgAppBefore) await db.query(`update org_apps set last_at = $3 where org_id = $1 and app = $2`, [who.org, 'projectlead', orgAppBefore.last_at])
-      else await db.query(`delete from org_apps where org_id = $1 and app = $2 and first_at >= $3`, [who.org, 'projectlead', startedAt])
-      const keep = (ratesBefore ?? []).map((r) => r.key)
-      const rl = await db.query(`delete from rate_limits where key like 'gapp|%' and not (key = any($1))`, [keep])
-      for (const r of ratesBefore ?? []) await db.query(`update rate_limits set count = $2, reset_at = $3 where key = $1`, [r.key, r.count, r.reset_at])
-      note(`remise en état : ${s.rowCount} session(s), ${c.rowCount} code(s) OpenID, ${rt.rowCount} jeton(s) de rafraîchissement, ${st.rowCount} état(s), ${rl.rowCount} frein(s) des départs, ${au.rowCount} ligne(s) de journal ; dernière connexion, langue et organisation reprises`)
-    })
+    await restorePreview(t, who, startedAt, { states: madeStates, vh: madeVh, codes: madeCodes }, orgAppBefore, ratesBefore)
   }
-  const after = sqlRead(t.erp.ro, `select json_build_object('sessions', (select count(*) from sessions where user_id = $1 and created_at >= $2),
-      'codes', (select count(*) from codes where user_id = $1 and expires_at >= $2), 'refresh', (select count(*) from refresh_tokens where user_id = $1 and created_at >= $2),
-      'states', (select count(*) from sso_states where data->>'vh' = any(string_to_array($3, ',')) or state = any(string_to_array($4, ','))),
-      'last_login_at', (select last_login_at from users where id = $1), 'locale', (select locale from users where id = $1),
-      'org_app', (select last_at from org_apps where org_id = $5 and app = 'projectlead'),
-      'rates', (select coalesce(json_agg(json_build_object('key', key, 'count', count, 'reset_at', reset_at) order by key), '[]'::json) from rate_limits where key like 'gapp|%'))`,
-    [who.id, startedAt.toISOString(), madeVh.join(','), [...madeStates, ...madeCodes].join(','), who.org])
-  const sortRates = (x) => [...(x ?? [])].sort((p, q) => String(p.key).localeCompare(String(q.key)))
-  check('base d’APERÇU d’ERPlead remise comme avant (aucune session, aucun code ni jeton, aucun état de la porte, freins des départs d’avant ; dernière connexion, langue, organisation d’avant)',
-    after.sessions === 0 && after.codes === 0 && after.refresh === 0 && after.states === 0 && after.locale === who.locale && after.last_login_at === who.last_login_at &&
-    (orgAppBefore ? after.org_app === orgAppBefore.last_at : after.org_app === null) && same(sortRates(after.rates), sortRates(ratesBefore)), { ...after, rates: after.rates?.length })
+  checkRestored(t, who, startedAt, { states: madeStates, vh: madeVh, codes: madeCodes }, orgAppBefore, ratesBefore)
   note(`captures : ${CAPTURES}/ (${shots.length}) ${shots.join(', ')}`)
   finish('G3')
+}
+
+// ------------------------------------------------------------------ G4 : le binaire Android 1.0.2 sur un émulateur
+
+/**
+ * Relecture du 30.10.2026 (2e, point « basse ») : G3 décide elle-même de l'ordre des événements natifs (faux pont) ; le
+ * Custom Tab et l'App Link y sont imités. G4 fait tourner le VRAI binaire 1.0.2 (l'AAB prêt pour Play, en APK universel
+ * re-signé avec une clé d'essai jetable pour l'installer) sur un émulateur Android (AVD pixel36, Android 16, Google APIs,
+ * Chrome et WebView, démarré en lecture seule), avec un vrai Custom Tab de Chrome : Browser.open, la page de Google (simulée)
+ * touchée ou qui avance seule, la REDIRECTION SERVEUR 303 vers https://projectlead.io/lead-auth/return?code=… que Chrome remet
+ * à MainActivity (App Link : domaine approuvé hors ligne par pm set-app-links-user-selection, comme une vérification
+ * réussie), appUrlOpen ou getLaunchUrl, Browser.close, le rachat dans la vraie WebView ; l'app tuée pendant le Custom Tab
+ * (activité neuve, accueil) ; la contre-épreuve sans approbation (page de repli dans Chrome, code jamais racheté).
+ * WebView et Chrome résolvent projectlead.io, erplead.io et accounts.google.com vers un relais local
+ * (--host-resolver-rules, certificat du relais accepté par son empreinte SPKI : fichiers de ligne de commande de Chrome et
+ * de la WebView, appareil « userdebug ») qui transmet aux APERÇUS (ProjectLead et ERPlead) ; Google est simulé (aucun
+ * compte) : sa page, et la fin de son retour (la 303 d'ERPlead vers le lien vérifié pour un code préparé dans la base
+ * d'APERÇU, comme en G3) ; le retour « annulé » est le VRAI d'ERPlead. Le retour OpenID vers ProjectLead est intercepté par
+ * le relais et échangé comme en G3. iOS : aucun Mac ici, rien n'est essayé (le dire dans le rapport).
+ */
+const ANDROID_SDK = `${HOME}/android-sdk`
+const BUNDLETOOL = `${HOME}/outils/bundletool-all-1.18.1.jar`
+const ADB = `${ANDROID_SDK}/platform-tools/adb`
+const EMULATOR = `${ANDROID_SDK}/emulator/emulator`
+const AVD = 'pixel36'
+/** Un port à part (ScanLead : 5584) : l'AVD en lecture seule peut tourner plusieurs fois. */
+const EMU_PORT = 5588
+const SERIAL = `emulator-${EMU_PORT}`
+const APP_ID = 'io.projectlead.app'
+const AAB_PATH = `${PUBLICATIONS}/projectlead-1.0.2-3.aab`
+/** Le rachat retenu par le relais en E (la vraie chaîne : TLS vers erplead.io, rachat en base, 303, 302). */
+const HOLD_MS = 4000
+
+/** adb sans bloquer le relais (même processus) : sortie texte, ou octets (capture d'écran). */
+function adbA(args, { binary = false, timeout = 120_000 } = {}) {
+  return new Promise((ok) => {
+    const child = spawn(ADB, ['-s', SERIAL, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const out = [], err = []
+    const timer = setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, timeout)
+    child.stdout.on('data', (d) => out.push(d))
+    child.stderr.on('data', (d) => err.push(d))
+    child.on('close', (status) => {
+      clearTimeout(timer)
+      const buf = Buffer.concat(out)
+      ok({ status, stdout: binary ? buf : buf.toString('utf8'), out: buf.toString('utf8') + Buffer.concat(err).toString('utf8') })
+    })
+  })
+}
+async function bootEmulator() {
+  if (run(ADB, ['devices']).stdout.includes(`${SERIAL}\tdevice`)) return { started: false, stop: () => {} }
+  const proc = spawn(EMULATOR, ['-avd', AVD, '-port', String(EMU_PORT), '-read-only', '-no-window', '-no-audio', '-no-boot-anim', '-no-snapshot',
+    '-gpu', 'swiftshader_indirect', '-memory', '3072', '-cores', '3'], { stdio: 'ignore', env: { ...process.env, ANDROID_SDK_ROOT: ANDROID_SDK, ANDROID_HOME: ANDROID_SDK } })
+  const stop = () => { try { proc.kill('SIGTERM') } catch {} }
+  process.on('exit', stop)
+  for (let i = 0; i < 100; i++) {
+    if ((await adbA(['shell', 'getprop', 'sys.boot_completed'], { timeout: 10_000 })).stdout.trim() === '1') break
+    await sleep(3000)
+  }
+  return { started: true, stop }
+}
+const unescXml = (v) => v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#10;/g, ' ').replace(/&amp;/g, '&')
+/** L'écran (uiautomator) : nœuds avec texte, description, paquet, centre. */
+async function uiNodes() {
+  for (let i = 0; i < 4; i++) {
+    const d = await adbA(['shell', 'uiautomator', 'dump', '/data/local/tmp/g4-ui.xml'], { timeout: 30_000 })
+    if (/dumped to/i.test(d.out)) break
+    await sleep(700)
+  }
+  const xml = (await adbA(['shell', 'cat', '/data/local/tmp/g4-ui.xml'])).stdout
+  return [...xml.matchAll(/<node\b([^>]*?)\/?>/g)].map((m) => {
+    const a = Object.fromEntries([...m[1].matchAll(/([\w-]+)="([^"]*)"/g)].map((x) => [x[1], unescXml(x[2])]))
+    const b = (a.bounds ?? '').match(/\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/)
+    return { text: a.text ?? '', desc: a['content-desc'] ?? '', pkg: a.package ?? '', cls: a.class ?? '', click: a.clickable === 'true',
+      x: b ? (Number(b[1]) + Number(b[3])) / 2 : 0, y: b ? (Number(b[2]) + Number(b[4])) / 2 : 0, w: b ? Number(b[3]) - Number(b[1]) : 0, h: b ? Number(b[4]) - Number(b[2]) : 0 }
+  })
+}
+/** Toucher le premier nœud visible qui répond à `match` (attente au plus `ms`). */
+async function tapNode(match, ms = 60_000) {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    const n = (await uiNodes()).find((x) => x.w > 0 && x.h > 0 && match(x))
+    if (n) { await adbA(['shell', 'input', 'tap', String(Math.round(n.x)), String(Math.round(n.y))]); return n }
+    await sleep(1000)
+  }
+  return null
+}
+const activities = async () => (await adbA(['shell', 'dumpsys', 'activity', 'activities'])).stdout
+const topActivity = async () => ((await activities()).match(/topResumedActivity=ActivityRecord\{\S+ \S+ (\S+)/) ?? [])[1] ?? ''
+const activityStack = async () => [...(await activities()).matchAll(/ActivityRecord\{\S+ \S+ (\S+) t\d+/g)].map((m) => m[1])
+const appPid = async () => (await adbA(['shell', 'pidof', APP_ID])).stdout.trim()
+
+/**
+ * Relais HTTPS local pour projectlead.io, erplead.io et accounts.google.com (Chrome et WebView : --host-resolver-rules) :
+ * les vraies adresses du protocole restent dans la vue web et dans Chrome (lien vérifié, cookies __Host- d'erplead.io),
+ * chaque requête part vers l'APERÇU correspondant (protection passée par l'en-tête de contournement) ; les origines des
+ * aperçus sont remises en adresses de production dans les redirections et les réponses texte (l'émetteur que donne
+ * /api/auth/options devient https://erplead.io, comme en production). `own` répond à la place des aperçus (Google simulé,
+ * fin du retour de Google, retour OpenID intercepté) ; `hold` retient une requête. La production n'est jamais jointe :
+ * Chrome et la WebView ne résolvent plus ces trois noms que vers ce relais. Chaque requête est notée.
+ */
+async function startRelay(t, dir, { own, hold }) {
+  const https = await import('node:https')
+  const log = []
+  const hop = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'accept-encoding', 'content-length', 'te', 'trailer'])
+  const toProd = (v) => v.split(t.pl.url).join('https://projectlead.io').split(t.erp.url).join('https://erplead.io')
+  async function handle(req, res) {
+    const host = String(req.headers.host ?? '').split(':')[0].toLowerCase()
+    const entry = { host, method: req.method, path: req.url, at: Date.now(), ua: String(req.headers['user-agent'] ?? '') }
+    log.push(entry)
+    const mine = own ? await own(host, req, entry) : null
+    if (mine) {
+      entry.status = mine.status; entry.to = 'relais'
+      if (mine.headers?.location) entry.location = mine.headers.location
+      res.writeHead(mine.status, mine.headers ?? {})
+      return res.end(mine.body ?? '')
+    }
+    const base = host === 'projectlead.io' ? t.pl.url : host === 'erplead.io' ? t.erp.url : null
+    if (!base) { entry.status = 421; res.writeHead(421); return res.end() }
+    const wait = hold ? hold(host, req) : 0
+    if (wait) { entry.held = wait; await sleep(wait) }
+    const chunks = []
+    for await (const c of req) chunks.push(c)
+    const headers = {}
+    for (const [k, v] of Object.entries(req.headers)) if (!hop.has(k) && !k.startsWith('proxy-')) headers[k] = Array.isArray(v) ? v.join(', ') : v
+    headers['x-vercel-protection-bypass'] = base === t.pl.url ? t.pl.bypass : t.erp.bypass
+    headers['x-vercel-skip-toolbar'] = '1'
+    headers['accept-encoding'] = 'identity'
+    const r = await fetch(base + req.url, { method: req.method, headers, redirect: 'manual', body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks) })
+    entry.status = r.status
+    const out = {}
+    r.headers.forEach((v, k) => { if (!hop.has(k) && !['content-encoding', 'set-cookie'].includes(k)) out[k] = v })
+    if (r.headers.get('location')) out.location = entry.location = toProd(r.headers.get('location'))
+    const cookies = (r.headers.getSetCookie?.() ?? []).map((c) => c.replace(/;\s*Domain=[^;]*/i, ''))
+    if (cookies.length) out['set-cookie'] = cookies
+    let body = Buffer.from(await r.arrayBuffer())
+    if (/^(text\/html|application\/json)/.test(r.headers.get('content-type') ?? '')) body = Buffer.from(toProd(body.toString('utf8')))
+    res.writeHead(r.status, out)
+    res.end(req.method === 'HEAD' ? undefined : body)
+  }
+  const server = https.createServer({ key: readFileSync(join(dir, 'k.pem')), cert: readFileSync(join(dir, 'c.pem')) }, (req, res) => {
+    handle(req, res).catch((e) => { log.push({ error: e.message }); try { res.writeHead(502); res.end() } catch {} })
+  })
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok))
+  return { port: server.address().port, log, close: () => server.close() }
+}
+
+async function gateG4() {
+  console.log('G4 — le binaire Android 1.0.2 sur un émulateur : vrai Custom Tab de Chrome, vraie redirection serveur vers l’App Link, vraie WebView')
+  const t = await targets()
+  if (failures) finish('G4')
+  const who = benchPerson(t)
+  const { orgApp: orgAppBefore, rates: ratesBefore } = previewBefore(t, who)
+  const startedAt = new Date()
+  const made = { states: [], vh: [], codes: [] }
+  const dir = mkdtempSync(join(tmp, 'g4-'))
+  mkdirSync(CAPTURES, { recursive: true })
+  const shots = []
+  const shot = async (name) => {
+    const png = await adbA(['exec-out', 'screencap', '-p'], { binary: true })
+    if (png.status === 0 && png.stdout.length > 1000) { writeFileSync(join(CAPTURES, `${name}.png`), png.stdout); shots.push(`${name}.png`) }
+  }
+  const screen = async () => (await uiNodes().catch(() => [])).filter((n) => n.text || n.desc).slice(0, 25).map((n) => `[${n.pkg.split('.').pop()}] ${(n.text || n.desc).slice(0, 60)}`)
+
+  // --- 1. Le binaire : l'AAB prêt pour Play (intact), en APK universel re-signé avec une clé d'essai jetable
+  const aabSum = createHash('sha256').update(readFileSync(AAB_PATH)).digest('hex')
+  const built = JSON.parse(readFileSync(`${CAPTURES}/android-1.0.2-3.json`, 'utf8'))
+  check(`AAB 1.0.2 (versionCode 3) prêt pour Play, intact (sha256 ${aabSum.slice(0, 12)}… = celui construit par G2, dépôt mobile ${String(built.mobileCommit).slice(0, 7)})`,
+    aabSum === built.sha256 && run('git', ['-C', MOBILE, 'rev-parse', 'HEAD']).stdout.trim() === built.mobileCommit)
+  const ks = join(dir, 'essai.jks')
+  run('keytool', ['-genkeypair', '-keystore', ks, '-storepass', 'essai-g4', '-keypass', 'essai-g4', '-alias', 'essai', '-keyalg', 'RSA', '-keysize', '2048',
+    '-validity', '2', '-dname', 'CN=essai emulateur G4'])
+  const apks = run('java', ['-jar', BUNDLETOOL, 'build-apks', `--bundle=${AAB_PATH}`, `--output=${join(dir, 'u.apks')}`, '--mode=universal', `--ks=${ks}`,
+    '--ks-pass=pass:essai-g4', '--ks-key-alias=essai', '--key-pass=pass:essai-g4', '--overwrite'], { timeout: 600_000 })
+  run('unzip', ['-o', '-q', join(dir, 'u.apks'), 'universal.apk', '-d', dir])
+  check('APK universel tiré de cet AAB par bundletool (même code ; seule la signature diffère : clé d’essai jetable)', apks.status === 0 && existsSync(join(dir, 'universal.apk')), lastLine(apks.stderr))
+  if (failures) finish('G4')
+
+  // --- 2. L'émulateur et l'app
+  const emu = await bootEmulator()
+  const chromeV = ((await adbA(['shell', 'dumpsys', 'package', 'com.android.chrome'])).stdout.match(/versionName=(\S+)/) ?? [])[1]
+  const props = (await adbA(['shell', 'getprop'])).stdout
+  check(`émulateur ${SERIAL} (AVD ${AVD}, ${emu.started ? 'démarré par la porte, ' : ''}lecture seule) : Android ${props.match(/\[ro\.build\.version\.release\]: \[([^\]]+)\]/)?.[1]}, « userdebug », Chrome ${chromeV}`,
+    /\[sys\.boot_completed\]: \[1\]/.test(props) && /\[ro\.build\.type\]: \[userdebug\]/.test(props) && !!chromeV)
+  await adbA(['uninstall', APP_ID])
+  const inst = await adbA(['install', join(dir, 'universal.apk')], { timeout: 300_000 })
+  const pkg = (await adbA(['shell', 'dumpsys', 'package', APP_ID])).stdout
+  check('app installée : io.projectlead.app 1.0.2 (versionCode 3)', /Success/.test(inst.out) && /versionCode=3\b/.test(pkg) && /versionName=1\.0\.2\b/.test(pkg), inst.out.slice(-300))
+  if (failures) { emu.stop(); finish('G4') }
+  const approve = async (on) => {
+    await adbA(['shell', 'pm', 'set-app-links', '--package', APP_ID, '0', 'all'])
+    await adbA(['shell', 'pm', 'set-app-links-user-selection', '--user', 'cur', '--package', APP_ID, on ? 'true' : 'false', 'projectlead.io'])
+    return (await adbA(['shell', 'pm', 'get-app-links', '--user', 'cur', APP_ID])).stdout
+  }
+  const links = await approve(true)
+  check('App Link : projectlead.io déclaré par l’app ; approuvé hors ligne pour l’essai (« selected », comme une vérification réussie)', /projectlead\.io/.test(links) && /Selection state:[\s\S]*Enabled:[\s\S]*projectlead\.io/.test(links), links.trim().slice(0, 400))
+
+  // --- 3. Relais, Google simulé, retour OpenID intercepté
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=relais-g4', '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem')], { stdio: 'ignore' })
+  const spki = execFileSync('sh', ['-c', `openssl x509 -in '${join(dir, 'c.pem')}' -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`], { encoding: 'utf8' }).trim()
+  /** La page de Google : `tap` (la personne touche son compte) ou `auto` (elle avance seule après `delay` ms : validation faite ailleurs). */
+  const google = { mode: 'tap', delay: 6000, auth: [], code: null, errors: [], last: null }
+  const callbacks = []
+  let holdRedeem = 0
+  const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>` +
+    `<body style="font-family:sans-serif;margin:24px"><h1 style="font-size:22px">${title}</h1>${body}</body></html>`
+  const own = async (host, req) => {
+    const u = new URL(req.url, `https://${host}`)
+    if (host === 'accounts.google.com') {
+      if (u.pathname === '/o/oauth2/v2/auth') {
+        const state = u.searchParams.get('state') ?? ''
+        google.auth.push({ state, redirect: u.searchParams.get('redirect_uri'), ua: String(req.headers['user-agent'] ?? ''), at: Date.now() })
+        const go = `/g4/continue?state=${encodeURIComponent(state)}`
+        const cancel = `https://erplead.io/auth/google/callback?${new URLSearchParams({ state, error: 'access_denied' })}`
+        return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: page('Google (simulé, porte G4)',
+          `<p>Choisissez un compte pour continuer vers erplead.io</p><a href="${go}" style="display:block;padding:28px;border:1px solid #888;font-size:24px;text-decoration:none">Personne TEST G4</a>` +
+          `<p style="margin-top:40px"><a href="${cancel.replace(/&/g, '&amp;')}" style="display:block;padding:20px;font-size:20px">Annuler G4</a></p>` +
+          (google.mode === 'auto' ? `<p>Validation sur l’autre appareil…</p><script>setTimeout(function () { location.replace(${JSON.stringify(go)}) }, ${google.delay})</script>` : '')) }
+      }
+      if (u.pathname === '/g4/continue') {
+        // Ce que le retour de Google aurait fait : identité vérifiée → code de transfert (base d'APERÇU, personne TEST).
+        const state = u.searchParams.get('state') ?? ''
+        const st = sqlRead(t.erp.ro, `select data from sso_states where state = $1 and expires_at > now()`, [sha256(state)])
+        if (st?.provider !== 'google' || st.app !== 'projectlead') { google.errors.push(`état Google inconnu : ${st?.provider}`); return { status: 400, body: 'état inconnu' } }
+        made.states.push(sha256(state)); made.vh.push(st.vh)
+        const code = randomBytes(32).toString('base64url')
+        made.codes.push(sha256(code))
+        await previewWrite(t, who.id, async (db) => {
+          await db.query(`delete from sso_states where state = $1`, [sha256(state)])
+          await db.query(`insert into sso_states (state, data, expires_at) values ($1, $2, now() + interval '5 minutes')`, [sha256(code), JSON.stringify({
+            provider: 'google-app-code', app: 'projectlead', vh: st.vh, next: st.next, locale: st.locale, result: { profile: { email: who.email, name: who.name, locale: who.locale } } })])
+        })
+        google.code = code
+        google.last = { open: st.open, locale: st.locale }
+        return { status: 302, headers: { location: `https://erplead.io/auth/google/callback?state=${encodeURIComponent(state)}&code=g4-simule` } }
+      }
+      return { status: 204, headers: {} }
+    }
+    if (host === 'erplead.io' && u.pathname === '/auth/google/callback' && u.searchParams.get('code') === 'g4-simule' && google.code) {
+      // googleAppCallback d'ERPlead après la vérification de l'identité, ouverture « auto » : 303 vers le lien vérifié.
+      return { status: 303, headers: { location: `${RETURN}?${new URLSearchParams({ code: google.code, locale: google.last?.locale ?? 'fr' })}` } }
+    }
+    if (host === 'projectlead.io' && u.pathname === '/auth/lead/callback') {
+      const cookie = String(req.headers.cookie ?? '').split(/;\s*/).find((c) => c.startsWith('pl_lead_login='))?.slice('pl_lead_login='.length) ?? ''
+      callbacks.push({ query: u.searchParams, cookie, ua: String(req.headers['user-agent'] ?? ''), at: Date.now() })
+      return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: page('ProjectLead (porte G4)', '<p data-callback>Retour OpenID reçu par la porte G4 (jamais envoyé à projectlead.io).</p>') }
+    }
+    return null
+  }
+  const hold = (host, req) => (host === 'erplead.io' && req.url.startsWith('/auth/google/app/redeem?') ? holdRedeem : 0)
+  const relay = await startRelay(t, dir, { own, hold })
+  const since = (i) => relay.log.slice(i)
+  const isApp = (e) => e.ua.includes(AGENT) && /; wv\)/.test(e.ua)
+  const isChrome = (e) => /Chrome\/\d+/.test(e.ua) && !e.ua.includes('ProjectLeadApp') && !/; wv\)/.test(e.ua)
+  const waitLog = async (from, fn, ms = 60_000) => { const end = Date.now() + ms; while (Date.now() < end) { const e = since(from).find(fn); if (e) return e; await sleep(250) } return null }
+  const kindOf = (e) => (isApp(e) ? 'app' : isChrome(e) ? 'chrome' : 'autre')
+  /** Le fil des requêtes depuis `from` (qui, quoi, statut, délai depuis `t0`), codes masqués. */
+  const trace = (from, t0, n = 14) => since(from).filter((e) => e.host !== 'accounts.google.com' || e.path.startsWith('/g4')).slice(0, n)
+    .map((e) => `${kindOf(e)} ${e.method} ${e.host}${String(e.path).replace(/code=[A-Za-z0-9_-]{20,}/g, 'code=<…>').slice(0, 48)} ${e.status ?? '?'}${e.held ? ' retenu' : ''} +${e.at - t0} ms`)
+  const flags = `_ --host-resolver-rules="MAP projectlead.io 10.0.2.2:${relay.port},MAP erplead.io 10.0.2.2:${relay.port},MAP accounts.google.com 10.0.2.2:${relay.port}" ` +
+    `--ignore-certificate-errors-spki-list=${spki} --disable-fre --no-default-browser-check --no-first-run`
+  writeFileSync(join(dir, 'cmdline'), `${flags}\n`)
+  for (const f of ['chrome-command-line', 'webview-command-line']) await adbA(['push', join(dir, 'cmdline'), `/data/local/tmp/${f}`])
+  await adbA(['shell', 'chmod', '644', '/data/local/tmp/chrome-command-line', '/data/local/tmp/webview-command-line'])
+  await adbA(['shell', 'am', 'force-stop', 'com.android.chrome'])
+
+  /** Le token du retour OpenID, échangé comme le ferait le serveur de ProjectLead : la personne TEST ? */
+  async function exchanged(cb) {
+    let saved = null
+    try { const raw = decodeURIComponent(cb.cookie); saved = JSON.parse(raw.slice(0, raw.lastIndexOf('.'))) } catch {}
+    const tok = await fetch(`${t.erp.url}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-vercel-protection-bypass': t.erp.bypass,
+      authorization: `Basic ${Buffer.from(`projectlead:${encodeURIComponent(t.erp.secret)}`).toString('base64')}` },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: cb.query.get('code') ?? '', redirect_uri: 'https://projectlead.io/auth/lead/callback',
+        code_verifier: saved?.verifier ?? '' }) }).then((r) => r.json()).catch(() => ({}))
+    const [h64, p64, s64] = String(tok.id_token ?? '').split('.')
+    try {
+      const head = JSON.parse(Buffer.from(h64, 'base64url').toString())
+      const claims = JSON.parse(Buffer.from(p64, 'base64url').toString())
+      const jwks = await (await fetch(`${t.erp.url}/oauth/jwks`, { headers: { 'x-vercel-protection-bypass': t.erp.bypass } })).json()
+      const jwk = jwks.keys.find((k) => k.kid === head.kid)
+      const sig = head.alg === 'RS256' && !!jwk && verifySig('sha256', Buffer.from(`${h64}.${p64}`), createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(s64, 'base64url'))
+      return sig && claims.iss === 'https://erplead.io' && claims.aud === 'projectlead' && claims.nonce === saved?.nonce && cb.query.get('state') === saved?.state &&
+        String(claims.email).toLowerCase() === who.email.toLowerCase() && claims.org === who.org
+    } catch { return false }
+  }
+  /** App neuve (stockages effacés) → l'accueil part seul vers le Compte Lead → écran d'ERPlead → « Continuer avec Google ». */
+  async function toGoogle(label) {
+    await adbA(['shell', 'am', 'force-stop', APP_ID])
+    await adbA(['shell', 'pm', 'clear', APP_ID])
+    await approve(true)
+    const f0 = relay.log.length
+    await adbA(['shell', 'am', 'start', '-W', '-n', `${APP_ID}/.MainActivity`])
+    const home = await waitLog(f0, (e) => e.host === 'projectlead.io' && e.path === '/' && isApp(e), 90_000)
+    const login = await waitLog(f0, (e) => e.host === 'erplead.io' && e.path.startsWith('/login?') && isApp(e), 90_000)
+    await sleep(2500)
+    const gb = await tapNode((n) => n.pkg === APP_ID && /Google/.test(n.text || n.desc) && !/Apple/.test(n.text || n.desc), 60_000)
+    const relayHit = await waitLog(f0, (e) => e.host === 'projectlead.io' && e.path.startsWith('/lead-auth/google?') && isApp(e), 60_000)
+    const start = await waitLog(f0, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/app/start?') && isChrome(e), 60_000)
+    const auth = await waitLog(f0, (e) => e.host === 'accounts.google.com' && e.path.startsWith('/o/oauth2/v2/auth') && isChrome(e), 60_000)
+    await sleep(1500)
+    const top = await topActivity()
+    const ok = !!home && !!login && !!gb && !!relayHit && !!start && /&m=auto$/.test(start.path) && !!auth && /com\.android\.chrome\//.test(top)
+    if (!ok) note(`${label} : accueil ${!!home}, ERPlead ${!!login}, bouton ${!!gb}, relais ${!!relayHit}, départ ${start?.path?.slice(-8)}, Google ${!!auth}, premier plan ${top} ; écran : ${(await screen()).join(' | ')}`)
+    return { ok, from: f0, start, state: google.auth.at(-1)?.state ?? '' }
+  }
+  const noteState = (state) => {
+    if (!state) return
+    made.states.push(sha256(state))
+    const vh = sqlRead(t.erp.ro, `select data->'vh' from sso_states where state = $1`, [sha256(state)])
+    if (vh) made.vh.push(vh)
+  }
+  const tapAccount = () => tapNode((n) => n.pkg === 'com.android.chrome' && /Personne TEST G4/.test(n.text || n.desc), 45_000)
+  const results = {}
+
+  try {
+    // ======== A + B. Connexion Google : compte touché dans le Custom Tab → 303 d'ERPlead vers le lien vérifié → l'app
+    google.mode = 'tap'
+    const b = await toGoogle('B')
+    check('A. binaire 1.0.2 lancé : la WebView charge https://projectlead.io (relais), agent « … ProjectLeadApp/1.0.2 LeadAppAuth/2 » ; sans session, l’accueil part vers le Compte Lead : écran d’ERPlead, bouton Google',
+      b.ok, b.start?.path)
+    await shot('g4-1-custom-tab-google-simule')
+    noteState(b.state)
+    const accB = await tapAccount()
+    const retB = await waitLog(b.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/callback?') && e.status === 303, 45_000)
+    const redeemB = await waitLog(b.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/app/redeem?') && isApp(e), 30_000)
+    const cbB = await waitLog(b.from, (e) => e.host === 'projectlead.io' && e.path.startsWith('/auth/lead/callback') && isApp(e), 60_000)
+    await sleep(3000)
+    const topB = await topActivity(), stackB = await activityStack()
+    const fallbackB = since(b.from).filter((e) => e.host === 'projectlead.io' && e.path.startsWith('/lead-auth/return'))
+    note(`B. fil après le compte touché : ${retB ? trace(relay.log.indexOf(retB) - 2, retB.at).join(' | ') : 'aucune 303'}`)
+    check(`B. compte touché dans le Custom Tab de Chrome → 303 d’ERPlead (fin du retour de Google, ouverture « ${google.last?.open} ») vers https://projectlead.io/lead-auth/return?code=… → Chrome remet le lien à l’app (App Link) → rachat dans la WebView ${redeemB && retB ? ((redeemB.at - retB.at) / 1000).toFixed(1) : '?'} s après, avec ce code, une fois, jamais par Chrome`,
+      !!accB && !!retB && retB.location === `${RETURN}?code=${google.code}&locale=${google.last?.locale}` && google.last?.open === 'auto' &&
+      !!redeemB && redeemB.path === `/auth/google/app/redeem?code=${google.code}` && since(b.from).filter((e) => e.path?.startsWith('/auth/google/app/redeem')).length === 1,
+      { acc: !!accB, ret: retB?.location?.slice(0, 50), fallback: fallbackB.map((e) => `${kindOf(e)} ${e.status}`), redeem: !!redeemB, errors: google.errors })
+    results.fallbackB = fallbackB.map((e) => ({ by: kindOf(e), status: e.status, after: retB ? e.at - retB.at : null }))
+    check(`B. Browser.close : le Custom Tab refermé, l’app au premier plan (${topB})`, topB.startsWith(`${APP_ID}/`) && !stackB.some((a) => /CustomTabActivity|BrowserControllerActivity/.test(a)), stackB.slice(0, 6))
+    check('B. rachat → autorisation de ProjectLead reprise → retour OpenID https://projectlead.io/auth/lead/callback depuis la WebView → échangé : jeton signé de la personne TEST (aud projectlead, nonce et state de ProjectLead)',
+      !!cbB && callbacks.length >= 1 && await exchanged(callbacks.at(-1)), cbB?.path?.slice(0, 40))
+    await shot('g4-2-retour-openid-projectlead')
+    results.tap = !!redeemB
+
+    // ======== C. La page de Google avance SEULE (validation sur un autre appareil : aucun geste dans le Custom Tab)
+    for (const delay of [6000, 20000]) {
+      google.mode = 'auto'; google.delay = delay
+      const c = await toGoogle(`C ${delay / 1000} s`)
+      noteState(c.state)
+      const retC = await waitLog(c.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/callback?') && e.status === 303, delay + 45_000)
+      const redeemC = await waitLog(c.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/app/redeem?') && isApp(e), 20_000)
+      const fallbackC = since(c.from).filter((e) => e.host === 'projectlead.io' && e.path.startsWith('/lead-auth/return'))
+      note(`C ${delay / 1000} s. fil après la 303 : ${retC ? trace(relay.log.indexOf(retC) - 2, retC.at).join(' | ') : 'aucune 303'}`)
+      await sleep(2000)
+      if (!redeemC) await shot(`g4-3-page-qui-avance-seule-${delay / 1000}s`)
+      results[`auto${delay / 1000}`] = { appOpened: !!redeemC, fallback: fallbackC.map((e) => `${kindOf(e)} ${e.status}`), top: await topActivity() }
+      check(`C. page de Google qui avance SEULE après ${delay / 1000} s (aucun geste dans le Custom Tab) → 303 vers le lien vérifié : Chrome remet quand même le lien à l’app, rachat dans la WebView ${redeemC && retC ? ((redeemC.at - retC.at) / 1000).toFixed(1) : '?'} s après`,
+        c.ok && !!retC && !!redeemC && redeemC.path === `/auth/google/app/redeem?code=${google.code}`, results[`auto${delay / 1000}`])
+    }
+    google.mode = 'tap'
+
+    // ======== D. Retour « annulé » : la VRAIE 303 d'ERPlead (aperçu) vers le lien vérifié, code d'échec → l'app
+    const d = await toGoogle('D')
+    noteState(d.state)
+    const cancelD = await tapNode((n) => n.pkg === 'com.android.chrome' && /Annuler G4/.test(n.text || n.desc), 45_000)
+    const retD = await waitLog(d.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/callback?') && /error=access_denied/.test(e.path), 45_000)
+    const redeemD = await waitLog(d.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/auth/google/app/redeem?') && isApp(e), 30_000)
+    const loginD = await waitLog(d.from, (e) => e.host === 'erplead.io' && e.path.startsWith('/login?') && /error=google/.test(e.path) && isApp(e), 30_000)
+    const codeD = new URL(retD?.location ?? 'https://x.invalid').searchParams.get('code') ?? ''
+    if (codeD) made.codes.push(sha256(codeD))
+    check('D. « Annuler » dans le Custom Tab → VRAIE réponse d’ERPlead (aperçu, error=access_denied) : 303 vers https://projectlead.io/lead-auth/return?code=… → l’app (App Link) → rachat → écran de connexion d’ERPlead avec l’erreur Google, dans la WebView',
+      d.ok && !!cancelD && retD?.to !== 'relais' && retD?.status === 303 && (retD?.location ?? '').startsWith(`${RETURN}?code=${codeD}&locale=`) &&
+      /^[A-Za-z0-9_-]{43}$/.test(codeD) && redeemD?.path === `/auth/google/app/redeem?code=${codeD}` && !!loginD, { ret: retD && { status: retD.status, to: retD.to, loc: retD.location?.slice(0, 50) }, redeem: !!redeemD, login: !!loginD })
+    await shot('g4-4-annule-erreur-google')
+
+    // ======== E. L'app TUÉE pendant le Custom Tab, relancée par l'App Link : activité neuve, accueil, aucun départ seul
+    // E1 : tuée 35 s après « Continuer avec Google » (la personne tape son mot de passe) ; E0 : tuée 5 s après (mémoire
+    // basse, Custom Tab lourd), avant que la WebView n'ait pu écrire ses cookies sur le disque d'elle-même.
+    await adbA(['root'], { timeout: 60_000 })
+    await sleep(3000)
+    for (const [label, wait] of [['E0', 5000], ['E1', 35_000]]) {
+      const e = await toGoogle(label)
+      noteState(e.state)
+      await sleep(wait)
+      const pidBefore = await appPid()
+      await adbA(['shell', 'kill', '-9', pidBefore])
+      await sleep(2000)
+      const pidGone = (await appPid()) === ''
+      holdRedeem = HOLD_MS
+      const fE = relay.log.length
+      const accE = await tapAccount()
+      const homeE = await waitLog(fE, (x) => x.host === 'projectlead.io' && x.path === '/' && isApp(x), 60_000)
+      const redeemE = await waitLog(fE, (x) => x.host === 'erplead.io' && x.path.startsWith('/auth/google/app/redeem?') && isApp(x), 45_000)
+      const cbE = await waitLog(fE, (x) => x.host === 'projectlead.io' && x.path.startsWith('/auth/lead/callback') && isApp(x), 45_000)
+      holdRedeem = 0
+      const departsE = since(fE).filter((x) => x.host === 'projectlead.io' && x.path.startsWith('/auth/lead/start') && isApp(x))
+      const pidAfter = await appPid()
+      note(`${label}. fil après le compte touché : ${trace(fE, relay.log[fE]?.at ?? Date.now(), 18).join(' | ')}`)
+      results[label] = { killedAfterMs: wait, redeem: redeemE?.status ?? null, redeemTo: redeemE?.location?.replace(/code=[^&]+/, 'code=<…>')?.slice(0, 60) ?? null, callback: !!cbE, departs: departsE.length }
+      check(`${label}. app tuée ${wait / 1000} s après « Continuer avec Google », pendant le Custom Tab (processus ${pidBefore} arrêté), compte touché → App Link → activité neuve (processus ${pidAfter || '?'}), la WebView charge l’accueil et lit le lien → rachat (retenu ${HOLD_MS / 1000} s par le relais) ; l’écran de connexion ne part PAS seul vers le Compte Lead ; retour OpenID de la personne TEST`,
+        e.ok && !!pidBefore && pidGone && !!accE && !!homeE && !!redeemE && redeemE.held === HOLD_MS && redeemE.path === `/auth/google/app/redeem?code=${google.code}` &&
+        departsE.length === 0 && !!pidAfter && pidAfter !== pidBefore && !!cbE && await exchanged(callbacks.at(-1)),
+        { pidBefore, pidGone, pidAfter, home: !!homeE, ...results[label] })
+      await shot(`g4-5-app-relancee-${label}`)
+    }
+
+    // ======== F. Contre-épreuve : domaine NON approuvé → Chrome charge la page de repli, le code n'est jamais racheté
+    const f = await toGoogle('F')
+    noteState(f.state)
+    const linksF = await approve(false)
+    const fF = relay.log.length
+    await tapAccount()
+    const fallbackF = await waitLog(fF, (x) => x.host === 'projectlead.io' && x.path.startsWith('/lead-auth/return?') && isChrome(x), 45_000)
+    await sleep(3000)
+    const redeemF = since(fF).filter((x) => x.path?.startsWith('/auth/google/app/redeem'))
+    const topF = await topActivity()
+    await shot('g4-6-sans-app-link-page-de-repli')
+    check('F. contre-épreuve, domaine NON approuvé (App Link inactif) : la même 303 → Chrome charge la page de repli https://projectlead.io/lead-auth/return (servie par l’aperçu), le code n’est jamais racheté, Chrome reste au premier plan',
+      f.ok && !/Enabled:[\s\S]*projectlead\.io/.test(linksF.split('Selection state:')[1] ?? '') && !!fallbackF && fallbackF.status === 200 && redeemF.length === 0 && /com\.android\.chrome\//.test(topF),
+      { fallback: fallbackF && fallbackF.status, redeem: redeemF.length, top: topF })
+  } catch (err) {
+    check('déroulé de la porte sans exception', false, String(err?.stack ?? err).slice(0, 400))
+  } finally {
+    check(`production jamais jointe : ${relay.log.length} requêtes de Chrome et de la WebView vers projectlead.io, erplead.io, accounts.google.com, toutes servies par le relais local`,
+      relay.log.length > 0 && relay.log.every((x) => !x.error), relay.log.filter((x) => x.error).map((x) => x.error))
+    relay.close()
+    await adbA(['shell', 'am', 'force-stop', APP_ID])
+    await adbA(['shell', 'pm', 'clear', APP_ID])
+    await adbA(['uninstall', APP_ID])
+    await adbA(['shell', 'rm', '-f', '/data/local/tmp/chrome-command-line', '/data/local/tmp/webview-command-line', '/data/local/tmp/g4-ui.xml'])
+    await adbA(['shell', 'am', 'force-stop', 'com.android.chrome'])
+    emu.stop()
+    await restorePreview(t, who, startedAt, made, orgAppBefore, ratesBefore).catch((err) => check('base d’APERÇU remise comme avant', false, err.message))
+  }
+  checkRestored(t, who, startedAt, made, orgAppBefore, ratesBefore)
+  note(`résultats : ${JSON.stringify(results)}`)
+  note(`captures : ${CAPTURES}/ (${shots.length}) ${shots.join(', ')} ; iOS non essayé (aucun Mac ici : IPA par Codemagic, non déclenché)`)
+  finish('G4')
 }
 
 // ------------------------------------------------------------------ entrée
@@ -1354,4 +1813,5 @@ if (gate === 'G1') gateG1()
 else if (gate === 'G2') gateG2()
 else if (gate === 'APERCU') await deployPreview()
 else if (gate === 'G3') await gateG3()
-else { console.log('usage : node scripts/google-app-gates.mjs G1|G2|APERCU|G3'); process.exit(2) }
+else if (gate === 'G4') await gateG4()
+else { console.log('usage : node scripts/google-app-gates.mjs G1|G2|APERCU|G3|G4'); process.exit(2) }
