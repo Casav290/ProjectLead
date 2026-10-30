@@ -26,7 +26,9 @@
 //                                             de ProjectLead → échange du code comme le serveur de ProjectLead → la personne
 //                                             TEST ; une seule fois ; liens étrangers et schéma propre ignorés ; page
 //                                             /lead-auth/return et fichiers .well-known de l'aperçu ; anciennes versions et
-//                                             web inchangés ; base d'aperçu remise comme avant
+//                                             web inchangés ; app relancée par son lien sur l'accueil (aucun départ seul
+//                                             pendant le rachat) ; page relais rechargée (Safari jamais rouvert) ; base
+//                                             d'aperçu remise comme avant
 //
 // Chaque porte vérifie vraiment et n'imprime son jeton GOOGLE_APP_Gx_OK qu'à la toute fin, si aucun contrôle n'a échoué.
 // Aucun secret affiché (adresses de base, jetons, codes, cookies masqués). Fichiers lus (hors dépôt, 600) :
@@ -1174,6 +1176,66 @@ async function gateG3() {
       redeems.length === 3 && redeems[2] === `${t.erp.url}/auth/google/app/redeem?code=${codeC}` && records('ios16', 'close').length === 0 &&
       navsC.some((u) => u.startsWith(`${t.erp.url}/login?`) && new URL(u).searchParams.get('error') === 'google'), navsC.slice(0, 3))
     await old.ctx.close(); await saf.ctx.close()
+
+    // ================================================================ H. Android : app tuée pendant le Custom Tab, relancée par l'App Link
+    // Relecture du 30.10.2026 (2e, point « moyenne ») : Android tue l'app pendant la connexion Google ; l'App Link démarre une
+    // activité neuve, la coque charge l'accueil https://projectlead.io/ (server.url) et rend le lien par getLaunchUrl. Sans
+    // session, l'accueil est l'écran de connexion, qui partait seul vers le Compte Lead et annulait le rachat en route. Ici :
+    // une page NEUVE de la même vue web (mêmes cookies et localStorage), l'accueil de l'aperçu, rachat retenu 4 s (la vraie
+    // chaîne : TLS vers erplead.io, rachat en base, 303, 302).
+    const andH = await context(ANDROID_UA, 'webview', { kind: 'androidH', platform: 'android' })
+    const h = await toRelay(andH)
+    await waitFor(() => records('androidH', 'open').length > 0, 20_000)
+    const tabH = await context(CHROME_ANDROID, 'system')
+    const gH = await openStart(tabH, records('androidH', 'open')[0]?.arg ?? '')
+    const cancelH = await cancelledReturn(tabH, gH.gstate)
+    const codeH = codeOf(cancelH.location)
+    madeCodes.push(sha256(codeH))
+    await andH.page.close()
+    const home = await andH.ctx.newPage()
+    const startsH = [], heldH = []
+    home.on('request', (r) => { if (r.isNavigationRequest() && r.url().startsWith(`${t.pl.url}/auth/lead/start`)) startsH.push(r.url()) })
+    await home.route(`${t.erp.url}/auth/google/app/redeem?*`, async (route) => {
+      heldH.push(Date.now())
+      await sleep(4000)
+      await route.fallback().catch(() => {})
+    })
+    const navsH = navLog(home)
+    launchUrl = cancelH.location
+    await home.goto(`${t.pl.url}/`, { waitUntil: 'commit' })
+    await waitFor(() => navsH.some((u) => u.startsWith(`${t.erp.url}/login?`)), 45_000)
+    const loginH = navsH.find((u) => u.startsWith(`${t.erp.url}/login?`)) ?? ''
+    check('H. Android, app tuée pendant le Custom Tab puis relancée par l’App Link : l’accueil sans session lit le lien de lancement → rachat (retenu 4 s) ; l’écran de connexion ne part PAS seul vers le Compte Lead ; une seule fermeture, l’écran de connexion d’ERPlead avec l’erreur Google (retour « annulé »)',
+      h.button && gH.accepted && cancelH.status === 303 && /^[A-Za-z0-9_-]{43}$/.test(codeH) && heldH.length === 1 && startsH.length === 0 &&
+      redeems.length === 4 && redeems[3] === `${t.erp.url}/auth/google/app/redeem?code=${codeH}` && records('androidH', 'close').length === 1 &&
+      new URL(loginH || 'https://x.invalid').searchParams.get('error') === 'google', { starts: startsH, held: heldH.length, redeems: redeems.length, navs: navsH.slice(0, 4) })
+    launchUrl = null
+    await andH.ctx.close(); await tabH.ctx.close()
+
+    // ================================================================ I. iOS 16 : page relais rechargée pendant la connexion dans Safari
+    // Relecture du 30.10.2026 (2e, point « basse ») : iOS tue le processus WebContent de l'app pendant que la personne est
+    // dans Safari ; Capacitor recharge la page relais (bridge.reset(), webView.reload()) ; le Universal Link du bouton
+    // « Ouvrir ProjectLead » arrive par getLaunchUrl. La page ne rouvre pas Safari (départ déjà servi) et rachète le code.
+    const oldI = await context(IOS_OLD_UA, 'webview', { kind: 'ios16I', platform: 'ios', https: false })
+    const ci = await toRelay(oldI)
+    await waitFor(() => records('ios16I', 'external').length > 0, 20_000)
+    const safI = await context(SAFARI, 'system')
+    const gI = await openStart(safI, records('ios16I', 'external')[0]?.arg ?? '')
+    const cancelI = await cancelledReturn(safI, gI.gstate)
+    const codeI = codeOf(cancelI.location)
+    madeCodes.push(sha256(codeI))
+    const navsI = navLog(oldI.page)
+    launchUrl = `${RETURN}?code=${codeI}&locale=fr`
+    const relayUrlI = oldI.page.url()
+    await oldI.page.reload({ waitUntil: 'commit' })
+    await waitFor(() => navsI.some((u) => u.startsWith(`${t.erp.url}/login?`)), 45_000)
+    const loginI = navsI.find((u) => u.startsWith(`${t.erp.url}/login?`)) ?? ''
+    check('I. iOS 16, page relais RECHARGÉE pendant la connexion dans Safari (processus WebContent tué), Universal Link relu par getLaunchUrl : Safari jamais rouvert (départ déjà servi), rachat une fois, puis l’écran de connexion d’ERPlead avec l’erreur Google',
+      ci.button && relayUrlI.startsWith(`${t.pl.url}/lead-auth/google?start=`) && gI.accepted && cancelI.status === 303 && records('ios16I', 'external').length === 1 &&
+      redeems.length === 5 && redeems[4] === `${t.erp.url}/auth/google/app/redeem?code=${codeI}` && records('ios16I', 'close').length === 0 &&
+      new URL(loginI || 'https://x.invalid').searchParams.get('error') === 'google', { externals: records('ios16I', 'external').length, redeems: redeems.length, navs: navsI.slice(0, 4) })
+    launchUrl = null
+    await oldI.ctx.close(); await safI.ctx.close()
 
     // ================================================================ E. textes de la page relais (cinq langues, Custom Tab et Safari)
     for (const [kind, ua, bridge, mode] of [['android', ANDROID_UA, { kind: 'android-lang', platform: 'android' }, 'browser'],
