@@ -280,6 +280,37 @@ delete process.env.ASSISTANT_USER_PER_HOUR
 check('L6 quotas existants inchangés : sous le budget gratuit, la limite par heure refuse encore (429 assistant_quota)',
   q1.status === 200 && q2.status === 200 && q3.status === 429 && q3.body?.error === 'assistant_quota' && q3.body.scope === 'user', [q1.status, q2.status, q3])
 
+// Des demandes lancées en même temps (plusieurs onglets, ou Promise.all de fetch depuis la console du navigateur) : un tour
+// en cours (ligne réservée, jetons pas encore connus) compte pour une demande-type ; au plus autant de tours en même temps
+// qu'il reste de demandes (arrondi supérieur). Le faux service répond en 3 s (LENT) : tous les tours se chevauchent.
+const route = await import('../server/routes/assistant.js')
+const { OPEN_TURN_MS } = budget as typeof budget & { OPEN_TURN_MS?: number }
+const tally = (xs: { status: number; body: any }[]) => ({ served: xs.filter((x) => x.status === 200).length,
+  refused: xs.filter((x) => x.status === 402 && x.body?.error === 'free_limit').length, statuses: xs.map((x) => x.status).join(' ') })
+{
+  const Z = await company('Zoe')
+  fake.seen.length = 0
+  const t = tally(await Promise.all(Array.from({ length: 12 }, (_, i) => ask(Z.cl, `LENT:3000 question ${i}`))))
+  check('L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours compte pour une demande-type), 2 refusées (402 free_limit) sans appel au modèle',
+    t.served === 10 && t.refused === 2 && fake.seen.length === 10, { ...t, calls: fake.seen.length })
+  const Z2 = await company('Zia')
+  await pose(Z2.id, 150_000)
+  fake.seen.length = 0
+  const t2 = tally(await Promise.all(Array.from({ length: 6 }, (_, i) => ask(Z2.cl, `LENT:3000 question ${i}`))))
+  check('L4 demandes simultanées : à 150 000 consommés, 6 lancées ensemble → 3 servies (150 000, 170 000, 190 000 comptés), 3 refusées sans appel au modèle',
+    t2.served === 3 && t2.refused === 3 && fake.seen.length === 3, { ...t2, calls: fake.seen.length })
+  const Y = await company('Yan')
+  // Une ligne restée ouverte plus longtemps que la fonction ne peut tourner (fonction arrêtée, journal jamais complété).
+  await pool.query(`insert into assistant_usage (account_id, user_id, kind, created_at) values ($1, $2, 'message', now() - interval '7 minutes')`, [Y.id, Y.userId])
+  const y1 = await allowance(Y.cl)
+  await pool.query(`insert into assistant_usage (account_id, user_id, kind) values ($1, $2, 'message')`, [Y.id, Y.userId])
+  const y2 = await allowance(Y.cl)
+  check('L4 un tour en cours compte pour une demande-type (20 000) tant que ses jetons ne sont pas connus ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus',
+    y1?.requests === 10 && y1.used === 0 && y2?.requests === 9 && y2.used === REQUEST_TOKENS, { y1, y2 })
+  check('L4 un tour en cours compte tant que la fonction peut tourner : OPEN_TURN_MS (budget.ts) = MAX_DURATION_MS (server/routes/assistant.ts)',
+    OPEN_TURN_MS === route.MAX_DURATION_MS, { OPEN_TURN_MS, MAX_DURATION_MS: route.MAX_DURATION_MS })
+}
+
 // La consigne envoyée au modèle (P3 statique) : bloc stable mis en cache avec le périmètre, bloc variable sans.
 fake.seen.length = 0
 await ask(H.cl, 'Bonjour')

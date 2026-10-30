@@ -12,10 +12,10 @@
  * G1  tests du périmètre et de la limite (scripts/assistant-limites-check.ts) relancés et verts ; tableau
  *     « Périmètre et limite gratuite (29.10.2026) » de docs/ASSISTANT-ACTIONS.md : P1–P3 et L1–L8, chaque `fichier:ligne`
  *     « extrait » existe et porte l'extrait, chaque test nommé est passé ; quelques preuves lues dans le code (refus
- *     avant le modèle, décision « gratuit » par planOf, une seule source des constantes) ; CONTRE-ÉPREUVES RÉELLES : cinq
- *     copies du commit volontairement fautives (refus retiré, Pro limité, mois jamais remis à zéro, calcul SQL faux,
- *     consigne sans périmètre) font échouer les tests attendus ; le contrôle du tableau voit une ligne décalée et un test
- *     inconnu.
+ *     avant le modèle, décision « gratuit » par planOf, une seule source des constantes) ; CONTRE-ÉPREUVES RÉELLES : six
+ *     copies du commit volontairement fautives (refus retiré, Pro limité, mois jamais remis à zéro, calcul SQL faux, tours
+ *     en cours non comptés, consigne sans périmètre) font échouer les tests attendus ; le contrôle du tableau voit une ligne
+ *     décalée et un test inconnu.
  * G2  contrôles complets de l'application : les anciennes portes locales (scripts/assistant-actions-gates.mjs G1, G2, G3,
  *     G7 : inventaire, tests de l'assistant, cinq langues, types, npm test, suites, build, paquet, alignement B1–B14) ;
  *     aucune migration ni changement de db/ depuis la production (db/etape-5b intacte) ; commit au-dessus de la production.
@@ -139,6 +139,10 @@ const MUTANTS = [
   { what: 'calcul SQL faux (sortie non pondérée)', file: 'server/lib/assistant/budget.ts',
     from: '+ ` + cache_read_tokens * ${WEIGHTS.cacheRead} + output_tokens * ${WEIGHTS.output})`', to: '+ ` + cache_read_tokens * ${WEIGHTS.cacheRead} + output_tokens * 1)`',
     fails: ['L1 calcul pondéré : la somme du mois en SQL (journal assistant_usage) = le calcul JS, mêmes champs'] },
+  { what: 'tours en cours non comptés (des demandes lancées ensemble passent toutes sous le budget)', file: 'server/lib/assistant/budget.ts',
+    from: 'then ${REQUEST_TOKENS} else ${WEIGHTED_SQL} end', to: 'then 0 else ${WEIGHTED_SQL} end',
+    fails: ['L4 demandes simultanées : 12 lancées ensemble à 0 consommé → 10 servies (un tour en cours compte pour une demande-type), 2 refusées (402 free_limit) sans appel au modèle',
+      'L4 un tour en cours compte pour une demande-type (20 000) tant que ses jetons ne sont pas connus ; une ligne restée ouverte plus longtemps qu’un tour ne compte plus'] },
   { what: 'consigne sans périmètre', file: 'server/lib/assistant/prompt.ts',
     from: '# Périmètre : ProjectLead seulement', to: '# Remarques',
     fails: ['P1 consigne : section « Périmètre : ProjectLead seulement » dans le bloc stable, avant le reste',

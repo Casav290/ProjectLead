@@ -10,6 +10,8 @@ import { allowanceOf, monthlyUsage, type Allowance } from './budget.js'
  * En plus, la limite de la formule gratuite (29.10.2026, lib/assistant/budget.ts) : la formule de l'entreprise (`planOf`,
  * la même fonction que les autres limites) donne un budget du mois en jetons pondérés, ou aucun ; budget atteint →
  * `free_limit`, rien n'est réservé et le modèle n'est pas appelé. Ces quotas restent : ils valent pour toutes les formules.
+ * Sous le même verrou, chaque tour encore en cours compte pour une demande-type (`monthlyUsage`, `OPEN_TURN_MS`) : des
+ * demandes lancées ensemble ne voient pas toutes la même consommation sous le budget.
  */
 export const USER_PER_HOUR = () => Number(process.env.ASSISTANT_USER_PER_HOUR) || 40
 export const ACCOUNT_PER_DAY = () => Number(process.env.ASSISTANT_ACCOUNT_PER_DAY) || 400

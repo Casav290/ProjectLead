@@ -11,7 +11,8 @@ import type { Db } from '../../db.js'
  * - L3 : QUI est limité ne se décide pas ici : c'est la formule de l'entreprise, par la même fonction que les autres
  *   limites (server/lib/plans.ts, `planOf` → `assistantBudget`, null quand la formule n'a pas de limite).
  * - L4 : avant chaque tour, consommation du mois ≥ budget → aucun appel au modèle (server/lib/assistant/quota.ts). Un tour
- *   déjà commencé n'est pas coupé : il peut dépasser un peu le budget (ses jetons ne sont connus qu'à la fin).
+ *   déjà commencé n'est pas coupé : il peut dépasser un peu le budget (ses jetons ne sont connus qu'à la fin). Tant qu'il
+ *   tourne, il compte pour une demande-type (`OPEN_TURN_MS`) : des demandes lancées en même temps ne passent pas toutes.
  * - L5 : la bulle dit « il vous reste environ N demandes », N = arrondi inférieur de (budget − consommation) / 20 000.
  */
 export const WEIGHTS = { input: 1, cacheWrite: 1.25, cacheRead: 0.1, output: 5 } as const
@@ -37,12 +38,24 @@ export const monthStart = (now = new Date()) => new Date(Date.UTC(now.getUTCFull
 export const nextMonthStart = (now = new Date()) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
 
 /**
+ * Un tour en cours : sa ligne est réservée (`reserveMessage`) mais ses jetons ne sont écrits qu'à la fin (`completeUsage`,
+ * `ok` encore vide). Il compte pour une demande-type tant qu'il peut tourner : des demandes lancées en même temps (plusieurs
+ * onglets, un script dans la console du navigateur) ne voient pas toutes le même reste ; au plus autant de tours en même
+ * temps qu'il reste de demandes (arrondi supérieur). Au-delà de la durée maximale de la fonction (MAX_DURATION_MS de
+ * server/routes/assistant.ts, 300 s : égalité vérifiée par scripts/assistant-limites-check.ts), une ligne restée ouverte
+ * (fonction arrêtée, journal jamais complété) ne compte plus.
+ */
+export const OPEN_TURN_MS = 5 * 60_000
+
+/**
  * Les jetons pondérés consommés par l'entreprise pendant le mois civil (UTC) de `now`, dans la transaction de l'appelant
- * (RLS de l'entreprise). Les tours seulement (`kind = 'message'`) : une confirmation n'appelle pas le modèle.
+ * (RLS de l'entreprise), plus une demande-type par tour en cours (`OPEN_TURN_MS`). Les tours seulement
+ * (`kind = 'message'`) : une confirmation n'appelle pas le modèle.
  */
 export async function monthlyUsage(db: Db, accountId: string, now = new Date()): Promise<number> {
   const r = await db.query(
-    `select coalesce(sum(${WEIGHTED_SQL}), 0)::float8 as used from assistant_usage
+    `select coalesce(sum(case when ok is null and created_at > now() - interval '${OPEN_TURN_MS / 1000} seconds'
+                         then ${REQUEST_TOKENS} else ${WEIGHTED_SQL} end), 0)::float8 as used from assistant_usage
       where account_id = $1 and kind = 'message' and created_at >= $2 and created_at < $3`,
     [accountId, monthStart(now), nextMonthStart(now)])
   return Number(r.rows[0]?.used ?? 0)
