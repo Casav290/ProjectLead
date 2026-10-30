@@ -1295,10 +1295,31 @@ for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   const platformOf = (r: Response) => { try { return new URL(r.headers.get('location') ?? '').searchParams.get('platform') } catch { return 'illisible' } }
   check('app mobile : départ vers le Compte Lead avec platform=app', inApp.status === 302 && platformOf(inApp) === 'app', inApp.headers.get('location'))
   check('navigateur : départ sans platform', web.status === 302 && platformOf(web) === null, web.headers.get('location'))
-  // Nouvelle version de l'app (30.10.2026, « Continuer avec Google » dans l'app) : agent « ProjectLeadApp/1.0.2 LeadAppAuth/1 ».
-  // Même départ (platform=app) : c'est ERPlead qui lit LeadAppAuth/1 et offre alors Google par le navigateur du téléphone.
-  const newApp = await app.request('http://localhost/auth/lead/start?next=/projets', { headers: { 'user-agent': `${appUa.replace('1.0.0', '1.0.2')} LeadAppAuth/1` } })
-  check('app mobile, nouvelle version (LeadAppAuth/1) : départ avec platform=app', newApp.status === 302 && platformOf(newApp) === 'app', newApp.headers.get('location'))
+  // Nouvelle version de l'app (30.10.2026, « Continuer avec Google » dans l'app, liens vérifiés) : agent
+  // « ProjectLeadApp/1.0.2 LeadAppAuth/2 ». Même départ (platform=app) : c'est ERPlead qui lit LeadAppAuth/2 et offre alors
+  // Google par le navigateur sûr du téléphone.
+  const newApp = await app.request('http://localhost/auth/lead/start?next=/projets', { headers: { 'user-agent': `${appUa.replace('1.0.0', '1.0.2')} LeadAppAuth/2` } })
+  check('app mobile, nouvelle version (LeadAppAuth/2) : départ avec platform=app', newApp.status === 302 && platformOf(newApp) === 'app', newApp.headers.get('location'))
+}
+{
+  // Les fichiers d'association des liens d'app (routes/appLinks.ts) : 200, application/json, aucune redirection, pour tout
+  // agent (robot d'Apple, de Google, navigateur), y compris depuis www ; le lien de retour seul est revendiqué.
+  const aasa = { applinks: { details: [{ appIDs: ['X6K5247J6G.io.projectlead.app'], components: [{ '/': '/lead-auth/return',
+    comment: "Retour de « Continuer avec Google » (Compte Lead) vers l'app" }] }] }, webcredentials: { apps: ['X6K5247J6G.io.projectlead.app'] } }
+  const links = [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'io.projectlead.app',
+    sha256_cert_fingerprints: ['4C:19:E3:F6:B5:48:5E:F4:93:07:0D:5C:CA:DF:6F:F5:CF:D7:59:36:6E:F5:83:84:1B:1D:C4:64:B3:B4:4E:2C',
+      'E1:42:CC:0C:43:67:1C:EC:CA:C6:3D:32:31:C3:4D:57:E4:5A:3E:AD:F0:27:D1:3B:27:64:B5:C8:43:4A:5E:2A'] } }]
+  for (const [path, want] of [['/.well-known/apple-app-site-association', aasa], ['/.well-known/assetlinks.json', links]] as const) {
+    for (const [host, ua] of [['localhost', 'AASA-Bot/1.0.0'], ['www.localhost', 'Mozilla/5.0 (compatible; Google-Digital-Asset-Links)'], ['localhost', 'curl/8']]) {
+      const res = await app.request(`http://${host}${path}`, { headers: { 'user-agent': ua } })
+      const body = await res.text()
+      check(`liens d'app : ${path} (${host}, ${ua.split(/[/ ]/)[0]}) → 200 application/json, contenu exact, aucune redirection`,
+        res.status === 200 && res.headers.get('content-type') === 'application/json' && !res.headers.get('location') &&
+        JSON.stringify(JSON.parse(body)) === JSON.stringify(want), { status: res.status, type: res.headers.get('content-type'), body: body.slice(0, 200) })
+    }
+  }
+  const nope = await app.request('http://localhost/.well-known/apple-app-site-association.json')
+  check('liens d’app : aucune autre adresse (…association.json) servie comme fichier d’association', !(nope.headers.get('content-type') ?? '').includes('application/json'), nope.status)
 }
 {
   // Le retour d'ERPlead arrive sur l'adresse sans www : un départ depuis www y est renvoyé avant de poser son cookie.

@@ -4,11 +4,11 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { I18nProvider, initI18n } from './i18n'
 import './index.css'
-import { leadAppAuth } from './lib/leadAppAuth'
+import { leadAppAuth, RELAY_PATH } from './lib/leadAppAuth'
 
-// Dans l'app mobile seulement (pont Capacitor natif) : le retour de « Continuer avec Google » (lien
-// io.projectlead.app://lead-auth), écouté sur toutes les pages dès le démarrage. Rien sur le site.
-leadAppAuth().listen()
+// Dans l'app mobile seulement (pont Capacitor natif) : le retour de « Continuer avec Google » (lien vérifié
+// https://projectlead.io/lead-auth/return), écouté sur toutes les pages dès le démarrage. Rien sur le site.
+leadAppAuth().listen({ relayPage: window.location.pathname === RELAY_PATH })
 
 // La langue de départ se charge avant le premier rendu : jamais une clé brute ni une autre langue à l'écran.
 initI18n().finally(() => ReactDOM.createRoot(document.getElementById('root')!).render(

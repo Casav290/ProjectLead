@@ -1,0 +1,6 @@
+{
+ "leadauth.return.title": "Zurück zu ProjectLead",
+ "leadauth.return.body": "ProjectLead hat sich nicht von selbst geöffnet. Schließen Sie diese Seite und kehren Sie in die App zurück; falls Sie nicht angemeldet sind, tippen Sie erneut auf „Weiter mit Google“. Wenn das wieder vorkommt: Aktualisieren Sie die App (App Store oder Google Play) oder tippen Sie auf „Passwort vergessen?“.",
+ "leadauth.return.android": "Sie können ProjectLead auch erlauben, seine Links zu öffnen: Einstellungen > Apps > ProjectLead > Standardmäßig öffnen.",
+ "leadauth.return.nothing": "Sie haben in der App ProjectLead nichts angefordert? Schließen Sie diese Seite einfach."
+}

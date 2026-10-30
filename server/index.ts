@@ -30,6 +30,7 @@ import workRoutes, { publicForms } from './routes/work.js'
 import v1Routes from './routes/v1.js'
 import billingRoutes, { webhook as stripeWebhook } from './routes/billing.js'
 import assistantRoutes from './routes/assistant.js'
+import appLinkRoutes from './routes/appLinks.js'
 import { bindAssistantApp } from './lib/assistant/internal.js'
 
 const app = new Hono<Env>()
@@ -62,6 +63,8 @@ app.use('*', async (c, next) => {
 
 // ------------------------------------------------------------------ routes ouvertes
 
+// Fichiers d'association des liens d'app (apple-app-site-association, assetlinks.json : routes/appLinks.ts).
+app.route('/', appLinkRoutes)
 app.route('/', authRoutes)
 app.route('/', exchangeRoutes)
 app.route('/api/public/portal', publicPortal)
@@ -174,6 +177,11 @@ app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404))
 const dist = join(import.meta.dirname, '..', 'dist')
 if (existsSync(dist)) {
   app.use('/assets/*', serveStatic({ root: './dist' }))
+  // La page de retour de « Continuer avec Google » (lead-auth-return.html), avec les en-têtes que pose Vercel
+  // (scripts/vercel-build.mjs) : jamais en cache, sans Referer, hors des moteurs de recherche.
+  const leadAuthReturn = existsSync(join(dist, 'lead-auth-return.html')) ? readFileSync(join(dist, 'lead-auth-return.html'), 'utf8') : null
+  if (leadAuthReturn) app.get('/lead-auth/return', (c) => c.html(leadAuthReturn, 200,
+    { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex' }))
   app.use('*', serveStatic({ root: './dist' }))
   const index = readFileSync(join(dist, 'index.html'), 'utf8')
   app.get('*', (c) => c.html(index))

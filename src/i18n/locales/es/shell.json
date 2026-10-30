@@ -128,6 +128,7 @@
  "shell.invite.subtitle": "Ha sido invitado como {role} con la dirección {email}.",
  "shell.leadAuth.back": "Volver",
  "shell.leadAuth.body": "El inicio de sesión con Google se abre en el navegador del teléfono. Una vez iniciada la sesión, vuelve aquí automáticamente.",
+ "shell.leadAuth.safari": "Termine el inicio de sesión en Safari y luego toque «Abrir ProjectLead».",
  "shell.leadAuth.title": "Inicio de sesión con Google…",
  "shell.legal.privacy": "Privacidad",
  "shell.legal.terms": "Condiciones de uso",

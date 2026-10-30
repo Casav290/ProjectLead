@@ -128,6 +128,7 @@
  "shell.invite.subtitle": "You have been invited as {role} with the address {email}.",
  "shell.leadAuth.back": "Back",
  "shell.leadAuth.body": "Google sign-in opens in your phone's browser. Once you are signed in, you come back here automatically.",
+ "shell.leadAuth.safari": "Finish signing in in Safari, then tap “Open ProjectLead”.",
  "shell.leadAuth.title": "Signing in with Google…",
  "shell.legal.privacy": "Privacy",
  "shell.legal.terms": "Terms of use",
