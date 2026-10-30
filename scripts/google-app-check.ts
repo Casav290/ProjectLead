@@ -6,9 +6,11 @@
  *
  * src/lib/leadAppAuth.ts avec un faux pont Capacitor (App : appUrlOpen, getLaunchUrl ; Browser : open, close,
  * browserFinished), de faux stockages et un location.replace noté :
- * 1. le lien de retour exact `io.projectlead.app://lead-auth?code=…` → Browser.close, puis la vue web au rachat
- *    d'ERPlead avec le code, UNE fois (appUrlOpen et getLaunchUrl, page rechargée) ; liens étrangers ignorés ; lien mal
- *    formé ou demande échue → l'écran de connexion de l'app (back) ou /login, jamais de rachat ;
+ * 1. le lien de retour exact `io.projectlead.app://lead-auth?code=…`, pendant une connexion Google en cours (page relais)
+ *    → Browser.close, puis la vue web au rachat d'ERPlead avec le code, UNE fois (appUrlOpen et getLaunchUrl, page
+ *    rechargée, le lendemain) ; liens étrangers ignorés ; lien mal formé ou demande échue → l'écran de connexion de l'app
+ *    (back) ou /login, jamais de rachat ; sans connexion en cours (lien venu d'ailleurs, connexion échue ou déjà revenue,
+ *    ancien lien redonné par getLaunchUrl) : rien ;
  * 2. la page relais : préfixes exacts de l'émetteur, back gardé, Browser.open({ url: start }) une fois, navigateur refermé
  *    sans retour → back ; hors de l'app → back ;
  * 3. rien hors de l'app (site web : aucun écouteur) ; l'émetteur vient du serveur (/api/auth/options → leadIssuer) ;
@@ -59,6 +61,10 @@ class MemStore {
 type FakeOpts = {
   native?: boolean; app?: boolean; browser?: boolean; closeRejects?: boolean; openRejects?: boolean
   issuer?: string | (() => Promise<string>); launchUrl?: string | null; local?: MemStore; session?: MemStore
+  /** L'horloge de la page (Date.now par défaut). */
+  now?: () => number
+  /** La coque répond à getLaunchUrl après ce délai (ms). */
+  launchDelayMs?: number
 }
 /** Un chargement de page dans la vue web de l'app : faux pont, faux stockages, navigations notées. */
 function fake(o: FakeOpts = {}) {
@@ -69,7 +75,10 @@ function fake(o: FakeOpts = {}) {
     log.push(`listen:${plugin}:${event}`); (listeners[event] ??= []).push(cb); return { remove: async () => {} }
   }
   const Plugins: any = {}
-  if (o.app !== false) Plugins.App = { addListener: on('App'), getLaunchUrl: async () => (o.launchUrl ? { url: o.launchUrl } : {}) }
+  if (o.app !== false) Plugins.App = { addListener: on('App'), getLaunchUrl: async () => {
+    if (o.launchDelayMs) await new Promise((r) => setTimeout(r, o.launchDelayMs))
+    return o.launchUrl ? { url: o.launchUrl } : {}
+  } }
   if (o.browser !== false) Plugins.Browser = {
     addListener: on('Browser'),
     open: async ({ url }: { url: string }) => { log.push(`open:${url}`); if (o.openRejects) throw new Error('Unable to display URL') },
@@ -82,17 +91,28 @@ function fake(o: FakeOpts = {}) {
     replace: (url) => log.push(`replace:${url}`),
     issuer: typeof o.issuer === 'function' ? o.issuer : async () => (o.issuer as string | undefined) ?? ISS,
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length },
+    ...(o.now ? { now: o.now } : {}),
   })
   const fire = (event: string, data?: unknown) => (listeners[event] ?? []).forEach((cb) => cb(data))
   const replaces = () => log.filter((x) => x.startsWith('replace:')).map((x) => x.slice('replace:'.length))
   return { auth, log, fire, timers, local, session, replaces, closes: () => log.filter((x) => x === 'close').length,
     opens: () => log.filter((x) => x.startsWith('open:')).map((x) => x.slice(5)) }
 }
+/**
+ * Une connexion Google en cours, comme dans l'app : la page relais d'un chargement précédent (même localStorage, autre
+ * sessionStorage : comme une app relancée par le lien) a ouvert le navigateur du téléphone ; puis la page qui reçoit le lien.
+ */
+async function armed(o: FakeOpts = {}) {
+  const local = o.local ?? new MemStore()
+  const r = await fake({ local, now: o.now }).auth.relay(relaySearch())
+  if (r.outcome !== 'opened') throw new Error(`relais : ${r.outcome}`)
+  return fake({ ...o, local })
+}
 
 // ------------------------------------------------------------------ 1. lien de retour
 await block('1. Lien de retour io.projectlead.app://lead-auth', async () => {
   {
-    const f = fake()
+    const f = await armed()
     check('écoute posée dans l’app : appUrlOpen (App), lien de lancement lu', f.auth.listen() === true && f.log.includes('listen:App:appUrlOpen'), f.log)
     f.fire('appUrlOpen', { url: LINK })
     await flush()
@@ -101,7 +121,7 @@ await block('1. Lien de retour io.projectlead.app://lead-auth', async () => {
       f.closes() === 1 && close >= 0 && close < nav && JSON.stringify(f.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code()}`]), f.log)
   }
   {
-    const f = fake({ launchUrl: LINK })
+    const f = await armed({ launchUrl: LINK })
     f.auth.listen()
     f.fire('appUrlOpen', { url: LINK })
     await flush()
@@ -117,8 +137,97 @@ await block('1. Lien de retour io.projectlead.app://lead-auth', async () => {
     const other = `${RETURN_PREFIX}code=${code('B')}`
     g.fire('appUrlOpen', { url: other })
     await flush()
-    check('un autre code ensuite : traité, une fois', JSON.stringify(g.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code('B')}`]), g.log)
+    check('une seule connexion par page relais : après le retour, un autre lien (autre code, sans nouvelle page relais) est ignoré (ni navigation, ni fermeture)',
+      g.replaces().length === 0 && g.closes() === 0, g.log)
+    const h = await armed({ local: f.local, session: f.session })
+    h.auth.listen()
+    const third = `${RETURN_PREFIX}code=${code('D')}`
+    h.fire('appUrlOpen', { url: third })
+    await flush()
+    check('nouvelle connexion Google (nouvelle page relais) : son lien est traité, une fois', JSON.stringify(h.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code('D')}`]), h.log)
     check('le stockage ne garde que des empreintes (jamais le code)', ![...f.local.m.values(), ...f.session.m.values()].join(' ').includes(code()), [...f.local.m.values()])
+  }
+  {
+    // Le scénario de la relecture : lundi 9 h connexion Google ; l'app reste en mémoire et iOS redonne le même lien
+    // (lastURL) à chaque chargement complet de page ; mardi 9 h 30, la reconnexion silencieuse recharge la page.
+    let clock = Date.parse('2026-11-02T09:00:00Z')
+    const now = () => clock
+    const f = await armed({ now })
+    f.auth.listen()
+    f.fire('appUrlOpen', { url: LINK })
+    await flush()
+    clock = Date.parse('2026-11-03T09:30:00Z')
+    const g = fake({ launchUrl: LINK, local: f.local, now })
+    g.auth.listen()
+    await flush()
+    clock = Date.parse('2026-11-09T09:30:00Z')
+    const h = fake({ launchUrl: LINK, local: f.local, now })
+    h.auth.listen()
+    await flush()
+    check('24 h et 7 jours plus tard (app restée en mémoire, getLaunchUrl redonne le lien de lundi) : jamais rejoué (ni navigation, ni fermeture)',
+      f.replaces().length === 1 && g.replaces().length === 0 && g.closes() === 0 && h.replaces().length === 0 && h.closes() === 0, { f: f.log, g: g.log, h: h.log })
+  }
+  {
+    // Le lendemain, une nouvelle connexion Google : getLaunchUrl redonne toujours le lien de lundi sur la page relais.
+    let clock = Date.parse('2026-11-02T09:00:00Z')
+    const now = () => clock
+    const f = await armed({ now })
+    f.auth.listen()
+    f.fire('appUrlOpen', { url: LINK })
+    await flush()
+    clock = Date.parse('2026-11-03T10:00:00Z')
+    const k = fake({ launchUrl: LINK, local: f.local, now })
+    k.auth.listen()
+    await k.auth.relay(relaySearch())
+    await flush()
+    const fresh = `${RETURN_PREFIX}code=${code('E')}`
+    k.fire('appUrlOpen', { url: fresh })
+    await flush()
+    check('le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré, seul le nouveau lien est racheté',
+      JSON.stringify(k.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code('E')}`]), k.log)
+  }
+  {
+    const f = fake()
+    f.auth.listen()
+    f.fire('appUrlOpen', { url: LINK })
+    f.fire('appUrlOpen', { url: `${RETURN_PREFIX}error=expired` })
+    await flush()
+    check('aucune connexion Google en cours (aucune page relais) : un lien de retour venu d’ailleurs (courriel, page, code QR, autre app), code ou error=expired, est ignoré (ni navigation, ni fermeture)',
+      f.replaces().length === 0 && f.closes() === 0, f.log)
+    // Ce lien ne sert pas non plus plus tard : la page relais suivante (getLaunchUrl le redonne) ne le prend pas pour son retour.
+    const g = fake({ launchUrl: LINK, local: f.local })
+    g.auth.listen()
+    await g.auth.relay(relaySearch())
+    await flush()
+    check('… et une connexion Google suivante ne le reprend pas (getLaunchUrl le redonne sur la page relais) : ni navigation, ni fermeture',
+      g.replaces().length === 0 && g.closes() === 0, g.log)
+  }
+  {
+    // La coque répond lentement à getLaunchUrl : la page relais attend sa réponse avant de poser l'attente.
+    const stale = `${RETURN_PREFIX}code=${code('F')}`
+    const f = fake({ launchUrl: stale, launchDelayMs: 40 })
+    f.auth.listen()
+    await f.auth.relay(relaySearch())
+    await new Promise((r) => setTimeout(r, 80))
+    await flush()
+    check('page relais : le lien que la coque redonne au chargement (lent à venir) est lu avant de poser l’attente, jamais pris pour le retour de cette connexion',
+      f.replaces().length === 0 && f.closes() === 0 && f.opens().length === 1, f.log)
+  }
+  {
+    let clock = Date.parse('2026-11-02T09:00:00Z')
+    const now = () => clock
+    const f = await armed({ now })
+    clock += 16 * 60 * 1000
+    f.auth.listen()
+    f.fire('appUrlOpen', { url: LINK })
+    await flush()
+    const g = await armed({ now })
+    clock += 14 * 60 * 1000
+    g.auth.listen()
+    g.fire('appUrlOpen', { url: LINK })
+    await flush()
+    check('connexion en cours échue (page relais il y a 16 min, ERPlead garde le départ 10 min) : lien ignoré ; à 14 min : racheté',
+      f.replaces().length === 0 && f.closes() === 0 && JSON.stringify(g.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code()}`]), { f: f.log, g: g.log })
   }
   {
     const foreign = [
@@ -127,59 +236,61 @@ await block('1. Lien de retour io.projectlead.app://lead-auth', async () => {
       `IO.PROJECTLEAD.APP://lead-auth?code=${code()}`, ` ${LINK}`, `io.projectlead.app://lead-auth.evil?code=${code()}`, `io.projectlead.app://lead-auth`,
       `io.projectlead.app://LEAD-AUTH?code=${code()}`, '', null, 42, { url: LINK },
     ]
-    const f = fake()
+    const f = await armed()
     f.auth.listen()
     for (const u of foreign) f.fire('appUrlOpen', { url: u })
     f.fire('appUrlOpen', undefined)
     await flush()
-    check(`liens étrangers ignorés (${foreign.length + 1} : autre app, ancien retour sso, autre chemin ou hôte, schéma voisin, https, majuscules, espace, vide, pas une chaîne) : ni navigation, ni fermeture`,
-      f.replaces().length === 0 && f.closes() === 0, f.log)
+    f.fire('appUrlOpen', { url: LINK })
+    await flush()
+    check(`liens étrangers ignorés (${foreign.length + 1} : autre app, ancien retour sso, autre chemin ou hôte, schéma voisin, https, majuscules, espace, vide, pas une chaîne) : ni navigation, ni fermeture, la connexion en cours attend toujours son lien`,
+      JSON.stringify(f.replaces()) === JSON.stringify([`${ISS}/auth/google/app/redeem?code=${code()}`]) && f.closes() === 1, f.log)
   }
   {
     const bad = [`code=${code().slice(0, 42)}`, `code=${code()}A`, `code=${code().slice(0, 42)}+`, `code=${code().slice(0, 42)}%2F`,
       `code=${code()}&code=${code('B')}`, '', 'error=google', `code=${code()}%00`, `code=${code()}#x`]
     const out: string[][] = []
     for (const q of bad) {
-      const f = fake()
+      const f = await armed()
       out.push(await f.auth.handleReturnLink(`${RETURN_PREFIX}${q}`).then(() => f.replaces()))
     }
     check(`lien mal formé (${bad.length} : code de 42 ou 44 caractères, hors base64url, deux codes, sans code, suffixe) : jamais de rachat, la connexion normale de l’app (/login)`,
       out.every((r) => JSON.stringify(r) === '["/login"]'), out)
   }
   {
-    const s = new MemStore()
-    const f = fake({ session: s })
+    const s = new MemStore(), local = new MemStore()
+    const f = fake({ session: s, local })
     await f.auth.relay(relaySearch())
-    const g = fake({ session: s })
+    const g = fake({ session: s, local })
     await g.auth.handleReturnLink(`${RETURN_PREFIX}error=expired`)
     check('demande échue (error=expired) : l’écran de connexion de l’app gardé par la page relais (back), jamais de rachat ; back effacé ensuite',
       JSON.stringify(g.replaces()) === JSON.stringify([BACK]) && g.closes() === 1 && s.getItem('pl.leadAuth.back') === null, g.log)
-    const h = fake()
+    const h = await armed()
     await h.auth.handleReturnLink(`${RETURN_PREFIX}error=expired`)
     check('error=expired sans back gardé (app relancée par le lien) : la connexion normale de l’app (/login)', JSON.stringify(h.replaces()) === '["/login"]', h.log)
     const evil = new MemStore()
     evil.setItem('pl.leadAuth.back', 'https://evil.example/login?next=x')
-    const k = fake({ session: evil })
+    const k = await armed({ session: evil })
     await k.auth.handleReturnLink(`${RETURN_PREFIX}error=expired`)
     check('back gardé mais hors de l’émetteur (stockage modifié) : /login, jamais ce back', JSON.stringify(k.replaces()) === '["/login"]', k.log)
   }
   {
-    const f = fake({ closeRejects: true })
+    const f = await armed({ closeRejects: true })
     const r = await f.auth.handleReturnLink(LINK)
-    const g = fake({ browser: false })
+    const g = await armed({ browser: false })
     const r2 = await g.auth.handleReturnLink(LINK)
     check('Browser.close en erreur (Android, rien à fermer) ou plugin absent : le rachat a lieu quand même', r === 'redeem' && r2 === 'redeem' &&
       f.replaces().length === 1 && g.replaces().length === 1, { f: f.log, g: g.log })
   }
   {
     const PREVIEW = 'https://erplead-apercu-scanleads-projects.vercel.app'
-    const f = fake({ issuer: PREVIEW })
+    const f = await armed({ issuer: PREVIEW })
     await f.auth.handleReturnLink(LINK)
-    const g = fake({ issuer: async () => { throw new Error('hors ligne') } })
+    const g = await armed({ issuer: async () => { throw new Error('hors ligne') } })
     await g.auth.handleReturnLink(LINK)
-    const h = fake({ issuer: 'javascript:alert(1)' })
+    const h = await armed({ issuer: 'javascript:alert(1)' })
     await h.auth.handleReturnLink(LINK)
-    const k = fake({ issuer: 'https://erplead.io/' })
+    const k = await armed({ issuer: 'https://erplead.io/' })
     await k.auth.handleReturnLink(LINK)
     check('émetteur donné par le serveur (aperçu) : le rachat va chez lui ; serveur injoignable, émetteur invalide ou avec barre finale : https://erplead.io',
       f.replaces()[0] === `${PREVIEW}/auth/google/app/redeem?code=${code()}` && [g, h, k].every((x) => x.replaces()[0] === `${DEFAULT_ISSUER}/auth/google/app/redeem?code=${code()}`),
@@ -217,7 +328,7 @@ await block('2. Page relais /lead-auth/google', async () => {
     const f = fake({ native: false })
     const r = await f.auth.relay(relaySearch())
     check('hors de l’app (site, navigateur) : back, Browser.open jamais appelé, rien gardé', r.outcome === 'outside' && JSON.stringify(f.replaces()) === JSON.stringify([BACK]) &&
-      f.opens().length === 0 && f.session.getItem('pl.leadAuth.back') === null, f.log)
+      f.opens().length === 0 && f.session.getItem('pl.leadAuth.back') === null && f.local.m.size === 0, f.log)
     const g = fake({ browser: false })
     const r2 = await g.auth.relay(relaySearch())
     check('coque sans @capacitor/browser (ancienne app) : back, comme hors de l’app', r2.outcome === 'outside' && JSON.stringify(g.replaces()) === JSON.stringify([BACK]), g.log)
@@ -256,7 +367,10 @@ await block('2. Page relais /lead-auth/google', async () => {
   {
     const f = fake({ openRejects: true })
     const r = await f.auth.relay(relaySearch())
-    check('Browser.open en erreur : back', r.outcome === 'failed' && JSON.stringify(f.replaces()) === JSON.stringify([BACK]), f.log)
+    const g = fake({ local: f.local })
+    await g.auth.handleReturnLink(LINK)
+    check('Browser.open en erreur : back, et aucune connexion laissée en cours (un lien ensuite ne fait rien)', r.outcome === 'failed' && JSON.stringify(f.replaces()) === JSON.stringify([BACK]) &&
+      g.replaces().length === 0, { f: f.log, g: g.log })
   }
 })
 

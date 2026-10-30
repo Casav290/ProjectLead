@@ -119,6 +119,14 @@ const G1_REQUIRED = [
   ['lien de retour exact → Browser.close puis rachat avec le code, une navigation', 'lien de retour exact (schéma io.projectlead.app, hôte lead-auth, code de 43 caractères) : Browser.close, puis la vue web au rachat d’ERPlead avec le code, une seule navigation'],
   ['une seule fois (appUrlOpen ×2 + getLaunchUrl)', 'le même lien par appUrlOpen (deux fois) et par getLaunchUrl : une seule navigation, une seule fermeture'],
   ['une seule fois (page rechargée)', 'page rechargée (nouvelle instance, même localStorage) : le lien de lancement déjà traité est ignoré'],
+  ['une connexion par page relais', 'une seule connexion par page relais : après le retour, un autre lien (autre code, sans nouvelle page relais) est ignoré'],
+  ['nouvelle page relais → nouveau lien traité', 'nouvelle connexion Google (nouvelle page relais) : son lien est traité, une fois'],
+  ['jamais rejoué 24 h ou 7 jours plus tard', '24 h et 7 jours plus tard (app restée en mémoire, getLaunchUrl redonne le lien de lundi) : jamais rejoué'],
+  ['le lendemain : ancien lien ignoré, nouveau racheté', 'le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré, seul le nouveau lien est racheté'],
+  ['sans connexion en cours : lien venu d’ailleurs ignoré', 'aucune connexion Google en cours (aucune page relais) : un lien de retour venu d’ailleurs'],
+  ['lien ignoré jamais repris ensuite', '… et une connexion Google suivante ne le reprend pas'],
+  ['lien de lancement lu avant l’attente', 'page relais : le lien que la coque redonne au chargement (lent à venir) est lu avant de poser l’attente'],
+  ['connexion en cours échue après 15 min', 'connexion en cours échue (page relais il y a 16 min'],
   ['empreintes seulement', 'le stockage ne garde que des empreintes (jamais le code)'],
   ['lien étranger ignoré', 'liens étrangers ignorés ('],
   ['lien mal formé : jamais de rachat', 'lien mal formé ('],
@@ -133,7 +141,7 @@ const G1_REQUIRED = [
   ['navigateur refermé après le retour → rachat seul', 'navigateur refermé APRÈS le lien de retour (Browser.close) : seulement le rachat, jamais back'],
   ['hors de l’app → back', 'hors de l’app (site, navigateur) : back, Browser.open jamais appelé, rien gardé'],
   ['préfixes de l’émetteur', 'start ou back hors des préfixes exacts de l’émetteur ('],
-  ['Browser.open en erreur → back', 'Browser.open en erreur : back'],
+  ['Browser.open en erreur → back, aucune attente laissée', 'Browser.open en erreur : back, et aucune connexion laissée en cours'],
   ['site web : aucun pont reconnu', 'site web (aucun pont, pont web, isNativePlatform faux ou cassé) : aucun pont natif reconnu'],
   ['site web : aucun écouteur', 'site web : listen() ne pose aucun écouteur, aucun lien traité'],
   ['toutes les pages, au démarrage', 'src/main.tsx : l’écoute du lien de retour démarre avant le premier rendu, sur toutes les pages'],
@@ -147,10 +155,28 @@ const G1_REQUIRED = [
 const MUTATIONS = [
   { name: 'aucune mémoire des liens traités', file: 'src/lib/leadAppAuth.ts',
     from: "    if (seen.has(f) || doneList().some((x) => x.f === f)) return 'duplicate'\n", to: '',
-    breaks: 'le même lien par appUrlOpen (deux fois) et par getLaunchUrl : une seule navigation, une seule fermeture' },
+    breaks: 'le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré' },
   { name: 'mémoire de la page seulement (rien dans localStorage)', file: 'src/lib/leadAppAuth.ts',
     from: ' || doneList().some((x) => x.f === f)', to: '',
-    breaks: 'page rechargée (nouvelle instance, même localStorage) : le lien de lancement déjà traité est ignoré' },
+    breaks: 'le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré' },
+  { name: 'empreintes oubliées après 24 h (l’ancienne échéance)', file: 'src/lib/leadAppAuth.ts',
+    from: "v.filter((x) => x && typeof x.f === 'string')", to: "v.filter((x) => x && typeof x.f === 'string' && typeof x.t === 'number' && now() - x.t < 24 * 3600 * 1000)",
+    breaks: 'le lendemain, nouvelle connexion Google : le lien de lundi que getLaunchUrl redonne sur la page relais est ignoré' },
+  { name: 'lien traité sans connexion en cours', file: 'src/lib/leadAppAuth.ts',
+    from: "    if (!takePending()) return 'unexpected'\n", to: '',
+    breaks: 'aucune connexion Google en cours (aucune page relais) : un lien de retour venu d’ailleurs' },
+  { name: 'connexion en cours jamais effacée', file: 'src/lib/leadAppAuth.ts',
+    from: '    write(env.local, PENDING_KEY, null)\n    pendingHere = null\n', to: '',
+    breaks: 'une seule connexion par page relais : après le retour, un autre lien (autre code, sans nouvelle page relais) est ignoré' },
+  { name: 'connexion en cours sans échéance', file: 'src/lib/leadAppAuth.ts',
+    from: 'now() - t >= 0 && now() - t < PENDING_TTL_MS', to: 'true',
+    breaks: 'connexion en cours échue (page relais il y a 16 min' },
+  { name: 'attente posée sans lire d’abord le lien de lancement', file: 'src/lib/leadAppAuth.ts',
+    from: '    await Promise.race([launchRead, new Promise((r) => globalThis.setTimeout(r, LAUNCH_WAIT_MS))])\n', to: '',
+    breaks: 'page relais : le lien que la coque redonne au chargement (lent à venir) est lu avant de poser l’attente' },
+  { name: 'attente laissée après un échec de Browser.open', file: 'src/lib/leadAppAuth.ts',
+    from: '      setPending(false)\n', to: '',
+    breaks: 'Browser.open en erreur : back, et aucune connexion laissée en cours' },
   { name: 'préfixe du lien de retour approché', file: 'src/lib/leadAppAuth.ts',
     from: '!url.startsWith(RETURN_PREFIX)', to: "!url.includes('lead-auth?')",
     breaks: 'liens étrangers ignorés (' },
@@ -211,7 +237,7 @@ function gateG1() {
   console.log('G1 — code web de l’app (lien de retour, page relais, rien hors de l’app), contre-épreuves, contrôles complets')
   const w = webCheck()
   check(`scripts/google-app-check.ts : ${w.bilan ? `${w.bilan[1]} verts, ${w.bilan[2]} rouges` : 'pas de bilan'}`,
-    w.status === 0 && w.bilan && w.bilan[2] === '0' && Number(w.bilan[1]) >= 32 && lastLine(w.out) === 'GOOGLE_APP_WEB_CHECK_OK', w.nons.join(' | ') || lastLine(w.err))
+    w.status === 0 && w.bilan && w.bilan[2] === '0' && Number(w.bilan[1]) >= 39 && lastLine(w.out) === 'GOOGLE_APP_WEB_CHECK_OK', w.nons.join(' | ') || lastLine(w.err))
   for (const [what, prefix] of G1_REQUIRED) check(`vu vert : ${what}`, w.oks.some((t) => t.startsWith(prefix)), prefix)
   counterProofs()
 
@@ -758,15 +784,28 @@ async function gateG3() {
     await sleep(2500)
     check('liens étrangers (autre app, ancien retour sso, schéma voisin, https) : ignorés dans la vue web', redeems.length === 1 && records('close').length === closesBefore &&
       page.url() === `${t.pl.url}/confidentialite`, page.url())
-    // Demande échue : la connexion normale de l'app (aucun back gardé : il a servi au retour précédent).
+    // Sans connexion Google en cours (la page relais a déjà eu son retour) : un lien venu d'ailleurs ne fait rien, même
+    // « demande échue » ou un code bien formé (courriel, page web, code QR, autre app).
     const navs = []
     page.on('framenavigated', (f) => { if (f === page.mainFrame()) navs.push(f.url()) })
-    launchUrl = null
     await page.evaluate(() => window.__capFire('appUrlOpen', { url: 'io.projectlead.app://lead-auth?error=expired' }))
-    await waitFor(() => navs.length > 0, 15_000)
-    check('lien « demande échue » (error=expired) : jamais de rachat, la connexion normale de l’app (/login de ProjectLead)',
-      navs[0] === `${t.pl.url}/login` && redeems.length === 1 && records('close').length === closesBefore + 1, navs.slice(0, 2))
+    await page.evaluate((u) => window.__capFire('appUrlOpen', { url: u }), `io.projectlead.app://lead-auth?code=${randomBytes(32).toString('base64url')}`)
     await sleep(3000)
+    check('sans connexion Google en cours : un lien io.projectlead.app://lead-auth venu d’ailleurs (error=expired, code forgé) est ignoré (aucune navigation, aucune fermeture, la page reste)',
+      navs.length === 0 && redeems.length === 1 && records('close').length === closesBefore && page.url() === `${t.pl.url}/confidentialite`, { navs: navs.slice(0, 2), redeems: redeems.length })
+    // 25 h plus tard, l'app restée en mémoire (iOS : getLaunchUrl redonne le dernier lien ouvert) : chargement complet d'une page.
+    const later = await wv.ctx.newPage()
+    await later.addInitScript(() => { const real = Date.now.bind(Date); Date.now = () => real() + 25 * 3600 * 1000 })
+    const listensBefore = records('listen').length
+    await later.goto(`${t.pl.url}/confidentialite`)
+    await waitFor(() => records('listen').length > listensBefore, 10_000)
+    await sleep(3000)
+    const laterNow = await later.evaluate(() => Date.now() - performance.timeOrigin)
+    check('25 h plus tard (horloge de la page avancée, app restée en mémoire) : le lien de lancement de la veille n’est jamais rejoué (aucun rachat, aucune fermeture, la page reste)',
+      laterNow > 24 * 3600 * 1000 && redeems.length === 1 && records('close').length === closesBefore && later.url() === `${t.pl.url}/confidentialite`, { redeems: redeems.length, url: later.url() })
+    await later.close()
+    launchUrl = null
+    await sleep(1000)
     await wv.ctx.close(); await sys.ctx.close()
 
     // --- 8. textes de la page relais dans les cinq langues (vue web de l'app, départ fictif : rien n'est ouvert pour de vrai)
@@ -785,6 +824,15 @@ async function gateG3() {
         body.includes(T[l]['shell.leadAuth.body']) && body.includes(T[l]['shell.leadAuth.back']) && records('open').length === n + 1)
       await shot(lang.page, `g3-relais-${l}`)
     }
+    // Pendant une connexion en cours (la dernière page relais, es) : « demande échue » ramène à l'écran de connexion de l'app.
+    const langNavs = []
+    lang.page.on('framenavigated', (f) => { if (f === lang.page.mainFrame()) langNavs.push(f.url()) })
+    const closesLang = records('close').length
+    await lang.page.evaluate(() => window.__capFire('appUrlOpen', { url: 'io.projectlead.app://lead-auth?error=expired' }))
+    await waitFor(() => langNavs.length > 0, 15_000)
+    check('pendant une connexion en cours : lien « demande échue » (error=expired) → Browser.close, puis l’écran de connexion de l’app gardé par la page relais (back), jamais de rachat',
+      langNavs[0] === `${t.erp.url}/login?next=%2Foauth%2Fauthorize%3Fclient_id%3Dprojectlead&locale=es` && records('close').length === closesLang + 1 && redeems.length === 1, langNavs.slice(0, 2))
+    await sleep(1500)
     await lang.ctx.close()
 
     // --- 9. hors de l'app : le site web inchangé, la page relais renvoie à back sans rien ouvrir

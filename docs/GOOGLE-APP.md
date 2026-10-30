@@ -18,8 +18,15 @@ termine la connexion dans sa vue web.
 | Où | Quoi |
 |---|---|
 | `/lead-auth/google?start=…&back=…` (`src/pages/LeadAuthGoogle.tsx`, page publique) | ERPlead y envoie la vue web après le bouton. `start` doit commencer par `<émetteur>/auth/google/app/start?` et `back` par `<émetteur>/login?`, sinon `/login`. Dans l'app : `back` gardé (sessionStorage), `Browser.open({ url: start })`, écran « Connexion avec Google… » avec « Retour ». Navigateur refermé sans retour (`browserFinished`, 1,5 s de grâce) : `back`. Hors de l'app : `back`. |
-| toutes les pages, au démarrage (`src/main.tsx`) | `App.addListener('appUrlOpen')` et `App.getLaunchUrl()`. Seul `io.projectlead.app://lead-auth?…` compte, chaque lien une seule fois (empreintes 24 h dans localStorage : `getLaunchUrl` redonne le même lien à chaque page). `Browser.close()` (erreur ignorée), puis un code `^[A-Za-z0-9_-]{43}$` → `location.replace(<émetteur>/auth/google/app/redeem?code=…)` ; sinon (`error=expired`, lien abîmé) → `back` gardé, sinon `/login`. |
+| toutes les pages, au démarrage (`src/main.tsx`) | `App.addListener('appUrlOpen')` et `App.getLaunchUrl()`. Seul `io.projectlead.app://lead-auth?…` compte, chaque lien une seule fois (empreintes dans localStorage, les 20 dernières, **sans échéance** : `getLaunchUrl` redonne le même lien à chaque chargement de page tant que l'app vit — iOS : le dernier lien ouvert, jamais effacé par Capacitor). Un lien n'est traité que pendant une **connexion Google en cours** : posée par la page relais (localStorage `pl.leadAuth.pending`, après lecture du lien de lancement), valable 15 min, effacée par le premier lien traité. Sans elle (lien venu d'un courriel, d'une page, d'un code QR, d'une autre app ; ancien lien redonné par `getLaunchUrl`) : rien, et le lien est gardé comme vu. Sinon `Browser.close()` (erreur ignorée), puis un code `^[A-Za-z0-9_-]{43}$` → `location.replace(<émetteur>/auth/google/app/redeem?code=…)` ; sinon (`error=expired`, lien abîmé) → `back` gardé, sinon `/login`. |
 | `/api/auth/options` | `leadIssuer` : l'émetteur (LEAD_ID_ISSUER, crmlead.io → erplead.io, sinon https://erplead.io). Un aperçu relié à un aperçu d'ERPlead le voit sans autre réglage. |
+
+Pourquoi la connexion en cours (relecture du 30.10.2026) : avec une mémoire de 24 h, le lien déjà racheté revenait par
+`getLaunchUrl` au premier chargement complet de page du lendemain (reconnexion silencieuse, relance de la vue web) et
+menait la vue web au rachat d'un code consommé, puis sur « Mon compte » d'ERPlead ; et n'importe quel lien
+`io.projectlead.app://lead-auth?…` (courriel, page web) sortait la personne de sa page. Limite connue : un lien forgé qui
+arrive PENDANT une connexion en cours (navigateur du téléphone ouvert, moins de 15 min) la fait échouer (« La demande a
+expiré ») ; il n'ouvre aucun autre compte.
 
 Sans le pont Capacitor natif (`window.Capacitor.isNativePlatform()`), rien n'est posé : le site web ne change pas. Aucun
 paquet Capacitor n'est ajouté au site : les plugins App et Browser du pont injecté par la coque suffisent. Le site ne lit

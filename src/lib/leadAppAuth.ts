@@ -11,9 +11,12 @@
  *    l'app chez ERPlead) sont vérifiés (préfixes exacts de l'émetteur), `back` est gardé, puis `Browser.open({ url: start })`.
  *    Navigateur refermé sans retour : `back`. Hors de l'app : `back`.
  * 2. Lien de retour `io.projectlead.app://lead-auth?code=…` (ou `?error=expired`), écouté au démarrage sur TOUTES les pages
- *    (`appUrlOpen`, et `getLaunchUrl` quand l'app a été relancée par le lien) : chaque lien une seule fois, navigateur du
- *    téléphone refermé, puis la vue web va au rachat d'ERPlead `/auth/google/app/redeem?code=…` (le cookie verifier
- *    d'erplead.io de la vue web part avec la navigation) ; un lien sans code valable ramène à `back` ou à `/login`.
+ *    (`appUrlOpen`, et `getLaunchUrl` quand l'app a été relancée par le lien) : chaque lien une seule fois, et SEULEMENT
+ *    si une connexion Google est en cours (page relais ouverte il y a moins de 15 min dans cette app, une connexion par
+ *    page relais) ; navigateur du téléphone refermé, puis la vue web va au rachat d'ERPlead
+ *    `/auth/google/app/redeem?code=…` (le cookie verifier d'erplead.io de la vue web part avec la navigation) ; un lien
+ *    sans code valable ramène à `back` ou à `/login`. Un lien reçu sans connexion en cours (courriel, page web, code QR,
+ *    autre app, ou le dernier lien que la coque redonne par `getLaunchUrl` tant que l'app vit) est ignoré, et le reste.
  *
  * Rien de tout cela hors de l'app : sans le pont Capacitor natif (site web, navigateur), aucun écouteur n'est posé.
  * Les modules natifs ne sont pas empaquetés : le pont injecté par la coque (`window.Capacitor.Plugins.App` et
@@ -37,9 +40,18 @@ export const CODE_RE = /^[A-Za-z0-9_-]{43}$/
  * l'écran de connexion. Sur Android, l'onglet se ferme parfois juste AVANT que l'app reçoive le lien.
  */
 export const FINISH_GRACE_MS = 1500
+/**
+ * Une connexion Google en cours : posée par la page relais (localStorage, pour une app relancée par le lien), valable le
+ * temps d'un départ d'ERPlead (10 min : cookie verifier, vue) et un peu plus. Au-delà, ERPlead refuserait le code.
+ */
+export const PENDING_TTL_MS = 15 * 60 * 1000
+/** Lecture du lien de lancement avant de poser l'attente : au plus ce délai (la coque répond tout de suite). */
+export const LAUNCH_WAIT_MS = 1500
 const BACK_KEY = 'pl.leadAuth.back'
 const DONE_KEY = 'pl.leadAuth.done'
-const DONE_TTL_MS = 24 * 3600 * 1000
+const PENDING_KEY = 'pl.leadAuth.pending'
+/** Empreintes gardées (les plus récentes), sans échéance : `getLaunchUrl` redonne le même lien tant que l'app vit. */
+const DONE_MAX = 20
 
 type Handler = (data: any) => void
 type NativePlugin = { addListener?: (event: string, cb: Handler) => unknown }
@@ -106,19 +118,25 @@ function fingerprint(s: string): string {
   return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0')
 }
 
-export type ReturnOutcome = 'ignored' | 'duplicate' | 'redeem' | 'back' | 'login'
+export type ReturnOutcome = 'ignored' | 'duplicate' | 'unexpected' | 'redeem' | 'back' | 'login'
 export type RelayOutcome = { outcome: 'opened' | 'outside' | 'invalid' | 'failed' | 'again'; back: string | null }
 
 /**
  * Le retour de Google pour une page (un chargement de la vue web) : `listen` au démarrage, `relay` sur la page relais.
- * Les liens déjà traités sont gardés (empreintes, 24 h) dans localStorage : `getLaunchUrl` redonne le même lien à
- * chaque chargement de page tant que l'app tourne (iOS : le dernier lien ouvert ; Android : le lien de lancement).
+ * Les liens déjà vus (traités ou ignorés) sont gardés en empreintes dans localStorage, SANS échéance : `getLaunchUrl`
+ * redonne le même lien à chaque chargement de page tant que l'app tourne (iOS : le dernier lien ouvert, jamais effacé
+ * par Capacitor ; Android : le lien de lancement). Un lien n'est traité que pendant une connexion en cours (posée par la
+ * page relais, effacée par le premier lien traité) : un lien venu d'ailleurs, ou redonné plus tard, ne fait rien.
  */
 export function createLeadAppAuth(env: LeadAppEnv) {
   const now = env.now ?? (() => Date.now())
   const seen = new Set<string>()
   let returned = false
   let relayed = false
+  /** La connexion en cours posée par la page relais de CE chargement (si localStorage est refusé). */
+  let pendingHere: number | null = null
+  /** La lecture du lien de lancement (listen) : la page relais l'attend avant de poser l'attente. */
+  let launchRead: Promise<unknown> = Promise.resolve()
 
   const read = (s: Store | null, k: string) => { try { return s?.getItem(k) ?? null } catch { return null } }
   const write = (s: Store | null, k: string, v: string | null) => {
@@ -127,22 +145,40 @@ export function createLeadAppAuth(env: LeadAppEnv) {
   const doneList = (): { f: string; t: number }[] => {
     try {
       const v = JSON.parse(read(env.local, DONE_KEY) ?? '[]')
-      return Array.isArray(v) ? v.filter((x) => x && typeof x.f === 'string' && typeof x.t === 'number' && now() - x.t < DONE_TTL_MS) : []
+      return Array.isArray(v) ? v.filter((x) => x && typeof x.f === 'string') : []
     } catch { return [] }
   }
-  const markDone = (f: string) => write(env.local, DONE_KEY, JSON.stringify([...doneList(), { f, t: now() }].slice(-20)))
+  const markDone = (f: string) => write(env.local, DONE_KEY, JSON.stringify([...doneList(), { f, t: now() }].slice(-DONE_MAX)))
+  const fresh = (t: unknown) => typeof t === 'number' && now() - t >= 0 && now() - t < PENDING_TTL_MS
+  /** Une connexion Google en cours (page relais, moins de 15 min) : vraie une seule fois, effacée aussitôt. */
+  const takePending = (): boolean => {
+    let t: unknown = null
+    try { t = JSON.parse(read(env.local, PENDING_KEY) ?? 'null')?.t } catch { /* valeur abîmée : aucune attente */ }
+    const ok = fresh(t) || fresh(pendingHere)
+    write(env.local, PENDING_KEY, null)
+    pendingHere = null
+    return ok
+  }
+  const setPending = (on: boolean) => {
+    pendingHere = on ? now() : null
+    write(env.local, PENDING_KEY, on ? JSON.stringify({ t: pendingHere }) : null)
+  }
 
   async function issuer(): Promise<string> {
     try { return validIssuer(await env.issuer()) ?? DEFAULT_ISSUER } catch { return DEFAULT_ISSUER }
   }
 
-  /** Un lien reçu par l'app. Seul `io.projectlead.app://lead-auth?…` compte ; le reste est laissé à qui l'attend. */
+  /**
+   * Un lien reçu par l'app. Seul `io.projectlead.app://lead-auth?…` compte ; le reste est laissé à qui l'attend. Sans
+   * connexion Google en cours : ignoré, et gardé comme vu (jamais repris par une connexion suivante).
+   */
   async function handleReturnLink(url: unknown): Promise<ReturnOutcome> {
     if (typeof url !== 'string' || url.length > 2048 || !url.startsWith(RETURN_PREFIX)) return 'ignored'
     const f = fingerprint(url)
     if (seen.has(f) || doneList().some((x) => x.f === f)) return 'duplicate'
     seen.add(f)
     markDone(f)
+    if (!takePending()) return 'unexpected'
     returned = true
     // Le navigateur du téléphone, encore ouvert par-dessus l'app (iOS) : refermé. Android n'a parfois rien à fermer.
     try { void Promise.resolve(env.bridge?.Plugins?.Browser?.close?.()).catch(() => {}) } catch { /* rien à fermer */ }
@@ -167,7 +203,7 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     if (!app || typeof app.addListener !== 'function') return false
     try { app.addListener('appUrlOpen', (e: any) => { void handleReturnLink(e?.url) }) } catch { return false }
     try {
-      void Promise.resolve(app.getLaunchUrl?.()).then((r) => (r?.url ? handleReturnLink(r.url) : undefined)).catch(() => {})
+      launchRead = Promise.resolve(app.getLaunchUrl?.()).then((r) => (r?.url ? handleReturnLink(r.url) : undefined)).catch(() => {})
     } catch { /* pas de lien de lancement */ }
     return true
   }
@@ -181,7 +217,12 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     if (!t) { env.replace('/login'); return { outcome: 'invalid', back: null } }
     const browser = env.bridge?.Plugins?.Browser
     if (!env.bridge || typeof browser?.open !== 'function') { env.replace(t.back); return { outcome: 'outside', back: t.back } }
+    // Le lien que la coque redonne au chargement (un ancien retour) est lu AVANT de poser l'attente : jamais pris pour
+    // le retour de cette connexion.
+    await Promise.race([launchRead, new Promise((r) => globalThis.setTimeout(r, LAUNCH_WAIT_MS))])
+    if (returned) return { outcome: 'again', back: null }
     write(env.session, BACK_KEY, t.back)
+    setPending(true)
     try {
       browser.addListener?.('browserFinished', () => {
         env.setTimeout(() => { if (!returned) env.replace(t.back) }, FINISH_GRACE_MS)
@@ -190,6 +231,7 @@ export function createLeadAppAuth(env: LeadAppEnv) {
     try {
       await browser.open({ url: t.start })
     } catch {
+      setPending(false)
       if (!returned) env.replace(t.back)
       return { outcome: 'failed', back: t.back }
     }
