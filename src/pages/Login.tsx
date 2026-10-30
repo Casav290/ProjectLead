@@ -6,7 +6,8 @@ import { Button, Input, Spinner } from '../components/ui'
 import { AuthField, AuthShell, AuthSwitch, authLink } from '../components/AuthShell'
 import { RefusedScreen } from '../components/RefusedScreen'
 import { getLocale, useT } from '../i18n'
-import { departsAlone, formuleOf, leadStart as baseLeadStart, requestedPage } from '../lib/arrival'
+import { departsAlone, departWhenFree, formuleOf, leadStart as baseLeadStart, requestedPage } from '../lib/arrival'
+import { leadAppAuth } from '../lib/leadAppAuth'
 
 // Les retours en erreur (`?erreur=<code>`) : le texte est la clé `shell.login.err.<code>`, traduite au rendu.
 // `formule` : ancien refus de formule (avant le 02.10.2026, tout compte entre désormais) : on propose simplement de réessayer.
@@ -40,11 +41,19 @@ export default function Login() {
   const withEmail = params.get('acces') === 'email'
   // La page demandée avant la connexion : une adresse profonde ouverte sans session y ramène.
   const next = requestedPage(loc.pathname, loc.search)
-  // Un seul départ, jamais après un retour en erreur (pas de boucle) : src/lib/arrival.ts.
-  const direct = departsAlone({ leadId, code, withEmail })
+  // Un seul départ, jamais après un retour en erreur (pas de boucle), ni pendant un retour de Google dans l'app (la page
+  // part déjà vers le rachat d'ERPlead) : src/lib/arrival.ts.
+  const auth = leadAppAuth()
+  const returning = auth.returning()
+  const direct = departsAlone({ leadId, code, withEmail, returning })
 
   useEffect(() => { api.get<{ leadId: boolean }>('/auth/options').then((o) => setLeadId(o.leadId)).catch(() => setLeadId(false)) }, [])
-  useEffect(() => { if (direct) window.location.replace(leadStart(next)) }, [direct, next])
+  useEffect(() => {
+    if (!direct) return
+    let live = true
+    void departWhenFree(auth, () => { if (live) window.location.replace(leadStart(next)) })
+    return () => { live = false }
+  }, [direct, next, auth])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -52,7 +61,7 @@ export default function Login() {
     try { await api.post('/auth/login', { email, password }); await refresh() } catch (err) { setError({ text: errorText(err) }) } finally { setBusy(false) }
   }
 
-  if (leadId === null || direct) return <AuthShell><Spinner label={t('shell.login.connecting')} /></AuthShell>
+  if (leadId === null || direct || returning) return <AuthShell><Spinner label={t('shell.login.connecting')} /></AuthShell>
 
   // Arrivée refusée (places prises, accès retiré) : un écran qui dit quoi faire selon la formule de l'entreprise (lue
   // dans l'adresse), « Changer de compte » et le Compte ERPlead (src/components/RefusedScreen.tsx).

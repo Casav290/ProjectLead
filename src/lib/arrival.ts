@@ -86,10 +86,24 @@ export async function leave(post: () => Promise<{ redirect: string | null }>, go
 /**
  * L'écran de connexion part-il seul vers le Compte Lead ? Oui une fois, quand le Compte Lead est branché et qu'on
  * arrive sans erreur ; jamais après un retour en erreur (`erreur=…`) ni sur l'accès par e-mail : pas de boucle. Jamais
- * non plus pendant « Se déconnecter » (`startLeaving`) : ce départ remplacerait la déconnexion du Compte Lead.
+ * non plus pendant « Se déconnecter » (`startLeaving`) : ce départ remplacerait la déconnexion du Compte Lead. Ni pendant
+ * un retour de Google dans l'app (`returning`, src/lib/leadAppAuth.ts) : la page part déjà vers le rachat d'ERPlead.
  */
-export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean }) =>
-  o.leadId === true && !o.code && !o.withEmail && !leavingNow
+export const departsAlone = (o: { leadId: boolean | null; code: string; withEmail: boolean; returning?: boolean }) =>
+  o.leadId === true && !o.code && !o.withEmail && !leavingNow && !o.returning
+
+/**
+ * Le départ seul de l'écran de connexion, quand `departsAlone` le dit (relecture du 30.10.2026). L'app relancée par son
+ * lien de retour de Google (https://projectlead.io/lead-auth/return, Universal Link ou App Link) charge l'accueil `/` :
+ * sans session, c'est cet écran. Le lien de lancement y est lu au démarrage (src/main.tsx) et la page part vers le rachat
+ * d'ERPlead ; ce départ-ci, une requête plus tard, l'annulait (rachat coupé, code brûlé, écran de connexion d'ERPlead).
+ * Donc : la lecture du lien de lancement d'abord (au plus 1,5 s ; hors de l'app, tout de suite), puis aucun départ si un
+ * lien a été pris, ni pendant « Se déconnecter ».
+ */
+export async function departWhenFree(auth: { launchSettled(): Promise<unknown>; returning(): boolean }, go: () => void) {
+  await auth.launchSettled()
+  if (!auth.returning() && !leavingNow) go()
+}
 
 /** La formule de l'entreprise dans l'adresse d'un refus « places » (server/routes/auth.ts, refusalLocation). */
 export type Formule = 'free' | 'pro' | 'proplus'

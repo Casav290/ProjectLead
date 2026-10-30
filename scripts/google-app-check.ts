@@ -57,6 +57,8 @@ const linkOf = (c: string) => `${RETURN_PREFIX}code=${code(c)}&locale=fr`
 const ERROR_LINK = `${RETURN_PREFIX}error=expired&locale=fr`
 const redeemOf = (c = 'A', iss = ISS) => `${iss}/auth/google/app/redeem?code=${code(c)}`
 const START = `${ISS}/auth/google/app/start?d=projectlead.${'x'.repeat(43)}`
+/** Un autre départ d'ERPlead (nouveau bouton Google : nouvelle page relais, autre `d`). */
+const START2 = `${ISS}/auth/google/app/start?d=projectlead.${'y'.repeat(43)}`
 const BACK = `${ISS}/login?next=%2Foauth%2Fauthorize%3Fclient_id%3Dprojectlead%26platform%3Dapp&locale=fr`
 const relaySearch = (start = START, back = BACK) => `?${new URLSearchParams({ start, back })}`
 
@@ -240,17 +242,17 @@ await block('1. Lien vérifié https://projectlead.io/lead-auth/return', async (
       k1.replaces().length === 0 && same(k.replaces(), [redeemOf('E')]), { k1: k1.log, k: k.log })
   }
   {
-    // Page relais rouverte pendant une connexion notée (première abandonnée il y a 2 min) ; la coque redonne au chargement
-    // un lien JAMAIS vu (arrivé hors de toute connexion, l'app tuée entre-temps) : la page relais efface d'abord la
-    // connexion notée, puis lit ce lien : il n'est jamais racheté. Ailleurs (page ordinaire), la même situation est celle
-    // de l'app relancée par son lien de retour : racheté.
+    // NOUVELLE page relais (nouveau bouton Google : autre départ) pendant une connexion notée (première abandonnée il y a
+    // 2 min) ; la coque redonne au chargement un lien JAMAIS vu (arrivé hors de toute connexion, l'app tuée entre-temps) :
+    // la page relais efface d'abord la connexion notée, puis lit ce lien : il n'est jamais racheté. Ailleurs (page
+    // ordinaire), la même situation est celle de l'app relancée par son lien de retour : racheté.
     let clock = Date.parse('2026-11-02T09:00:00Z')
     const now = () => clock
     const local = new MemStore()
     await fake({ local, now }).auth.relay(relaySearch())
     clock += 2 * 60 * 1000
     const r = fake({ launchUrl: linkOf('G'), local, now })
-    r.auth.listen({ relayPage: true })
+    r.auth.listen({ relayPage: true, search: relaySearch(START2) })
     await flush()
     const local2 = new MemStore()
     await fake({ local: local2, now }).auth.relay(relaySearch())
@@ -646,8 +648,9 @@ await block('4. Site web inchangé, émetteur du serveur, fichiers d’associati
     check('coque sans plugin App : aucun écouteur', g.auth.listen() === false)
   }
   const main = readFileSync(join(ROOT, 'src/main.tsx'), 'utf8')
-  check('src/main.tsx : l’écoute du lien de retour démarre avant le premier rendu, sur toutes les pages (page relais signalée)',
-    /\nleadAppAuth\(\)\.listen\(\{ relayPage: window\.location\.pathname === RELAY_PATH \}\)\n/.test(main) && main.indexOf('leadAppAuth().listen(') < main.indexOf('initI18n()'))
+  check('src/main.tsx : l’écoute du lien de retour démarre avant le premier rendu, sur toutes les pages (page relais signalée, avec son adresse)',
+    /\nleadAppAuth\(\)\.listen\(\{ relayPage: window\.location\.pathname === RELAY_PATH, search: window\.location\.search \}\)\n/.test(main) &&
+    main.indexOf('leadAppAuth().listen(') < main.indexOf('initI18n()'))
   const appTsx = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8')
   const isPublic = new RegExp(appTsx.match(/const isPublic = \/(.+)\/\.test\(loc\.pathname\)/)?.[1] ?? '^$')
   check('la page relais est une route publique (sans session) : /lead-auth/google, et seulement elle',
@@ -724,6 +727,150 @@ await block('4. Site web inchangé, émetteur du serveur, fichiers d’associati
   const page = readFileSync(join(ROOT, 'src/pages/LeadAuthGoogle.tsx'), 'utf8')
   check('page relais : sous iOS 15 à 17.3 (mode safari), le texte « Terminez la connexion dans Safari, puis touchez « Ouvrir ProjectLead » »',
     page.includes("view?.mode === 'safari' ? t('shell.leadAuth.safari') : t('shell.leadAuth.body')"))
+})
+
+// ------------------------------------------------------------------ 5 et 6. relecture du 30.10.2026 (2e) : départ seul, page relais rechargée
+await block('5. Relecture : app relancée par son lien de retour sur l’accueil (écran de connexion)', async () => {
+  const { departsAlone, departWhenFree } = await import('../src/lib/arrival.ts')
+  /**
+   * L'accueil `/` sans session, comme dans l'app relancée par son lien : src/main.tsx (listen) puis l'écran de connexion
+   * (src/pages/Login.tsx) : /api/me en 401, /api/auth/options, `departsAlone`, puis `departWhenFree`. Le rachat attend
+   * l'émetteur (/api/auth/options de leadAppAuth) jusqu'à `release`. Rend les départs de l'écran et les navigations.
+   */
+  async function homePage(o: FakeOpts, opts: { early?: boolean } = {}) {
+    let release = () => {}
+    const issuer = () => new Promise<string>((r) => { release = () => r(ISS) })
+    const f = o.native === false ? fake({ ...o, issuer }) : await armed({ ...o, issuer })
+    f.auth.listen()
+    if (!opts.early) await flush()
+    const departs: string[] = []
+    const direct = departsAlone({ leadId: true, code: '', withEmail: false, returning: f.auth.returning() })
+    const leaving = direct ? departWhenFree(f.auth, () => departs.push('/auth/lead/start')) : Promise.resolve()
+    await new Promise((r) => setTimeout(r, 120))
+    release()
+    await leaving
+    await flush()
+    return { f, direct, departs }
+  }
+  {
+    const a = await homePage({ launchUrl: LINK })
+    check('app relancée par son lien de retour (Android, ou iOS après Safari), accueil sans session : le lien de lancement est pris, l’écran de connexion ne part PAS seul vers le Compte Lead (ce départ annulait le rachat en route) ; le rachat seul',
+      !a.direct && a.departs.length === 0 && same(a.f.replaces(), [redeemOf()]), { direct: a.direct, departs: a.departs, log: a.f.log })
+    const b = await homePage({ launchUrl: LINK, launchDelayMs: 40 }, { early: true })
+    check('… même quand l’écran de connexion décide AVANT que la coque ait rendu le lien de lancement (coque lente) : il attend sa lecture, puis ne part pas ; le rachat seul',
+      b.direct && b.departs.length === 0 && same(b.f.replaces(), [redeemOf()]), { direct: b.direct, departs: b.departs, log: b.f.log })
+    const c = await homePage({ launchUrl: LINK, platform: 'ios' })
+    check('… sous iOS (Universal Link, app relancée) : idem, et aucun Browser.close', !c.direct && c.departs.length === 0 && same(c.f.replaces(), [redeemOf()]) && c.f.closes() === 0, c.f.log)
+  }
+  {
+    // Sans lien pris, l'écran part seul comme avant : site web, app sans lien de lancement, lien déjà vu, lien sans
+    // connexion en cours (courriel, autre page).
+    const web = await homePage({ native: false, launchUrl: LINK })
+    const plain = await homePage({})
+    const seenBefore = new MemStore()
+    {
+      const f = await armed({ local: seenBefore })
+      f.auth.listen()
+      f.fire('appUrlOpen', { url: LINK })
+      await flush()
+    }
+    const dup = await homePage({ local: seenBefore, launchUrl: LINK })
+    const strayLocal = new MemStore()
+    let releaseStray = () => {}
+    const stray = fake({ launchUrl: linkOf('S'), local: strayLocal, issuer: () => new Promise<string>((r) => { releaseStray = () => r(ISS) }) })
+    stray.auth.listen()
+    await flush()
+    const strayDeparts: string[] = []
+    await departWhenFree(stray.auth, () => strayDeparts.push('/auth/lead/start'))
+    releaseStray()
+    check('sans lien pris, l’écran de connexion part seul comme avant, une fois : site web, app ouverte sans lien, lien déjà racheté redonné par la coque, lien reçu sans connexion en cours',
+      [web, plain].every((x) => x.direct && same(x.departs, ['/auth/lead/start']) && x.f.replaces().length === 0) &&
+      dup.departs.length === 1 && !dup.f.replaces().some((u) => u.includes('redeem')) && same(strayDeparts, ['/auth/lead/start']) && stray.replaces().length === 0,
+      { web: web.departs, plain: plain.departs, dup: dup.f.log, stray: stray.log })
+    check('departsAlone : jamais pendant un retour de Google (returning), comme pendant « Se déconnecter »',
+      !departsAlone({ leadId: true, code: '', withEmail: false, returning: true }) && departsAlone({ leadId: true, code: '', withEmail: false, returning: false }))
+  }
+  {
+    const login = readFileSync(join(ROOT, 'src/pages/Login.tsx'), 'utf8')
+    check('src/pages/Login.tsx : départ seul par departWhenFree(leadAppAuth(), …) (lien de lancement lu d’abord), returning passé à departsAlone, attente affichée pendant le retour ; aucun autre location.replace',
+      login.includes('const auth = leadAppAuth()') && login.includes('const direct = departsAlone({ leadId, code, withEmail, returning })') &&
+      login.includes('void departWhenFree(auth, () => { if (live) window.location.replace(leadStart(next)) })') &&
+      login.includes('if (leadId === null || direct || returning) return <AuthShell><Spinner') && login.split('location.replace').length === 2)
+  }
+})
+
+await block('6. Relecture : page relais rechargée pendant sa connexion (iOS : processus WebContent tué)', async () => {
+  {
+    // iOS 16 (Safari, m=tap) : la page relais a ouvert Safari ; iOS tue le processus WebContent de l'app en arrière-plan ;
+    // la personne touche « Ouvrir ProjectLead » ; à la reprise, la coque RECHARGE la même page relais
+    // (WebViewDelegationHandler.webViewWebContentProcessDidTerminate : bridge.reset(), webView.reload()) et le Universal
+    // Link arrive (gardé par appUrlOpen, relu par getLaunchUrl).
+    const local = new MemStore(), sess = new MemStore()
+    const first = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess })
+    first.auth.listen({ relayPage: true, search: relaySearch() })
+    const r1 = await first.auth.relay(relaySearch())
+    const byLaunch = fake({ platform: 'ios', session: { https: false }, local, sessionStore: sess, launchUrl: LINK })
+    byLaunch.auth.listen({ relayPage: true, search: relaySearch() })
+    const r2 = await byLaunch.auth.relay(relaySearch())
+    await flush()
+    check('iOS 16 (Safari) : page relais RECHARGÉE par la coque pendant sa connexion, Universal Link relu par getLaunchUrl : racheté, une fois ; Safari jamais rouvert (le départ a déjà servi)',
+      r1.outcome === 'safari' && r2.outcome === 'again' && same(byLaunch.replaces(), [redeemOf()]) && byLaunch.externals().length === 0 && byLaunch.sessions().length === 0,
+      { r1, r2, log: byLaunch.log })
+    const local2 = new MemStore(), sess2 = new MemStore()
+    await fake({ platform: 'ios', session: { https: false }, local: local2, sessionStore: sess2 }).auth.relay(relaySearch())
+    const byEvent = fake({ platform: 'ios', session: { https: false }, local: local2, sessionStore: sess2 })
+    const views: string[] = []
+    byEvent.auth.listen({ relayPage: true, search: relaySearch() })
+    const r3 = await byEvent.auth.relay(relaySearch(), (v) => views.push(v.mode))
+    byEvent.fire('appUrlOpen', { url: LINK })
+    await flush()
+    check('… page rechargée AVANT le lien : rien de rouvert, le texte « Terminez la connexion dans Safari » et « Retour » redits, puis le Universal Link (appUrlOpen) racheté',
+      r3.outcome === 'resumed' && r3.back === BACK && same(views, ['safari']) && byEvent.externals().length === 0 && same(byEvent.replaces(), [redeemOf()]),
+      { r3, views, log: byEvent.log })
+  }
+  {
+    // iOS 17.4+ (session) et Android (Custom Tab) : la même page relais rechargée ne rouvre rien non plus.
+    const lI = new MemStore(), sI = new MemStore()
+    const fI = fake({ platform: 'ios', session: { https: true, start: 'wait' }, local: lI, sessionStore: sI })
+    void fI.auth.relay(relaySearch())
+    await flush()
+    const gI = fake({ platform: 'ios', session: { https: true, start: 'wait' }, local: lI, sessionStore: sI })
+    const vI: string[] = []
+    gI.auth.listen({ relayPage: true, search: relaySearch() })
+    const rI = await gI.auth.relay(relaySearch(), (v) => vI.push(v.mode))
+    const lA = new MemStore(), sA = new MemStore()
+    await fake({ local: lA, sessionStore: sA }).auth.relay(relaySearch())
+    const gA = fake({ local: lA, sessionStore: sA })
+    const vA: string[] = []
+    gA.auth.listen({ relayPage: true, search: relaySearch() })
+    const rA = await gA.auth.relay(relaySearch(), (v) => vA.push(v.mode))
+    gA.fire('browserFinished')
+    gA.timers.forEach((t) => t.fn())
+    check('page relais rechargée pendant sa connexion, iOS 17.4+ (session) et Android (Custom Tab) : ni session ni Custom Tab rouverts ; Android : navigateur refermé ensuite sans lien → back',
+      rI.outcome === 'resumed' && same(vI, ['session']) && gI.sessions().length === 0 && gI.externals().length === 0 &&
+      rA.outcome === 'resumed' && same(vA, ['browser']) && gA.opens().length === 0 && same(gA.replaces(), [BACK]), { gI: gI.log, gA: gA.log })
+  }
+  {
+    // Ce n'est une reprise que pour la MÊME page relais encore en cours : autre départ (nouveau bouton) ou connexion de
+    // plus de 15 min → effacée, nouvelle ouverture, comme avant.
+    let clock = Date.parse('2026-11-02T09:00:00Z')
+    const now = () => clock
+    const local = new MemStore()
+    await fake({ platform: 'ios', session: { https: false }, local, now }).auth.relay(relaySearch())
+    const other = fake({ platform: 'ios', session: { https: false }, local, now, launchUrl: LINK })
+    other.auth.listen({ relayPage: true, search: relaySearch(START2) })
+    const ro = await other.auth.relay(relaySearch(START2))
+    await flush()
+    const local2 = new MemStore()
+    await fake({ platform: 'ios', session: { https: false }, local: local2, now }).auth.relay(relaySearch())
+    clock += 16 * 60 * 1000
+    const late = fake({ platform: 'ios', session: { https: false }, local: local2, now })
+    late.auth.listen({ relayPage: true, search: relaySearch() })
+    const rl = await late.auth.relay(relaySearch())
+    check('reprise seulement pour la même page relais encore en cours : autre départ (nouveau bouton Google) → connexion d’avant effacée, lien de lancement jamais racheté, Safari ouvert pour le nouveau départ ; même page après 16 min → nouvelle ouverture',
+      ro.outcome === 'safari' && same(other.externals(), [`${START2}&m=tap`]) && other.replaces().length === 0 && rl.outcome === 'safari' && same(late.externals(), [`${START}&m=tap`]),
+      { other: other.log, late: late.log })
+  }
 })
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
