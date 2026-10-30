@@ -20,9 +20,11 @@
  *     G7 : inventaire, tests de l'assistant, cinq langues, types, npm test, suites, build, paquet, alignement B1–B14) ;
  *     aucune migration ni changement de db/ depuis la production (db/etape-5b intacte) ; commit au-dessus de la production.
  * G3  essai réel sur l'APERÇU (vrai modèle, compte TEST) : scripts/e2e-ia-limites.mjs --scenario perimetre ; l'aperçu
- *     est bien celui du commit courant (API Vercel : meta.commit = HEAD, pas la production).
+ *     est bien celui du commit courant (API Vercel : meta.commit = HEAD, pas la production) ; le contrôle du refus voit
+ *     ses contre-exemples (blague, poème, script, réponse qui citent ProjectLead) ; le projet TEST de l'essai est retiré.
  * G4  essai réel sur l'APERÇU : scripts/e2e-ia-limites.mjs --scenario limite (consommation posée sur la base d'aperçu,
- *     refus sans appel au modèle, entreprise payante non limitée, formules dans les cinq langues, base remise).
+ *     refus sans appel au modèle, demande refusée rendue au champ, personne non administratrice sans lien, entreprise
+ *     payante non limitée, formules dans les cinq langues, base remise).
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -287,6 +289,9 @@ async function g3() {
     for (const t of ['refus court qui renvoie à ProjectLead, sans la réponse demandée', 'aucun outil appelé (journal), aucune carte, aucune page ouverte', 'sortie < 600 jetons (journal)'])
       expect(`vu vert : hors périmètre (${slug}) : ${t}`, out.includes(`  ✓ hors périmètre (${slug}) : ${t}`))
   }
+  for (const must of [/✓ contrôle du refus : les 4 refus réels du 29\.10 passent ; une blague, un poème, un script ou la réponse qui citent ProjectLead sont vus/,
+    /✓ base d’aperçu remise : le projet « TEST Périmètre … » de l’essai et ses tâches retirés/])
+    expect(`vu vert : ${must.source.replace(/\\/g, '').slice(2, 110)}`, must.test(out))
   citedSeen(out, 'G3')
   freshShots(started, ['perimetre-1-poeme', 'perimetre-2-capitale', 'perimetre-3-python', 'perimetre-4-blague', 'perimetre-5-lecture', 'perimetre-6-carte'])
   finish('IA_LIMITES_G3_OK')
@@ -297,10 +302,12 @@ async function g4() {
   await previewIsHead()
   const out = e2e('limite', 'E2E_IA_LIMITES_G4_OK', 16)
   for (const must of [/✓ gratuite : la bulle dit « Formule gratuite : il vous reste (environ \d+ demandes?|moins d’une demande) ce mois-ci\. »/,
-    /✓ gratuite : budget atteint → « …Il revient le 1er \S+\. »/, /✓ gratuite, par l’API : 402 free_limit immédiat/, /✓ base d’aperçu remise comme avant/])
+    /✓ gratuite : budget atteint → « …Il revient le 1er \S+\. »/, /✓ gratuite, par l’API : 402 free_limit immédiat/, /✓ base d’aperçu remise comme avant/,
+    /✓ gratuite : la demande refusée n’est pas partie : elle sort du fil et revient dans le champ/,
+    /✓ gratuite, personne non administratrice : « Un administrateur peut changer la formule/, /✓ base d’aperçu : la personne TEST gratuite est de nouveau administratrice/])
     expect(`vu vert : ${must.source.replace(/\\/g, '').slice(2, 90)}`, must.test(out))
   citedSeen(out, 'G4')
-  freshShots(started, ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules'])
+  freshShots(started, ['limite-1-compteur', 'limite-2-atteinte', 'limite-3-payante', 'limite-4-formules', 'limite-5-membre'])
   finish('IA_LIMITES_G4_OK')
 }
 
