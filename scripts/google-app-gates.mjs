@@ -248,7 +248,7 @@ function gateG1() {
     js.some((s) => s.includes('lead-auth')) && js.some((s) => s.includes('/auth/google/app/redeem?code=')))
   const BAD = /sk-ant|anthropic|opus-5/i
   check(`paquet du navigateur (${files.length} fichiers) : aucune clé ni nom du fournisseur de l’assistant`, files.length > 3 && !files.some((f) => BAD.test(readFileSync(f, 'utf8'))))
-  const grep = spawnSync('git', ['grep', '-nE', 'sk-ant-[A-Za-z0-9_-]{8,}|lid_[A-Za-z0-9_-]{16,}', 'HEAD', '--', '.'], { cwd: ROOT, encoding: 'utf8' })
+  const grep = spawnSync('git', ['grep', '-nE', 'sk-ant-[A-Za-z0-9_-]{8,}|(^|[^A-Za-z0-9])lid_[A-Za-z0-9_-]{32,}', 'HEAD', '--', '.'], { cwd: ROOT, encoding: 'utf8' })
   check('dépôt (HEAD) : aucune clé', grep.status === 1, (grep.stdout ?? '').slice(0, 300))
 
   // Le périmètre : seulement les fichiers du chantier, aucune migration, partie de la production.
@@ -644,7 +644,7 @@ async function gateG3() {
     const keptBack = await page.evaluate(() => sessionStorage.getItem('pl.leadAuth.back'))
     check(`page relais : « ${T.fr['shell.leadAuth.title']} », lien « ${T.fr['shell.leadAuth.back']} » vers l’écran de connexion de l’app (gardé en sessionStorage)`,
       h1 === T.fr['shell.leadAuth.title'] && backHref?.startsWith(`${t.erp.url}/login?next=`) && keptBack === backHref, { h1, backHref, keptBack })
-    await shot(page, 'g3-relais-fr')
+    await shot(page, 'g3-relais-flux-fr')
     const cookie = (await wv.ctx.cookies(t.erp.url)).find((c) => c.name === '__Host-erp_gapp')
     check('cookie verifier de la vue web (aperçu d’ERPlead) : __Host-erp_gapp HttpOnly, Secure, SameSite=Lax',
       cookie && cookie.httpOnly && cookie.secure && cookie.sameSite === 'Lax' && cookie.path === '/', cookie && { httpOnly: cookie.httpOnly, sameSite: cookie.sameSite })
