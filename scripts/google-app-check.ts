@@ -236,6 +236,10 @@ await block('1. Lien vérifié https://projectlead.io/lead-auth/return', async (
     const k = fake({ launchUrl: LINK, local: f.local, now })
     k.auth.listen()
     await flush()
+    // Le lien de lundi redonné aussi par appUrlOpen (événement gardé par la coque, rejoué) : seule la mémoire des liens le
+    // distingue (la page relais n'a noté que ce que getLaunchUrl rendait).
+    k.fire('appUrlOpen', { url: LINK })
+    await flush()
     k.fire('appUrlOpen', { url: linkOf('E') })
     await flush()
     check('le lendemain, nouvelle connexion Google (page relais) : le lien de lundi que getLaunchUrl redonne pendant la connexion en cours (page ordinaire rechargée) est ignoré, seul le nouveau lien est racheté',
@@ -626,11 +630,21 @@ await block('3. Page /lead-auth/return', async () => {
   check('vite.config.ts : deux pages construites (index.html, lead-auth-return.html)', /input: \{ main: path\.resolve\(__dirname, 'index\.html'\), leadAuthReturn: path\.resolve\(__dirname, 'lead-auth-return\.html'\) \}/.test(vite))
   const T: Record<string, Record<string, string>> = {}
   for (const l of ['fr', 'de', 'en', 'it', 'es']) T[l] = JSON.parse(readFileSync(join(ROOT, `src/i18n/locales/${l}/leadauth.json`), 'utf8'))
-  const keys = ['leadauth.return.android', 'leadauth.return.body', 'leadauth.return.nothing', 'leadauth.return.title']
-  check('page de retour : quatre textes dans les cinq langues (titre, que faire, Android « Ouvrir par défaut », « rien demandé »), tous différents d’une langue à l’autre, nommant ProjectLead',
+  const keys = ['leadauth.return.android', 'leadauth.return.body', 'leadauth.return.ios', 'leadauth.return.nothing', 'leadauth.return.title']
+  // Les libellés d'ERPlead (bouton de la page « Revenez dans ProjectLead », « Continuer avec Google ») dans chaque langue.
+  const openApp = { fr: '« Ouvrir ProjectLead »', de: '„ProjectLead öffnen“', en: '“Open ProjectLead”', it: '«Apri ProjectLead»', es: '«Abrir ProjectLead»' } as Record<string, string>
+  const google = { fr: '« Continuer avec Google »', de: '„Weiter mit Google“', en: '“Continue with Google”', it: '«Continua con Google»', es: '«Continuar con Google»' } as Record<string, string>
+  check('page de retour : cinq textes dans les cinq langues (titre, que faire, Android « Ouvrir par défaut », iPhone et iPad : appui long sur « Ouvrir ProjectLead » et Safari par défaut, « rien demandé »), tous différents d’une langue à l’autre, nommant ProjectLead',
     Object.values(T).every((d) => same(Object.keys(d).sort(), keys) && Object.values(d).every((v) => v.includes('ProjectLead'))) &&
     keys.every((k) => new Set(Object.values(T).map((d) => d[k])).size === 5) && T.fr['leadauth.return.title'] === 'Revenez dans ProjectLead' &&
-    T.fr['leadauth.return.body'].includes('« Continuer avec Google »') && T.fr['leadauth.return.body'].includes('« Mot de passe oublié ? »'), T.fr)
+    T.fr['leadauth.return.body'].includes('« Continuer avec Google »') && T.fr['leadauth.return.body'].includes('« Mot de passe oublié ? »') &&
+    T.fr['leadauth.return.ios'] === 'Sur iPhone ou iPad : revenez à la page précédente, appuyez longuement sur « Ouvrir ProjectLead », puis choisissez « Ouvrir dans ProjectLead ». Si votre navigateur n\'est pas Safari, choisissez Safari comme navigateur par défaut dans les Réglages, puis touchez à nouveau « Continuer avec Google ».' &&
+    Object.entries(T).every(([l, d]) => d['leadauth.return.ios'].includes(openApp[l]) && d['leadauth.return.ios'].includes('Safari') && d['leadauth.return.ios'].includes(google[l]) &&
+      d['leadauth.return.body'].includes(google[l])), T.fr)
+  check('page de retour : sous Android « Ouvrir par défaut », sur iPhone et iPad (agent iPhone, iPad, iPod, ou Macintosh : l’iPad en mode ordinateur) le remède de l’appui long, jamais les deux',
+    /if \(\/Android\/i\.test\(navigator\.userAgent\)\) reveal\('\[data-android\]', 'leadauth\.return\.android'\)\n/.test(mod) &&
+    /\n {2}else if \(\/iPhone\|iPad\|iPod\|Macintosh\/\.test\(navigator\.userAgent\)\) reveal\('\[data-ios\]', 'leadauth\.return\.ios'\)\n/.test(mod) &&
+    html.includes('<p data-android hidden></p>') && html.includes('<p data-ios hidden></p>'))
 })
 
 // ------------------------------------------------------------------ 4. hors de l'app, serveur, écran
@@ -670,6 +684,16 @@ await block('4. Site web inchangé, émetteur du serveur, fichiers d’associati
     retRe.test('/lead-auth/return') && !retRe.test('/lead-auth/return/') && !retRe.test('/lead-auth/returnx') && !retRe.test('/lead-auth/google') &&
     build.indexOf("dest: '/lead-auth-return.html'") < build.indexOf("{ handle: 'filesystem' }") && !/status:\s*30\d/.test(build.slice(build.indexOf('routes: ['))) &&
     same(headers, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex' }), { re: ret?.[1], headers })
+
+  const relayRoute = build.match(/\{ src: '(\^\/lead-auth\/google\$)', headers: (\{[^}]+\}), continue: true \}/)
+  const relayHeaders = relayRoute ? Function(`return (${relayRoute[2]})`)() : {}
+  check('Vercel : page relais /lead-auth/google (l’application) avec Cache-Control: no-store et Referrer-Policy: no-referrer, avant les fichiers (contrat § 3a)',
+    !!relayRoute && build.indexOf("src: '^/lead-auth/google$'") < build.indexOf("{ handle: 'filesystem' }") &&
+    same(relayHeaders, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }), relayRoute?.[0])
+  const indexHtml = readFileSync(join(ROOT, 'index.html'), 'utf8')
+  const scripts = [...indexHtml.matchAll(/<script\b[^>]*>/g)].map((m) => m[0])
+  check('index.html (page relais comprise) : aucun script tiers ni mesure d’audience, un seul script, celui du site',
+    same(scripts, ['<script type="module" src="/src/main.tsx">']) && !/gtag|googletagmanager|google-analytics|plausible|posthog/i.test(indexHtml), scripts)
 
   const { default: app } = await import('../server/index.ts')
   // Les fichiers d'association, comparés au contrat d'ERPlead (docs/GOOGLE-APP.md § 3d : exemple et tableau des empreintes).
@@ -724,10 +748,12 @@ await block('4. Site web inchangé, émetteur du serveur, fichiers d’associati
     all &&= has
   }
   const button = { fr: 'Ouvrir ProjectLead', de: 'ProjectLead öffnen', en: 'Open ProjectLead', it: 'Apri ProjectLead', es: 'Abrir ProjectLead' } as Record<string, string>
-  check('page relais rendue dans les cinq langues (titre, texte ; « Retour » prêt) ; texte « Safari » dans les cinq langues, avec le libellé exact du bouton d’ERPlead',
-    all && new Set(Object.values(texts)).size === 5 && Object.entries(safari).every(([l, s]) => s?.includes('Safari') && s.includes(button[l])), { texts, safari })
+  // Le navigateur par défaut d'iOS n'est pas toujours Safari (contrat § 0 [A12], § 3a) : « votre navigateur », jamais « Safari ».
+  const yours = { fr: 'votre navigateur', de: 'Ihrem Browser', en: 'your browser', it: 'suo browser', es: 'su navegador' } as Record<string, string>
+  check('page relais rendue dans les cinq langues (titre, texte ; « Retour » prêt) ; texte « votre navigateur » (jamais « Safari ») dans les cinq langues, avec le libellé exact du bouton d’ERPlead',
+    all && new Set(Object.values(texts)).size === 5 && Object.entries(safari).every(([l, s]) => s?.includes(yours[l]) && !/safari/i.test(s) && s.includes(button[l])), { texts, safari })
   const page = readFileSync(join(ROOT, 'src/pages/LeadAuthGoogle.tsx'), 'utf8')
-  check('page relais : sous iOS 15 à 17.3 (mode safari), le texte « Terminez la connexion dans Safari, puis touchez « Ouvrir ProjectLead » »',
+  check('page relais : sous iOS 15 à 17.3 (mode safari : navigateur par défaut), le texte « Terminez la connexion dans votre navigateur, puis touchez « Ouvrir ProjectLead » »',
     page.includes("view?.mode === 'safari' ? t('shell.leadAuth.safari') : t('shell.leadAuth.body')"))
 })
 

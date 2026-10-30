@@ -5,8 +5,8 @@
  * 2. le contrôle des types et l'interface (vite build) → fichiers statiques ;
  * 3. le serveur Hono (server/vercel.ts), empaqueté par esbuild en une seule fonction Node ;
  * 4. les routes : API, Compte Lead, carte de visite et fichiers d'association des liens d'app (/.well-known) → fonction ;
- *    /lead-auth/return → sa page (lead-auth-return.html, en-têtes posés ici) ; un fichier de dist/ s'il existe ; sinon
- *    l'application.
+ *    /lead-auth/return → sa page (lead-auth-return.html, en-têtes posés ici) ; /lead-auth/google (page relais) : en-têtes
+ *    no-store et no-referrer ; un fichier de dist/ s'il existe ; sinon l'application.
  *
  * Les crons sont déclarés dans vercel.json seulement (24, un par heure : formule gratuite de Vercel, un passage par
  * jour et par cron). Vercel les ajoute lui-même à cette sortie : les répéter dans config.json fait échouer le
@@ -63,6 +63,9 @@ writeFileSync(`${out}/config.json`, JSON.stringify({
     // jamais gardée en cache, sans Referer, hors des moteurs de recherche.
     { src: '^/lead-auth(/return|-return\\.html)$', dest: '/lead-auth-return.html',
       headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex' } },
+    // La page relais de « Continuer avec Google » (contrat d'ERPlead § 3a) : l'application (index.html, aucun script tiers),
+    // mais son adresse porte le départ à usage unique d'ERPlead et la demande d'autorisation : jamais en cache, sans Referer.
+    { src: '^/lead-auth/google$', headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }, continue: true },
     { handle: 'filesystem' },
     // Les routes du navigateur (/projets/…, /suivi/…) : l'application.
     { src: '^/(.*)$', dest: '/index.html' },

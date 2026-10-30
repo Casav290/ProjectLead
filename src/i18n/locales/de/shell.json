@@ -128,7 +128,7 @@
  "shell.invite.subtitle": "Sie sind als {role} mit der Adresse {email} eingeladen.",
  "shell.leadAuth.back": "Zurück",
  "shell.leadAuth.body": "Die Google-Anmeldung öffnet sich im Browser des Telefons. Danach kehren Sie automatisch hierher zurück.",
- "shell.leadAuth.safari": "Schließen Sie die Anmeldung in Safari ab und tippen Sie dann auf „ProjectLead öffnen“.",
+ "shell.leadAuth.safari": "Schließen Sie die Anmeldung in Ihrem Browser ab und tippen Sie dann auf „ProjectLead öffnen“.",
  "shell.leadAuth.title": "Anmeldung mit Google…",
  "shell.legal.privacy": "Datenschutz",
  "shell.legal.terms": "Nutzungsbedingungen",

@@ -184,6 +184,9 @@ if (existsSync(dist)) {
     { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex' }))
   app.use('*', serveStatic({ root: './dist' }))
   const index = readFileSync(join(dist, 'index.html'), 'utf8')
+  // La page relais de « Continuer avec Google » (contrat d'ERPlead § 3a) : son adresse porte le départ à usage unique et la
+  // demande d'autorisation ; jamais en cache, sans Referer (comme sur Vercel, scripts/vercel-build.mjs).
+  app.get('/lead-auth/google', (c) => c.html(index, 200, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }))
   app.get('*', (c) => c.html(index))
 }
 

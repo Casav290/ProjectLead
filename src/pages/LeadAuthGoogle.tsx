@@ -8,9 +8,9 @@ import { leadAppAuth, type RelayView } from '../lib/leadAppAuth'
 /**
  * Page relais de « Continuer avec Google » dans l'app mobile (src/lib/leadAppAuth.ts) : ERPlead y envoie la vue web de
  * l'app ; la connexion Google s'ouvre dans le navigateur sûr du téléphone (session iOS, Custom Tab Android), l'app revient
- * ensuite toute seule par son lien vérifié. Sous iOS 15 à 17.3 (Safari), la personne touche « Ouvrir ProjectLead » à la
- * fin : la page le dit. Publique : la personne n'a pas encore de session ProjectLead. « Retour » ramène à l'écran de
- * connexion de l'app.
+ * ensuite toute seule par son lien vérifié. Sous iOS 15 à 17.3 (navigateur par défaut d'iOS, pas toujours Safari), la
+ * personne touche « Ouvrir ProjectLead » à la fin : la page le dit. Publique : la personne n'a pas encore de session
+ * ProjectLead. « Retour » ramène à l'écran de connexion de l'app.
  */
 export default function LeadAuthGoogle() {
   const t = useT()

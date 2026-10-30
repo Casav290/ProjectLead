@@ -2,5 +2,6 @@
  "leadauth.return.title": "Torni su ProjectLead",
  "leadauth.return.body": "ProjectLead non si è aperta da sola. Chiuda questa pagina e torni nell'app; se non ha effettuato l'accesso, tocchi di nuovo «Continua con Google». Se succede ancora: aggiorni l'app (App Store o Google Play), oppure tocchi «Password dimenticata?».",
  "leadauth.return.android": "Può anche consentire a ProjectLead di aprire i suoi link: Impostazioni > App > ProjectLead > Apri per impostazione predefinita.",
+ "leadauth.return.ios": "Su iPhone o iPad: torni alla pagina precedente, tenga premuto «Apri ProjectLead», poi scelga «Apri in ProjectLead». Se il suo browser non è Safari, scelga Safari come browser predefinito nelle Impostazioni, poi tocchi di nuovo «Continua con Google».",
  "leadauth.return.nothing": "Non ha richiesto nulla nell'app ProjectLead? Chiuda semplicemente questa pagina."
 }

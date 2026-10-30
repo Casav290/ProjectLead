@@ -202,7 +202,8 @@ const G1_REQUIRED = [
   ['page de retour : aucune ressource tierce, aucun lien', 'lead-auth-return.html : aucune ressource tierce (polices, mesure d’audience), aucun lien ni bouton'],
   ['page de retour : module minimal', 'src/leadAuthReturn.ts : n’importe que src/lib/leadAppAuth et les textes de la page'],
   ['deux pages construites', 'vite.config.ts : deux pages construites'],
-  ['page de retour : cinq langues', 'page de retour : quatre textes dans les cinq langues'],
+  ['page de retour : cinq langues (iPhone et iPad compris)', 'page de retour : cinq textes dans les cinq langues'],
+  ['page de retour : Android ou iPhone/iPad, jamais les deux', 'page de retour : sous Android « Ouvrir par défaut », sur iPhone et iPad'],
   ['site web : aucun pont reconnu', 'site web (aucun pont, pont web, isNativePlatform faux ou cassé) : aucun pont natif reconnu'],
   ['site web : aucun écouteur', 'site web : listen() ne pose aucun écouteur, aucun lien traité'],
   ['toutes les pages, au démarrage', 'src/main.tsx : l’écoute du lien de retour démarre avant le premier rendu, sur toutes les pages'],
@@ -211,8 +212,10 @@ const G1_REQUIRED = [
   ['route Vercel de la page de retour (en-têtes)', 'Vercel : /lead-auth/return → lead-auth-return.html (réécriture, pas de redirection)'],
   ['fichiers d’association exacts (contrat)', 'fichiers d’association (/.well-known/apple-app-site-association et assetlinks.json) : 200, application/json, aucune redirection, contenu EXACT du contrat'],
   ['/api/auth/options → leadIssuer', '/api/auth/options → leadIssuer : LEAD_ID_ISSUER (production, aperçu, local), crmlead.io → erplead.io'],
-  ['page relais : cinq langues, texte Safari', 'page relais rendue dans les cinq langues (titre, texte ; « Retour » prêt) ; texte « Safari »'],
-  ['page relais : texte Safari affiché', 'page relais : sous iOS 15 à 17.3 (mode safari)'],
+  ['page relais : cinq langues, « votre navigateur » (jamais « Safari »)', 'page relais rendue dans les cinq langues (titre, texte ; « Retour » prêt) ; texte « votre navigateur » (jamais « Safari »)'],
+  ['page relais : texte du navigateur affiché', 'page relais : sous iOS 15 à 17.3 (mode safari : navigateur par défaut)'],
+  ['page relais : no-store, no-referrer (Vercel)', 'Vercel : page relais /lead-auth/google (l’application) avec Cache-Control: no-store et Referrer-Policy: no-referrer'],
+  ['page relais : aucun script tiers', 'index.html (page relais comprise) : aucun script tiers ni mesure d’audience'],
   // Relecture du 30.10.2026 (2e) : départ seul de l'écran de connexion pendant le rachat ; page relais rechargée.
   ['app relancée par son lien (accueil) : rachat seul, aucun départ seul', 'app relancée par son lien de retour (Android, ou iOS après Safari), accueil sans session'],
   ['… écran décidé avant le lien de lancement : il attend sa lecture', '… même quand l’écran de connexion décide AVANT que la coque ait rendu le lien de lancement'],
@@ -266,7 +269,7 @@ const MUTATIONS = [
   { name: 'Browser.close aussi sous iOS', file: LIB, from: '    if (!ios()) {\n', to: '    if (true) {\n',
     breaks: 'le même lien sous iOS (Universal Link, après Safari) : rachat, aucun Browser.close' },
   { name: 'forme du code non vérifiée', file: LIB, from: 'codes.length === 1 && CODE_RE.test(codes[0])', to: 'codes.length >= 1', breaks: 'lien mal formé (' },
-  { name: 'lien d’erreur gardé comme vu', file: LIB, from: '    if (!errorLink) {\n', to: '    if (true) {\n',
+  { name: 'lien d’erreur gardé comme vu', file: LIB, from: '    if (!isErrorLink(url)) {\n', to: '    if (true) {\n',
     breaks: 'lien d’erreur (error=expired) jamais gardé comme vu' },
   { name: 'start et back de la page relais non vérifiés', file: LIB,
     from: "  if (!start.startsWith(prefix) || new URLSearchParams(start.slice(prefix.length)).has('m') || !isBack(back, issuer)) return null\n", to: '',
@@ -301,8 +304,28 @@ const MUTATIONS = [
     from: '    <link rel="icon" type="image/svg+xml" href="/icon.svg" />\n',
     to: '    <link rel="icon" type="image/svg+xml" href="/icon.svg" />\n    <link href="https://fonts.googleapis.com/css2?family=Archivo" rel="stylesheet" />\n',
     breaks: 'lead-auth-return.html : aucune ressource tierce' },
-  { name: 'page de retour gardée en cache (Vercel)', file: 'scripts/vercel-build.mjs', from: "headers: { 'Cache-Control': 'no-store', ", to: 'headers: { ',
+  { name: 'page de retour gardée en cache (Vercel)', file: 'scripts/vercel-build.mjs', from: "headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag'", to: "headers: { 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag'",
     breaks: 'Vercel : /lead-auth/return → lead-auth-return.html' },
+  // Contrat révisé (42c0f0e, d4cc736) : page relais sans cache ni Referer ni script tiers ; « votre navigateur » ; remède iPhone.
+  { name: 'page relais gardée en cache, avec Referer (Vercel)', file: 'scripts/vercel-build.mjs',
+    from: "    { src: '^/lead-auth/google$', headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }, continue: true },\n", to: '',
+    breaks: 'Vercel : page relais /lead-auth/google (l’application) avec Cache-Control: no-store et Referrer-Policy: no-referrer' },
+  { name: 'mesure d’audience sur toutes les pages (page relais comprise)', file: 'index.html',
+    from: '    <script type="module" src="/src/main.tsx"></script>\n',
+    to: '    <script async src="https://www.googletagmanager.com/gtag/js?id=G-TEST"></script>\n    <script type="module" src="/src/main.tsx"></script>\n',
+    breaks: 'index.html (page relais comprise) : aucun script tiers ni mesure d’audience' },
+  { name: 'page relais : « Safari » au lieu du navigateur par défaut', file: 'src/i18n/locales/fr/shell.json',
+    from: 'Terminez la connexion dans votre navigateur, puis', to: 'Terminez la connexion dans Safari, puis',
+    breaks: 'page relais rendue dans les cinq langues (titre, texte ; « Retour » prêt) ; texte « votre navigateur »' },
+  { name: 'page de retour : remède iPhone jamais montré', file: 'src/leadAuthReturn.ts',
+    from: "  else if (/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent)) reveal('[data-ios]', 'leadauth.return.ios')\n", to: '',
+    breaks: 'page de retour : sous Android « Ouvrir par défaut », sur iPhone et iPad' },
+  { name: 'page de retour : iPad en mode ordinateur (Macintosh) oublié', file: 'src/leadAuthReturn.ts',
+    from: '/iPhone|iPad|iPod|Macintosh/', to: '/iPhone|iPad|iPod/',
+    breaks: 'page de retour : sous Android « Ouvrir par défaut », sur iPhone et iPad' },
+  { name: 'page de retour : remède iPhone sans Safari par défaut (es)', file: 'src/i18n/locales/es/leadauth.json',
+    from: ' Si su navegador no es Safari, elija Safari como navegador predeterminado en Ajustes y luego toque de nuevo «Continuar con Google».', to: '',
+    breaks: 'page de retour : cinq textes dans les cinq langues' },
   { name: 'assetlinks.json sans la clé d’envoi', file: 'server/routes/appLinks.ts',
     from: "  'E1:42:CC:0C:43:67:1C:EC:CA:C6:3D:32:31:C3:4D:57:E4:5A:3E:AD:F0:27:D1:3B:27:64:B5:C8:43:4A:5E:2A',\n", to: '',
     breaks: 'fichiers d’association (/.well-known/apple-app-site-association et assetlinks.json)' },
@@ -431,6 +454,14 @@ function gateG1() {
       ri >= 0 && ri < fi && re.test('/lead-auth/return') && !re.test('/lead-auth/return/x') && same(r.headers, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex' }) &&
       !routes.some((x) => x.status && x.status >= 300 && x.status < 400) && new RegExp(fn?.src ?? '^$').test('/.well-known/apple-app-site-association') &&
       new RegExp(fn?.src ?? '^$').test('/.well-known/assetlinks.json'), routes)
+    const gi = routes.findIndex((x) => x.src === '^/lead-auth/google$')
+    const g = routes[gi] ?? {}
+    const built = readFileSync(join(out, 'static/index.html'), 'utf8')
+    const scripts = [...built.matchAll(/<script\b[^>]*>/g)].map((m) => m[0])
+    check(`config.json produit : page relais /lead-auth/google → l’application avec Cache-Control: no-store et Referrer-Policy: no-referrer (continue, avant les fichiers) ; index.html construit : scripts du site seulement (${scripts.length})`,
+      gi >= 0 && gi < fi && g.continue === true && !g.dest && same(g.headers, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }) &&
+      new RegExp(g.src).test('/lead-auth/google') && !new RegExp(g.src).test('/lead-auth/google/x') &&
+      scripts.length >= 1 && scripts.every((x) => /\ssrc="\/assets\/[^"]+\.js"/.test(x)) && !/gtag|googletagmanager|google-analytics/i.test(built), { g, scripts })
     const page = readFileSync(join(out, 'static/lead-auth-return.html'), 'utf8')
     const assets = [...page.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1])
     const sizes = assets.filter((a) => a.startsWith('/assets/')).map((a) => statSync(join(out, 'static', a)).size)
@@ -814,6 +845,8 @@ const IPHONE_16 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_7 like Mac OS X) AppleW
 const SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1'
 const ANDROID_WV = 'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/140.0.0.0 Mobile Safari/537.36'
 const CHROME_ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36'
+/** L'iPad en mode ordinateur (Safari demande la version de bureau) : il se dit « Macintosh ». */
+const IPAD_DESKTOP = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15'
 const DESKTOP = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 const IOS_UA = `${IPHONE} ${AGENT}`
 const IOS_OLD_UA = `${IPHONE_16} ${AGENT}`
@@ -881,6 +914,17 @@ async function gateG3() {
     rr.status === 200 && /^text\/html/.test(rr.headers.get('content-type') ?? '') && !rr.headers.get('location') && rr.headers.get('cache-control') === 'no-store' &&
     rr.headers.get('referrer-policy') === 'no-referrer' && rr.headers.get('x-robots-tag') === 'noindex' && rrBody.includes('data-lead-auth-return') && !rrBody.includes('id="root"'),
     { status: rr.status, cc: rr.headers.get('cache-control'), rp: rr.headers.get('referrer-policy'), xr: rr.headers.get('x-robots-tag') })
+  // La page relais (contrat § 3a, 42c0f0e) : son adresse porte le départ à usage unique et la demande d'autorisation.
+  const relayUrl = `${t.pl.url}/lead-auth/google?${new URLSearchParams({ start: `${t.erp.url}/auth/google/app/start?d=projectlead.entetes`,
+    back: `${t.erp.url}/login?next=%2Foauth%2Fauthorize%3Fclient_id%3Dprojectlead&locale=fr` })}`
+  const rl = await fetch(relayUrl, { redirect: 'manual', headers: { ...bypassPl, 'user-agent': IOS_UA } })
+  const rlBody = await rl.text()
+  const rlScripts = [...rlBody.matchAll(/<script\b[^>]*>/g)].map((m) => m[0])
+  check(`aperçu : page relais /lead-auth/google → 200 sans redirection, Cache-Control: no-store, Referrer-Policy: no-referrer, scripts du site seulement (${rlScripts.length}), aucune mesure d’audience`,
+    rl.status === 200 && !rl.headers.get('location') && rl.headers.get('cache-control') === 'no-store' && rl.headers.get('referrer-policy') === 'no-referrer' &&
+    rlBody.includes('id="root"') && rlScripts.length >= 1 && rlScripts.every((x) => /\ssrc="\/assets\/[^"]+\.js"/.test(x)) &&
+    !/gtag|googletagmanager|google-analytics/i.test(rlBody),
+    { status: rl.status, cc: rl.headers.get('cache-control'), rp: rl.headers.get('referrer-policy'), scripts: rlScripts })
   // Le pare-feu de Vercel en production (lecture seule, contrat § 7) : /.well-known répond aux robots d'Apple et de Google.
   const fw = {}
   for (const ua of ['AASA-Bot/1.0.0', 'Mozilla/5.0 (compatible; Google-Digital-Asset-Links)']) {
@@ -1302,16 +1346,18 @@ async function gateG3() {
         await lang.page.waitForSelector(`[data-lead-auth-relay][data-mode="${mode}"] [data-lead-auth-back]`, { timeout: 10_000 }).catch(() => {})
         const title = await lang.page.locator('h1').first().textContent().catch(() => '')
         const body = await lang.page.locator('[data-lead-auth-relay]').textContent().catch(() => '')
-        ok[l] = title === T[l]['shell.leadAuth.title'] && body.includes(T[l][mode === 'safari' ? 'shell.leadAuth.safari' : 'shell.leadAuth.body']) && body.includes(T[l]['shell.leadAuth.back'])
+        ok[l] = title === T[l]['shell.leadAuth.title'] && body.includes(T[l][mode === 'safari' ? 'shell.leadAuth.safari' : 'shell.leadAuth.body']) && body.includes(T[l]['shell.leadAuth.back']) &&
+          !/safari/i.test(body)
         if (l !== 'fr') await shot(lang.page, `g3-relais-${mode}-${l}`)
       }
-      check(`E. page relais (${kind}, mode ${mode}) dans les cinq langues : titre, texte ${mode === 'safari' ? '« Terminez la connexion dans Safari… »' : '« La connexion Google s’ouvre… »'}, « Retour »`,
+      check(`E. page relais (${kind}, mode ${mode}) dans les cinq langues : titre, texte ${mode === 'safari' ? '« Terminez la connexion dans votre navigateur… » (jamais « Safari »)' : '« La connexion Google s’ouvre… »'}, « Retour »`,
         Object.values(ok).every(Boolean) && records(bridge.kind, mode === 'safari' ? 'external' : 'open').length === 5, ok)
       await lang.ctx.close()
     }
 
     // ================================================================ F. page /lead-auth/return dans le navigateur (l'app ne s'est pas ouverte)
-    for (const [l, ua, android] of [['fr', SAFARI, false], ['de', CHROME_ANDROID, true], ['en', SAFARI, false], ['it', CHROME_ANDROID, true], ['es', SAFARI, false]]) {
+    for (const [l, ua, android, device] of [['fr', SAFARI, false, 'Safari iOS'], ['de', CHROME_ANDROID, true, 'Chrome Android'], ['en', SAFARI, false, 'Safari iOS'],
+      ['it', CHROME_ANDROID, true, 'Chrome Android'], ['es', SAFARI, false, 'Safari iOS'], ['fr', IPAD_DESKTOP, false, 'iPad en mode ordinateur']]) {
       const br = await context(ua, 'system')
       const reqs = []
       br.page.on('request', (r) => reqs.push({ url: r.url(), referer: r.headers().referer ?? null }))
@@ -1320,6 +1366,7 @@ async function gateG3() {
       await br.page.waitForSelector('[data-lead-auth-return]:not([hidden])', { timeout: 10_000 }).catch(() => {})
       const txt = async (sel) => (await br.page.locator(sel).textContent().catch(() => '')) ?? ''
       const androidShown = await br.page.locator('[data-android]').isVisible().catch(() => false)
+      const iosShown = await br.page.locator('[data-ios]').isVisible().catch(() => false)
       const href = await br.page.evaluate(() => location.href)
       const page = await br.page.content()
       const pass = resp?.status() === 200 && !resp?.request().redirectedFrom() && resp?.headers()['cache-control'] === 'no-store' &&
@@ -1327,11 +1374,12 @@ async function gateG3() {
         href === `${t.pl.url}/lead-auth/return` && !page.includes(fake) && (await br.page.locator('a, button, form').count()) === 0 &&
         (await txt('h1')) === R[l]['leadauth.return.title'] && (await txt('[data-body]')) === R[l]['leadauth.return.body'] &&
         (await txt('[data-nothing]')) === R[l]['leadauth.return.nothing'] && androidShown === android && (!android || (await txt('[data-android]')) === R[l]['leadauth.return.android']) &&
+        iosShown === !android && (android || (await txt('[data-ios]')) === R[l]['leadauth.return.ios']) &&
         (await br.page.title()) === R[l]['leadauth.return.title'] && (await br.page.evaluate(() => document.documentElement.lang)) === l &&
         reqs.slice(1).every((r) => r.url.startsWith(`${t.pl.url}/`) && !r.referer) && reqs.every((r) => !/fonts\.googleapis|gstatic|google-analytics|googletagmanager/.test(r.url))
-      check(`F. /lead-auth/return hors de l’app (${android ? 'Chrome Android' : 'Safari iOS'}, ${l}) : 200 sans redirection, no-store / no-referrer / noindex, code effacé de l’adresse et de la page, « ${R[l]['leadauth.return.title']} », que faire${android ? ', « Ouvrir par défaut »' : ''}, « rien demandé », aucun lien ni bouton, aucune ressource tierce ni Referer`,
-        pass, { status: resp?.status(), href, android: androidShown, reqs: reqs.slice(0, 6).map((r) => `${new URL(r.url).pathname} ${r.referer ? 'referer' : ''}`) })
-      await shot(br.page, `g3-page-retour-${android ? 'android' : 'ios'}-${l}`)
+      check(`F. /lead-auth/return hors de l’app (${device}, ${l}) : 200 sans redirection, no-store / no-referrer / noindex, code effacé de l’adresse et de la page, « ${R[l]['leadauth.return.title']} », que faire${android ? ', « Ouvrir par défaut »' : ', iPhone et iPad : appui long sur « Ouvrir ProjectLead », Safari par défaut'}, « rien demandé », aucun lien ni bouton, aucune ressource tierce ni Referer`,
+        pass, { status: resp?.status(), href, android: androidShown, ios: iosShown, reqs: reqs.slice(0, 6).map((r) => `${new URL(r.url).pathname} ${r.referer ? 'referer' : ''}`) })
+      await shot(br.page, `g3-page-retour-${android ? 'android' : ua === IPAD_DESKTOP ? 'ipad' : 'ios'}-${l}`)
       await br.ctx.close()
     }
 

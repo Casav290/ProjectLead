@@ -7,6 +7,8 @@
  *
  * Chargée DANS la vue web de l'app (pont natif présent) : son adresse passe par le même traitement que les liens reçus
  * (src/lib/leadAppAuth.ts : connexion en cours exigée, une seule fois) ; un lien ignoré ramène à l'accueil de l'app.
+ * Hors de l'app : sous Android, « Ouvrir par défaut » ; sur iPhone et iPad, l'appui long sur « Ouvrir ProjectLead » et
+ * Safari comme navigateur par défaut.
  * Aucune autre dépendance que ce module et les textes de la page (cinq langues, un petit fichier par langue).
  */
 import { leadAppAuth } from './lib/leadAppAuth'
@@ -45,10 +47,11 @@ async function show() {
   set('[data-title]', t('leadauth.return.title'))
   set('[data-body]', t('leadauth.return.body'))
   set('[data-nothing]', t('leadauth.return.nothing'))
-  if (/Android/i.test(navigator.userAgent)) {
-    set('[data-android]', t('leadauth.return.android'))
-    document.querySelector('[data-android]')?.removeAttribute('hidden')
-  }
+  const reveal = (sel: string, key: string) => { set(sel, t(key)); document.querySelector(sel)?.removeAttribute('hidden') }
+  if (/Android/i.test(navigator.userAgent)) reveal('[data-android]', 'leadauth.return.android')
+  // iPhone et iPad (l'iPad en mode ordinateur se dit « Macintosh ») : iOS retient « ouvrir dans le navigateur » pour le
+  // domaine, remède par l'appui long ; seul Safari ouvre sûrement le lien vérifié (contrat § 3c, [A13] [A14]).
+  else if (/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent)) reveal('[data-ios]', 'leadauth.return.ios')
   document.querySelector('[data-lead-auth-return]')?.removeAttribute('hidden')
 }
 

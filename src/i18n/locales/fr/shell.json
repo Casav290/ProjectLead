@@ -128,7 +128,7 @@
  "shell.invite.subtitle": "Vous êtes invité comme {role} avec l'adresse {email}.",
  "shell.leadAuth.back": "Retour",
  "shell.leadAuth.body": "La connexion Google s'ouvre dans le navigateur du téléphone. Une fois la connexion faite, vous revenez ici automatiquement.",
- "shell.leadAuth.safari": "Terminez la connexion dans Safari, puis touchez « Ouvrir ProjectLead ».",
+ "shell.leadAuth.safari": "Terminez la connexion dans votre navigateur, puis touchez « Ouvrir ProjectLead ».",
  "shell.leadAuth.title": "Connexion avec Google…",
  "shell.legal.privacy": "Confidentialité",
  "shell.legal.terms": "Conditions d'utilisation",
