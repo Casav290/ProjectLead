@@ -398,10 +398,14 @@ if (browser) try {
   check('L4 bulle : « Avec la formule Pro, il n’a pas cette limite. » et le lien « Voir les formules » vers Réglages › Entreprise',
     (await k.page.locator('[data-assistant-free-limit] p').nth(1).innerText()).startsWith(FR['shell.assistant.free.pro'])
     && (await link.innerText()) === FR['shell.assistant.free.plans'] && (await link.getAttribute('href')) === '/reglages/entreprise')
-  check('L4 bulle : champ et bouton Envoyer désactivés, aucun message d’erreur ajouté au fil, compteur remplacé',
+  check('L4 bulle : champ et bouton Envoyer désactivés, rien ajouté au fil (ni erreur ni demande restée sans réponse), compteur remplacé',
     await k.page.locator('[data-assistant-input]').isDisabled() && await k.page.locator('[data-assistant-panel] button[type=submit]').isDisabled()
-    && (await k.page.locator(`${LOG} [role=alert]`).count()) === 0 && (await k.page.locator(`${LOG} > *`).count()) === items + 1
-    && (await k.page.locator('[data-assistant-allowance]').count()) === 0)
+    && (await k.page.locator(`${LOG} [role=alert]`).count()) === 0 && (await k.page.locator(`${LOG} > *`).count()) === items
+    && (await k.page.locator('[data-assistant-allowance]').count()) === 0, { items, now: await k.page.locator(`${LOG} > *`).count() })
+  // Le budget a été atteint entre l'ouverture et l'envoi (un collègue s'en est servi) : la demande n'est pas partie.
+  check('L4 bulle : la demande refusée par la limite n’est pas partie : elle sort du fil et revient dans le champ, à reprendre quand l’assistant revient',
+    (await k.page.locator(`${LOG} [data-assistant-user]`, { hasText: 'Encore une question' }).count()) === 0
+    && (await k.page.locator('[data-assistant-input]').inputValue()) === 'Encore une question', await k.page.locator('[data-assistant-input]').inputValue())
   check('L4 bulle : le focus reste dans le panneau (lien des formules)', await k.page.evaluate(() => document.activeElement?.hasAttribute('data-assistant-plans')))
   await k.page.keyboard.press('Escape')
   check('L4 bulle : Échap ferme le panneau, champ désactivé ou non', (await k.page.locator('[data-assistant-panel]').count()) === 0)
@@ -442,6 +446,23 @@ if (browser) try {
   check('L4 bulle dans l’app mobile : le retour le 1er du mois, sans formule Pro ni lien (règles des magasins)',
     nat === expectFr && (await n.page.locator('[data-assistant-plans]').count()) === 0, nat)
   await n.ctx.close()
+
+  // Une personne qui n'est pas administratrice (places données par ERPlead, personnes gardées après un Pro+) : Réglages ›
+  // Entreprise lui est fermé (Settings.tsx la renvoie à son profil) ; la bulle dit, comme le reste de l'application
+  // (UpgradeLink), qu'un administrateur peut changer la formule. La personne est rendue administratrice ensuite.
+  await pool.query(`update account_users set role = 'member' where account_id = $1 and user_id = $2`, [K.id, K.userId])
+  try {
+    const m = await open(K.cl)
+    await bubbleOpen(m.page)
+    const notice = await textOf(m.page, '[data-assistant-free-limit]')
+    check('L4 bulle d’une personne non administratrice : « Un administrateur peut changer la formule (Réglages → Entreprise). », aucun lien vers une page qui lui est fermée',
+      (await m.page.locator('[data-assistant-plans]').count()) === 0 && Boolean(notice?.includes(expectFr)) && Boolean(notice?.includes(FR['shell.assistant.free.pro']))
+      && Boolean(notice?.includes(FR['shell.plan.adminCanChange'])) && (await m.page.locator('[data-assistant-free-limit] a').count()) === 0
+      && await m.page.evaluate(() => Boolean(document.activeElement?.closest('[data-assistant-panel]'))), notice)
+    await m.ctx.close()
+  } finally {
+    await pool.query(`update account_users set role = 'admin' where account_id = $1 and user_id = $2`, [K.id, K.userId])
+  }
 
   // Une entreprise payante : ni compteur ni limite, même à 1 000 000 consommés.
   const b = await open(B.cl)

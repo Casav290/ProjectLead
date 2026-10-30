@@ -22,8 +22,9 @@ import { CardText, Rich } from './assistantText'
  *
  * Formule gratuite (29.10.2026, server/lib/assistant/budget.ts) : au-dessus du champ, « il vous reste environ N demandes
  * ce mois-ci », relu à l'ouverture et après chaque tour ; budget du mois atteint → le message qui dit quand l'assistant
- * revient (avec la formule Pro et le lien vers les formules, hors de l'app mobile) et le champ désactivé. Les cartes déjà
- * proposées se confirment toujours : « Confirmer » n'appelle pas le modèle.
+ * revient (avec la formule Pro et le lien vers les formules pour une personne administratrice, hors de l'app mobile) et le
+ * champ désactivé ; une demande refusée par la limite revient dans le champ. Les cartes déjà proposées se confirment
+ * toujours : « Confirmer » n'appelle pas le modèle.
  */
 
 type Group = { title: string; lines: string[]; notes?: string[]; more?: number }
@@ -158,7 +159,8 @@ export default function Assistant() {
       // Une note pour le modèle (jamais affichée), qui répond dans la langue de l'interface (locale) :
       ? [{ type: 'text', text: `[Note de l’écran, pas une demande : ${notes.join(' ')}]` }, { type: 'text', text }] // i18n-ok
       : text
-    update((s) => ({ ...s, items: [...s.items, { kind: 'user', text }] }))
+    const asked: Item = { kind: 'user', text }
+    update((s) => ({ ...s, items: [...s.items, asked] }))
     try {
       const r = await api.post<Reply>('/assistant', { messages: [...state.api, { role: 'user', content }], page: loc.pathname + loc.search, locale: getLocale() })
       const cards: Item[] = r.actions.filter((a): a is Extract<Action, { type: 'confirm' }> => a.type === 'confirm')
@@ -172,8 +174,13 @@ export default function Assistant() {
       if (go) { nav(go.path); if (small()) setOpen(false) }
     } catch (e) {
       // Formule gratuite, budget du mois atteint : le message dit quand l'assistant revient (sous le fil), pas une panne.
-      if (e instanceof ApiError && e.code === 'free_limit' && e.body?.allowance?.limited) setAllowance(e.body.allowance)
-      else {
+      // La demande n'est pas partie (un collègue a pu atteindre le budget depuis l'ouverture) : elle sort du fil et revient
+      // dans le champ, à reprendre quand l'assistant revient ; le fil envoyé au modèle et les notes restent tels quels.
+      if (e instanceof ApiError && e.code === 'free_limit' && e.body?.allowance?.limited) {
+        update((s) => ({ ...s, items: s.items.filter((i) => i !== asked) }))
+        setInput(raw)
+        setAllowance(e.body.allowance)
+      } else {
         update((s) => ({ ...s, items: [...s.items, errorItem(e)] }))
         readAllowance()
       }
@@ -320,10 +327,14 @@ export default function Assistant() {
           {allowance?.limited && (exhausted ? (
             <div aria-live="polite" data-assistant-free-limit className="border-t border-border border-l-[3px] border-l-soon bg-soon/5 px-3 py-2 text-[13px]">
               <p>{tr('shell.assistant.free.used', { n: allowance.total, month: backMonth })}</p>
+              {/* La page Formule est réservée aux administrateurs (Settings.tsx) : les autres lisent qui peut la changer,
+                  comme partout ailleurs (UpgradeLink, PlanCard.tsx). */}
               {!isNativeApp && (
                 <p className="mt-1">{tr('shell.assistant.free.pro')}{' '}
-                  <Link to={me.plan.upgradeUrl} data-assistant-plans onClick={() => { if (small()) setOpen(false) }}
-                    className="whitespace-nowrap font-semibold text-accent-dark underline">{tr('shell.assistant.free.plans')}</Link></p>
+                  {me.user.role === 'admin' ? (
+                    <Link to={me.plan.upgradeUrl} data-assistant-plans onClick={() => { if (small()) setOpen(false) }}
+                      className="whitespace-nowrap font-semibold text-accent-dark underline">{tr('shell.assistant.free.plans')}</Link>
+                  ) : <span data-assistant-plans-admin className="text-muted-foreground">{tr('shell.plan.adminCanChange')}</span>}</p>
               )}
             </div>
           ) : (
