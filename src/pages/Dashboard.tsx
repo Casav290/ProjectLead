@@ -10,7 +10,7 @@ import { Card, ColorDot, Empty, ErrorNote, HealthBadge, PageHeader, PriorityBadg
 type DashTask = { id: string; title: string; due_date: string | null; priority: string; project_id: string; project_name: string; project_color: string }
 type DashProject = { id: string; name: string; code: string | null; color: string; status: string; health: string; due_date: string | null
   client_name: string | null; tasks_total: number; tasks_done: number; tasks_late: number; minutes_spent: number; budget_minutes: number | null }
-type DashEvent = { id: string; title: string; starts_at: string; ends_at: string; location: string; project_name: string | null }
+type DashEvent = { id: string; title: string; starts_at: string; ends_at: string; all_day: boolean; location: string | null; project_name: string | null; feed_name: string | null }
 type DashActivity = { kind: string; data: any; created_at: string; project_id: string; project_name: string; actor_name: string | null }
 type Dashboard = {
   myTasks: DashTask[]; projects: DashProject[]; week: { entry_date: string; minutes: number }[]; events: DashEvent[]
@@ -181,11 +181,11 @@ export default function Dashboard() {
                   <li key={e.id} className="flex gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
                     <div className="w-[92px] shrink-0 text-xs">
                       <div className="font-bold first-letter:uppercase">{dayLabel(e.starts_at)}</div>
-                      <div className="tabular-nums text-muted-foreground">{fmtTime(e.starts_at)}–{fmtTime(e.ends_at)}</div>
+                      <div className="tabular-nums text-muted-foreground">{e.all_day ? t('agenda.row.allDay') : `${fmtTime(e.starts_at)}–${fmtTime(e.ends_at)}`}</div>
                     </div>
                     <div className="min-w-0 text-sm">
                       <div className="truncate font-semibold">{e.title}</div>
-                      <div className="truncate text-xs text-muted-foreground">{[e.project_name, e.location].filter(Boolean).join(' · ')}</div>
+                      <div className="truncate text-xs text-muted-foreground">{[e.project_name ?? e.feed_name, e.location].filter(Boolean).join(' · ')}</div>
                     </div>
                   </li>
                 ))}

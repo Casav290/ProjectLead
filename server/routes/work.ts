@@ -30,11 +30,19 @@ app.get('/dashboard', async (c) => tx(c, async (db) => {
   const week = (await db.query(
     `select entry_date, sum(minutes)::int as minutes from time_entries
       where user_id = app_user() and entry_date >= date_trunc('week', current_date)::date and minutes is not null group by 1 order by 1`)).rows
+  // Rendez-vous de ProjectLead ET agendas reliés (« Agenda … », calendar_feeds), comme l'écran Agenda (03.11.2026 : l'accueil
+  // disait « Rien de prévu » alors que l'agenda relié avait des événements). Un événement en cours (journée, plusieurs jours) compte.
   const events = (await db.query(
-    `select e.id, e.title, e.starts_at, e.ends_at, e.location, p.name as project_name from events e left join projects p on p.id = e.project_id
-      where e.starts_at >= now() - interval '1 hour' and e.starts_at < now() + interval '7 days'
-        and (e.organizer_id = app_user() or exists (select 1 from event_attendees a where a.event_id = e.id and a.user_id = app_user()))
-      order by e.starts_at limit 10`)).rows
+    `select * from (
+       select e.id::text as id, e.title, e.starts_at, e.ends_at, e.all_day, e.location, p.name as project_name, null::text as feed_name
+         from events e left join projects p on p.id = e.project_id
+        where e.ends_at > now() and e.starts_at < now() + interval '7 days'
+          and (e.organizer_id = app_user() or exists (select 1 from event_attendees a where a.event_id = e.id and a.user_id = app_user()))
+       union all
+       select 'x' || x.id::text, x.title, x.starts_at, x.ends_at, x.all_day, null, null, f.name
+         from external_events x join calendar_feeds f on f.id = x.feed_id
+        where x.user_id = app_user() and x.ends_at > now() and x.starts_at < now() + interval '7 days'
+     ) ev order by starts_at limit 10`)).rows
   const counts = (await db.query(
     `select (select count(*)::int from projects where not is_template and archived_at is null and status = 'active') as active,
             (select count(*)::int from projects where not is_template and archived_at is null and status in ('active','planned') and health <> 'on_track') as at_risk,
