@@ -70,7 +70,8 @@ const BRANCH = 'google-app'
  * La production de ProjectLead fusionnée dans la branche (dpl_Agowv1opRumzob4QZiiiyNZqYsNa, branche vercel, = tête de
  * ~/projets/projectlead-ia-limites ; lue par l'API Vercel le 30.10.2026). Avant : c077f19 (dpl_FATFMB9coBL2P7ZrWpHdgUsUYZNy).
  */
-const PROD_BASE = '38053b3f266ae98438fd3b586beaaa23a63f4846'
+// Production au 03.11.2026 : 560519e (branche vercel, icônes ; contient 38053b3 = ia-limites).
+const PROD_BASE = '560519e022851d710b99c62428704f75a819a89d'
 /** Le dépôt mobile : la version publiée (Play 1.0.1, versionCode 2 ; TestFlight 1.0.1 (2)) et la branche des constructions iOS. */
 const MOBILE_BASE = '310966e'
 const PUBLISHED_VERSION_CODE = 2
@@ -497,9 +498,10 @@ function gateG1() {
   check('dépôt (HEAD) : aucune clé', grep.status === 1, (grep.stdout ?? '').slice(0, 300))
 
   // Le périmètre : seulement les fichiers du chantier, aucune migration, la production fusionnée.
-  check(`branche ${BRANCH} : la production actuelle (${PROD_BASE.slice(0, 7)}, tête de projectlead-ia-limites) y est fusionnée`,
+  run('git', ['fetch', '-q', 'origin', 'vercel'])
+  check(`branche ${BRANCH} : la production (${PROD_BASE.slice(0, 7)}, origin/vercel) y est fusionnée`,
     run('git', ['merge-base', '--is-ancestor', PROD_BASE, 'HEAD']).status === 0 && run('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim() === BRANCH &&
-    run('git', ['-C', `${HOME}/projets/projectlead-ia-limites`, 'rev-parse', 'HEAD']).stdout.trim() === PROD_BASE)
+    [PROD_BASE, run('git', ['rev-parse', 'HEAD']).stdout.trim()].includes(run('git', ['rev-parse', 'origin/vercel']).stdout.trim()))
   const changed = run('git', ['diff', '--name-only', PROD_BASE]).stdout.split('\n').filter(Boolean)
     .concat(run('git', ['ls-files', '-o', '--exclude-standard']).stdout.split('\n').filter((f) => f && !f.startsWith('captures/')))
   const outside = changed.filter((f) => !ALLOWED.some((re) => re.test(f)))
@@ -632,6 +634,33 @@ function gateG2() {
     androidCfg.appendUserAgent === ua && iosCfg.appendUserAgent === ua && same(androidCfg.server?.allowNavigation, nav) &&
     plugins.includes('com.capacitorjs.plugins.browser.BrowserPlugin') && plugins.includes('com.capacitorjs.plugins.app.AppPlugin') &&
     iosCfg.packageClassList?.includes('CAPBrowserPlugin') && iosCfg.packageClassList?.includes('AppPlugin'), { a: androidCfg.appendUserAgent, i: iosCfg.appendUserAgent })
+
+  // --- icônes (choix d'Ève du 03.11.2026) : iOS AppIcon et Android (ic_launcher, adaptative) tirés des icônes de la suite
+  const ICONS = `${HOME}/projets/.unlazy/icones-suite/icones/projectlead`
+  const icon = run('python3', ['-I', '-c', `
+import sys
+from PIL import Image, ImageChops, ImageStat
+src = Image.open(sys.argv[1] + '/icon-1024.png').convert('RGB')
+tr = Image.open(sys.argv[1] + '/icon-1024-transparent.png').convert('RGBA')
+m = sys.argv[2]
+def diff(a, b): return max(x[1] for x in ImageChops.difference(a.convert('RGB'), b.convert('RGB').resize(a.size, Image.LANCZOS)).getextrema())
+def mean(a, b): return max(ImageStat.Stat(ImageChops.difference(a.convert('RGB'), b.convert('RGB').resize(a.size, Image.LANCZOS))).mean)
+ios = Image.open(m + '/ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png')
+only = Image.open(m + '/assets/icon-only.png')
+r = m + '/android/app/src/main/res/mipmap-xxxhdpi/'
+fg = Image.open(m + '/assets/icon-foreground.png').convert('RGBA'); bg = Image.open(r + 'ic_launcher_background.png').convert('RGB')
+leg = Image.open(r + 'ic_launcher.png').convert('RGBA')
+ok = [ios.size == (1024, 1024) and ios.mode == 'RGB' and diff(ios, src) <= 8, diff(only, src) == 0,
+  fg.getpixel((0, 0))[3] == 0 and fg.getpixel((512, 512))[:3] == tr.getpixel((512, 512))[:3] and fg.split()[-1].getbbox()[0] >= 170,
+  bg.getextrema() == ((255, 255), (255, 255), (255, 255)), mean(leg.crop(leg.split()[-1].getbbox()), src) <= 2]
+print('ICONES', ok)
+sys.exit(0 if all(ok) else 1)
+`, ICONS, MOBILE])
+  check('icônes du 03.11.2026 : AppIcon iOS = icon-1024.png (fond blanc), assets/icon-only.png identique, avant-plan adaptatif transparent (forme dans la zone sûre), arrière-plan blanc, ic_launcher Android',
+    icon.status === 0 && /ICONES \[True, True, True, True, True\]/.test(icon.stdout), (icon.stdout + icon.stderr).slice(0, 300))
+  const xmlIcon = readFileSync(`${MOBILE}/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`, 'utf8')
+  check('Android : icône adaptative (mipmap-anydpi-v26) = arrière-plan @mipmap/ic_launcher_background (blanc) + avant-plan @mipmap/ic_launcher_foreground',
+    /<background>[\s\S]*@mipmap\/ic_launcher_background[\s\S]*<\/background>/.test(xmlIcon) && /<foreground>[\s\S]*@mipmap\/ic_launcher_foreground[\s\S]*<\/foreground>/.test(xmlIcon))
 
   // --- construction Android : AAB signé par la clé d'envoi de ProjectLead (valeurs jamais affichées)
   const sign = readEnv(`${HOME}/.android-signing/projectlead-upload.env`)
