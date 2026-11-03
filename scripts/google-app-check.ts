@@ -641,6 +641,20 @@ await block('3. Page /lead-auth/return', async () => {
     T.fr['leadauth.return.ios'] === 'Sur iPhone ou iPad : revenez à la page précédente, appuyez longuement sur « Ouvrir ProjectLead », puis choisissez « Ouvrir dans ProjectLead ». Si votre navigateur n\'est pas Safari, choisissez Safari comme navigateur par défaut dans les Réglages, puis touchez à nouveau « Continuer avec Google ».' &&
     Object.entries(T).every(([l, d]) => d['leadauth.return.ios'].includes(openApp[l]) && d['leadauth.return.ios'].includes('Safari') && d['leadauth.return.ios'].includes(google[l]) &&
       d['leadauth.return.body'].includes(google[l])), T.fr)
+  // Contrat § 3c (troisième relecture Greetlead du 30.10.2026) : le Custom Tab est celui du navigateur PAR DÉFAUT
+  // (CustomTabsIntent sans paquet) ; seul Chrome est mesuré (G4) ; Samsung Internet bloque par défaut la redirection https
+  // vers une autre app (contrat § 0).
+  const chromeStep = {
+    fr: 'Si votre navigateur par défaut n\'est pas Chrome, choisissez Chrome comme navigateur par défaut (Réglages > Applications > Applications par défaut > Navigateur)',
+    de: 'Wenn Ihr Standardbrowser nicht Chrome ist, wählen Sie Chrome als Standardbrowser',
+    en: 'If your default browser is not Chrome, choose Chrome as the default browser',
+    it: 'Se il suo browser predefinito non è Chrome, scelga Chrome come browser predefinito',
+    es: 'Si su navegador predeterminado no es Chrome, elija Chrome como navegador predeterminado',
+  } as Record<string, string>
+  check('page de retour : sous Android, Chrome comme navigateur par défaut si ce n’est pas lui (contrat § 3c), puis à nouveau « Continuer avec Google », après « Ouvrir par défaut », dans les cinq langues',
+    T.fr['leadauth.return.android'] === 'Vous pouvez aussi autoriser ProjectLead à ouvrir ses liens : Réglages > Applications > ProjectLead > Ouvrir par défaut. Si votre navigateur par défaut n\'est pas Chrome, choisissez Chrome comme navigateur par défaut (Réglages > Applications > Applications par défaut > Navigateur), puis touchez à nouveau « Continuer avec Google ».' &&
+    Object.entries(T).every(([l, d]) => d['leadauth.return.android'].includes(chromeStep[l]) && d['leadauth.return.android'].includes(google[l]) &&
+      d['leadauth.return.android'].indexOf(chromeStep[l]) > d['leadauth.return.android'].indexOf('ProjectLead')), Object.fromEntries(Object.entries(T).map(([l, d]) => [l, d['leadauth.return.android']])))
   check('page de retour : sous Android « Ouvrir par défaut », sur iPhone et iPad (agent iPhone, iPad, iPod, ou Macintosh : l’iPad en mode ordinateur) le remède de l’appui long, jamais les deux',
     /if \(\/Android\/i\.test\(navigator\.userAgent\)\) reveal\('\[data-android\]', 'leadauth\.return\.android'\)\n/.test(mod) &&
     /\n {2}else if \(\/iPhone\|iPad\|iPod\|Macintosh\/\.test\(navigator\.userAgent\)\) reveal\('\[data-ios\]', 'leadauth\.return\.ios'\)\n/.test(mod) &&

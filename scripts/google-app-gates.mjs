@@ -183,6 +183,7 @@ const G1_REQUIRED = [
   ['Android : Custom Tab m=auto', 'Android : back gardé (sessionStorage), Browser.open({ url: start&m=auto }) une fois (Custom Tab)'],
   ['page relais : double rendu', 'relais demandé deux fois dans la même page (double rendu de React) : un seul Browser.open'],
   ['Android : navigateur refermé sans retour → back, connexion effacée', '… puis la vue web revient à l’écran de connexion de l’app (back), et la connexion en cours est effacée'],
+  ['page de retour : Android, Chrome par défaut (Samsung Internet…)', 'page de retour : sous Android, Chrome comme navigateur par défaut si ce n’est pas lui'],
   ['navigateur refermé après le retour → rachat seul', 'navigateur refermé APRÈS le lien de retour (Browser.close) : seulement le rachat, jamais back'],
   ['iOS 17.4+ : session m=auto', 'iOS 17.4+ : LeadAuthSession.start({ url: start&m=auto }) une fois'],
   ['iOS 17.4+ : adresse rendue → rachat une fois', 'iOS 17.4+ : adresse rendue par la session → rachat avec le code, une seule navigation'],
@@ -257,6 +258,9 @@ const MUTATIONS = [
   { name: 'navigateur refermé : back même après le retour (Android)', file: LIB, from: 'env.setTimeout(() => { if (!returned) giveUp(back) }, FINISH_GRACE_MS)',
     to: 'env.setTimeout(() => { setPending(false); env.replace(back) }, FINISH_GRACE_MS)',
     breaks: 'navigateur refermé APRÈS le lien de retour (Browser.close) : seulement le rachat, jamais back' },
+  { name: 'page de retour : remède Android sans Chrome par défaut (de)', file: 'src/i18n/locales/de/leadauth.json',
+    from: ' Wenn Ihr Standardbrowser nicht Chrome ist, wählen Sie Chrome als Standardbrowser (Einstellungen > Apps > Standard-Apps > Browser) und tippen Sie dann erneut auf „Weiter mit Google“.', to: '',
+    breaks: 'page de retour : sous Android, Chrome comme navigateur par défaut si ce n’est pas lui' },
   { name: 'préfixe du lien de retour approché', file: LIB, from: '!url.startsWith(RETURN_PREFIX)', to: "!url.includes('/lead-auth/return?')",
     breaks: 'liens étrangers ignorés (' },
   { name: 'schéma propre io.projectlead.app encore accepté', file: LIB, from: '!url.startsWith(RETURN_PREFIX)',
@@ -410,6 +414,17 @@ function gateG1() {
   check(`scripts/google-app-check.ts : ${w.bilan ? `${w.bilan[1]} verts, ${w.bilan[2]} rouges` : 'pas de bilan'}`,
     w.status === 0 && w.bilan && w.bilan[2] === '0' && Number(w.bilan[1]) >= 60 && lastLine(w.out) === 'GOOGLE_APP_WEB_CHECK_OK', w.nons.join(' | ') || lastLine(w.err))
   for (const [what, prefix] of G1_REQUIRED) check(`vu vert : ${what}`, w.oks.some((t) => t.startsWith(prefix)), prefix)
+  // Ordre de mise en ligne du contrat (étape 0 : ERPlead à liens vérifiés en production, porte PROD d'ERPlead) et navigateur
+  // par défaut d'Android, dits dans le doc de l'app.
+  const doc = readFileSync(join(ROOT, 'docs/GOOGLE-APP.md'), 'utf8')
+  const contract = readFileSync(CONTRACT, 'utf8')
+  const docMust = ['0. **ERPlead à liens vérifiés en production d\'abord**', '`node scripts/google-app-gates.mjs PROD` → `GOOGLE_APP_PROD_OK`',
+    'jamais « Redeploy » de d2d72aa', '3. Ensuite seulement, la 1.0.2 aux stores', '**Android, navigateur par défaut autre que Chrome**', 'Samsung Internet']
+  const missing = docMust.filter((x) => !doc.includes(x))
+  check('docs/GOOGLE-APP.md : ordre 0. ERPlead à liens vérifiés (porte PROD d’ERPlead) → 1. site → 2. Apple et Google → 3. 1.0.2 → 4. interrupteur (nouveau déploiement, jamais « Redeploy » de d2d72aa) ; navigateur par défaut d’Android (Samsung Internet)',
+    missing.length === 0 && doc.indexOf('0. **ERPlead') < doc.indexOf('1. Le site de ProjectLead') && doc.indexOf('1. Le site de ProjectLead') < doc.indexOf('3. Ensuite seulement'), missing)
+  check('contrat d’ERPlead : étape 0 de l’ordre de mise en ligne (ERPlead à liens vérifiés en production, porte PROD) présente',
+    contract.includes('0. **ERPlead à liens vérifiés en production d\'abord**') && contract.includes('node scripts/google-app-gates.mjs PROD'))
   counterProofs()
 
   const env = { TEST_DATABASE_URL: testDatabaseUrl() }

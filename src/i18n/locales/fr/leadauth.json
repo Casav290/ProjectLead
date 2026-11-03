@@ -1,7 +1,7 @@
 {
  "leadauth.return.title": "Revenez dans ProjectLead",
  "leadauth.return.body": "ProjectLead ne s'est pas ouverte toute seule. Fermez cette page et revenez dans l'app ; si vous n'êtes pas connecté, touchez à nouveau « Continuer avec Google ». Si cela se répète : mettez l'app à jour (App Store ou Google Play), ou touchez « Mot de passe oublié ? ».",
- "leadauth.return.android": "Vous pouvez aussi autoriser ProjectLead à ouvrir ses liens : Réglages > Applications > ProjectLead > Ouvrir par défaut.",
+ "leadauth.return.android": "Vous pouvez aussi autoriser ProjectLead à ouvrir ses liens : Réglages > Applications > ProjectLead > Ouvrir par défaut. Si votre navigateur par défaut n'est pas Chrome, choisissez Chrome comme navigateur par défaut (Réglages > Applications > Applications par défaut > Navigateur), puis touchez à nouveau « Continuer avec Google ».",
  "leadauth.return.ios": "Sur iPhone ou iPad : revenez à la page précédente, appuyez longuement sur « Ouvrir ProjectLead », puis choisissez « Ouvrir dans ProjectLead ». Si votre navigateur n'est pas Safari, choisissez Safari comme navigateur par défaut dans les Réglages, puis touchez à nouveau « Continuer avec Google ».",
  "leadauth.return.nothing": "Vous n'avez rien demandé dans l'app ProjectLead ? Fermez simplement cette page."
 }
