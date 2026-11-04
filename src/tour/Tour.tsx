@@ -241,13 +241,16 @@ export default function Tour({ steps, t, onEnd, onMenu }: Props) {
           <p className="plt-sr" aria-live="polite">{t('tour.progress', { n: i + 1, total: steps.length })}</p>
           <h2 id="plt-title" key={`t-${step.id}`} className="plt-title plt-in">{t(step.title)}</h2>
           <p id="plt-text" key={`b-${step.id}`} className="plt-text plt-in-2">{t(step.body)}</p>
+          {/* Le geste à essayer tout de suite (Linear, Arc) : la visite se ferme, puis le geste se lance. */}
+          {step.action && (
+            <button type="button" className="plt-try plt-in-2" key={`x-${step.id}`} data-tour-action
+                    onClick={() => { const run = step.action!.run; end('action'); setTimeout(run, 60) }}>
+              {t(step.action.label)}<span aria-hidden="true">→</span>
+            </button>
+          )}
           <div className="plt-actions plt-in-2" key={`a-${step.id}`}>
             <button type="button" className="plt-skip" onClick={() => end('skip')} data-tour-skip>{t('tour.skip')}</button>
             {i > 0 && <button type="button" className="plt-btn" onClick={() => go(-1)} data-tour-back>{t('tour.back')}</button>}
-            {step.action && (
-              <button type="button" className="plt-btn" data-tour-action
-                      onClick={() => { const run = step.action!.run; end('action'); setTimeout(run, 60) }}>{t(step.action.label)}</button>
-            )}
             <button ref={primary} type="button" className="plt-btn" data-primary="" data-tour-next onClick={() => go(1)}>
               {i === 0 ? t('tour.start') : last ? t('tour.done') : t('tour.next')}
             </button>

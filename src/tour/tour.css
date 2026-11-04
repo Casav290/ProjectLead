@@ -63,6 +63,13 @@
 .plt-seg[data-on] > i { transform: scaleX(1); }
 .plt-title { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 800; letter-spacing: -0.025em; }
 .plt-text { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--plt-muted); }
+.plt-try { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 0; background: none; border: 0; cursor: pointer;
+  font-size: 13.5px; font-weight: 700; color: var(--plt-accent); }
+.plt-try > span { transition: transform 200ms var(--plt-ease); }
+.plt-try:hover > span { transform: translateX(3px); }
+.plt-try:hover { text-decoration: underline; text-underline-offset: 3px; }
+.plt-root[data-kbd] .plt-try:focus-visible { outline: 2px solid var(--plt-accent); outline-offset: 2px; }
+.plt-try:focus-visible { outline: none; }
 .plt-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .plt-skip { margin-right: auto; padding: 8px 2px; font-size: 13px; font-weight: 600; color: var(--plt-muted); background: none; border: 0; cursor: pointer; }
 .plt-skip:hover { color: var(--plt-fg); text-decoration: underline; text-underline-offset: 3px; }

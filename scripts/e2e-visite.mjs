@@ -177,6 +177,14 @@ try {
     await pause(800)
     check('clic sur la zone montrée : visite fermée, page ouverte', !(await open(page).isVisible()) && new URL(page.url()).pathname === '/projets', page.url())
     check('Revoir ne réécrit rien : due reste faux', (await me(page)).user?.tour_pending === false)
+    // « L'essayer » (étape Assistant IA) : la visite se ferme, la bulle s'ouvre.
+    await page.goto(`${URL0}/`, { waitUntil: 'networkidle' })
+    await replay(page)
+    for (let k = 0; k < 15 && (await stepId(page)) !== 'assistant'; k++) { await page.locator('[data-tour-next]').click(); await pause(150) }
+    if ((await stepId(page)) === 'assistant') {
+      await page.locator('[data-tour-action]').click(); await pause(900)
+      check('« L’essayer » : visite fermée, Assistant IA ouvert', !(await open(page).isVisible()) && await page.locator('[data-assistant-panel]').isVisible())
+    } else check('étape Assistant IA présente', false, 'absente')
     await ctx.close()
   }
   // 4. Téléphone 390.

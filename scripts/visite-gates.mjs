@@ -105,6 +105,15 @@ if (gate === 'g3') {
   ok('G3')
 }
 
+// Contre-épreuve du détecteur : une adresse qui sert encore des « — » (la production d'avant la visite) doit être trouvée.
+if (gate === 'controle') {
+  const base = process.argv[3]
+  const { hits, scripts } = await dashScan(base)
+  console.log(`  ${scripts} scripts lus sur ${base}, ${hits.length} avec « — » : ${hits.slice(0, 4).join(', ')}`)
+  if (hits.length) { console.log('VISITE_CONTROLE_OK'); process.exit(0) }
+  fail('le détecteur ne trouve rien sur le témoin')
+}
+
 if (gate === 'g4' || gate === 'g7') {
   // Contre-épreuve : le détecteur trouve un tiret long planté.
   const plant = 'texte témoin — planté'
