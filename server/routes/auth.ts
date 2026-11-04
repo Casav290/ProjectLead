@@ -260,6 +260,8 @@ app.get('/', async (c, next) => {
   if (c.req.method === 'GET' && rootProbe((n) => c.req.header(n), (k) => c.req.query(k), (k) => getCookie(c, k)))
     return c.redirect('/auth/lead/start?prompt=none&probe=1')
   c.header('Cache-Control', 'no-store')
+  // Diagnostic sans secret : pourquoi la page publique (en-têtes de navigation vus par la fonction).
+  c.header('X-PL-Root', `site; mode=${c.req.header('sec-fetch-mode') ?? '-'}; dest=${c.req.header('sec-fetch-dest') ?? '-'}; purpose=${c.req.header('sec-purpose') ?? c.req.header('purpose') ?? '-'}; probe=${getCookie(c, 'lead_probe') ? 'cookie' : c.req.query('lead_probe') !== undefined ? 'query' : '-'}`)
   return c.html(SITE_HOME)
 })
 const LOGIN_COOKIE_SECONDS = 3600
