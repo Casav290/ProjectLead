@@ -249,7 +249,9 @@ const SITE_HOME = (() => { try { return readFileSync(join(dirname(fileURLToPath(
 const ROOT_BOTS = /(bot|crawler|spider|slurp|facebookexternalhit|embedly|whatsapp|skypeuripreview|lighthouse)/i
 export function rootProbe(h: (n: string) => string | undefined, query: (k: string) => string | undefined, cookie: (k: string) => string | undefined): boolean {
   const v = (n: string) => (h(n) ?? '').toLowerCase()
-  if (v('sec-fetch-mode') !== 'navigate' || v('sec-fetch-dest') !== 'document') return false
+  // Sec-Fetch-Dest seul : la réécriture de Vercel (« / » vers la fonction) présente Sec-Fetch-Mode « cors » (constaté sur
+  // l'aperçu du 04.11.2026), alors que seule une navigation de document porte Dest « document ».
+  if (v('sec-fetch-dest') !== 'document') return false
   if (/prefetch|prerender/.test(`${v('sec-purpose')} ${v('purpose')} ${v('x-purpose')} ${v('x-moz')}`)) return false
   if (cookie(SESSION_COOKIE) || cookie('lead_probe') || query('lead_probe') !== undefined) return false
   const ua = h('user-agent') ?? ''
@@ -260,8 +262,6 @@ app.get('/', async (c, next) => {
   if (c.req.method === 'GET' && rootProbe((n) => c.req.header(n), (k) => c.req.query(k), (k) => getCookie(c, k)))
     return c.redirect('/auth/lead/start?prompt=none&probe=1')
   c.header('Cache-Control', 'no-store')
-  // Diagnostic sans secret : pourquoi la page publique (en-têtes de navigation vus par la fonction).
-  c.header('X-PL-Root', `site; mode=${c.req.header('sec-fetch-mode') ?? '-'}; dest=${c.req.header('sec-fetch-dest') ?? '-'}; purpose=${c.req.header('sec-purpose') ?? c.req.header('purpose') ?? '-'}; probe=${getCookie(c, 'lead_probe') ? 'cookie' : c.req.query('lead_probe') !== undefined ? 'query' : '-'}`)
   return c.html(SITE_HOME)
 })
 const LOGIN_COOKIE_SECONDS = 3600
