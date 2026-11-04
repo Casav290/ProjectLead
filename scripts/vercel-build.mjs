@@ -52,6 +52,8 @@ await build({
   logLevel: 'info',
 })
 
+cpSync('dist/_site/fr.html', `${fn}/site-fr.html`)
+
 writeFileSync(`${fn}/.vc-config.json`, JSON.stringify({
   runtime: 'nodejs22.x', handler: 'index.mjs', launcherType: 'Nodejs', shouldAddHelpers: false, maxDuration: 300,
 }, null, 2))
@@ -88,10 +90,9 @@ writeFileSync(`${out}/config.json`, JSON.stringify({
     { src: '^/$', has: [{ type: 'header', key: 'user-agent', value: `.*${BOTS}.*` }], dest: '/_site/fr.html' },
     { src: '^/$', has: [{ type: 'cookie', key: 'lead_probe' }], dest: '/_site/fr.html', headers: { 'Cache-Control': 'no-store' } },
     { src: '^/$', has: [{ type: 'query', key: 'lead_probe' }], dest: '/_site/fr.html', headers: { 'Cache-Control': 'no-store' } },
-    { src: '^/$', methods: ['GET'], has: [{ type: 'header', key: 'sec-fetch-mode', value: 'navigate' }, { type: 'header', key: 'sec-fetch-dest', value: 'document' }],
-      missing: [{ type: 'header', key: 'sec-purpose' }, { type: 'header', key: 'purpose' }],
-      status: 302, headers: { Location: '/auth/lead/start?prompt=none&probe=1', 'Cache-Control': 'no-store' } },
-    { src: '^/$', dest: '/_site/fr.html', headers: { 'Cache-Control': 'no-store' } },
+    // Le reste (navigateur sans session) : la fonction décide (server/routes/auth.ts, rootProbe) entre l'essai silencieux
+    // et la page publique (site-fr.html copié à côté de la fonction).
+    { src: '^/$', dest: '/api' },
     // Une adresse, une seule forme : /fr → /, /en/ → /en, /fr/page/ → /fr/page.
     { src: '^/fr/?$', status: 301, headers: { Location: '/' } },
     { src: '^/((?:en|de)(?:/[a-z0-9-]+)?|fr/[a-z0-9-]+)/$', status: 301, headers: { Location: '/$1' } },

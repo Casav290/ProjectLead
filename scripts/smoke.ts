@@ -1298,6 +1298,12 @@ check('formule Pro : session ouverte, retour à la page demandée', ll.location 
   const jarP2 = (probe2.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
   nextIdClaims = lead(toP2.searchParams.get('nonce') ?? '', true)
   const okP = await app.request(`http://localhost/auth/lead/callback?code=c&state=${toP2.searchParams.get('state')}`, { headers: { cookie: jarP2 } })
+  const { rootProbe } = await import('../server/routes/auth.js')
+  const nav = { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'user-agent': 'Mozilla/5.0 Chrome/130' } as Record<string, string>
+  const rp = (hd: Record<string, string>, q: Record<string, string> = {}, ck: Record<string, string> = {}) => rootProbe((n) => hd[n], (k) => q[k], (k) => ck[k])
+  check('racine : une vraie navigation sans session essaie ERPlead ; robot, préchargement, app mobile, retour d\u2019essai, session, outil sans Sec-Fetch : page publique',
+    rp(nav) && !rp({ ...nav, 'user-agent': 'Googlebot/2.1' }) && !rp({ ...nav, 'sec-purpose': 'prefetch' }) && !rp({ ...nav, 'user-agent': 'X ProjectLeadApp/1.0.2' })
+    && !rp(nav, { lead_probe: '1' }) && !rp(nav, {}, { lead_probe: '1' }) && !rp(nav, {}, { projectlead_session: 'x' }) && !rp({ 'user-agent': 'curl/8' }))
   check('essai de la racine avec session ERPlead : session ouverte, accueil de l\u2019espace', okP.headers.get('location') === '/'
     && /projectlead_session=/.test(okP.headers.get('set-cookie') ?? ''), okP.headers.get('location'))
 }

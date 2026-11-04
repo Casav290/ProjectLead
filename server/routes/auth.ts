@@ -1,5 +1,8 @@
 import { Hono } from 'hono'
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { hashPassword, hashToken, newToken, SESSION_COOKIE, SESSION_DAYS, verifyPassword } from '../auth.js'
 import { anon, anonTx, type Db } from '../db.js'
@@ -236,6 +239,29 @@ const startLeadLogin = async (c: any) => {
     cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
   return c.redirect(authorize.toString())
 }
+/**
+ * « / » sans session ProjectLead sur Vercel (scripts/vercel-build.mjs y envoie ce qui n'est ni session, ni app mobile, ni
+ * robot, ni retour d'essai) : une vraie navigation de document tente une fois l'essai silencieux chez ERPlead ; tout le
+ * reste (préchargement, outil sans en-têtes Sec-Fetch) reçoit la page d'accueil publique, copiée à côté de la fonction
+ * au build (site-fr.html). Sans ce fichier (serveur local), la route ne fait rien.
+ */
+const SITE_HOME = (() => { try { return readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'site-fr.html'), 'utf8') } catch { return null } })()
+const ROOT_BOTS = /(bot|crawler|spider|slurp|facebookexternalhit|embedly|whatsapp|skypeuripreview|lighthouse)/i
+export function rootProbe(h: (n: string) => string | undefined, query: (k: string) => string | undefined, cookie: (k: string) => string | undefined): boolean {
+  const v = (n: string) => (h(n) ?? '').toLowerCase()
+  if (v('sec-fetch-mode') !== 'navigate' || v('sec-fetch-dest') !== 'document') return false
+  if (/prefetch|prerender/.test(`${v('sec-purpose')} ${v('purpose')} ${v('x-purpose')} ${v('x-moz')}`)) return false
+  if (cookie(SESSION_COOKIE) || cookie('lead_probe') || query('lead_probe') !== undefined) return false
+  const ua = h('user-agent') ?? ''
+  return !ROOT_BOTS.test(ua) && !/ProjectLeadApp/.test(ua)
+}
+app.get('/', async (c, next) => {
+  if (!SITE_HOME) return next()
+  if (c.req.method === 'GET' && rootProbe((n) => c.req.header(n), (k) => c.req.query(k), (k) => getCookie(c, k)))
+    return c.redirect('/auth/lead/start?prompt=none&probe=1')
+  c.header('Cache-Control', 'no-store')
+  return c.html(SITE_HOME)
+})
 const LOGIN_COOKIE_SECONDS = 3600
 /** L'essai silencieux de la racine : `lead_probe` (dix minutes, lisible, aucun secret) et le repère de son `state`. */
 const LEAD_PROBE = 'lead_probe'
