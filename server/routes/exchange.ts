@@ -22,8 +22,81 @@ const base = () => (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
 
 app.get('/.well-known/lead-app.json', (c) => c.json({
   app: 'projectlead', name: 'ProjectLead',
-  exchange: { version: 1, inbox: `${base()}/api/lead-exchange/v1/inbox`, accepts: Object.keys(ALLOWED), sends: ['invoice'] },
+  exchange: { version: 1, inbox: `${base()}/api/lead-exchange/v1/inbox`, accepts: Object.keys(ALLOWED), sends: ['invoice'],
+              read: `${base()}/api/lead-exchange/v1/read`, reads: ['known_contacts'] },
 }))
+
+/**
+ * Contacts connus pour VisitLead (04.11.2026, contrat ~/projets/.unlazy/visitlead/SUITE-protocol.md §2) : les clients
+ * qui ont une adresse e-mail et leurs contacts, au niveau de l'entreprise (jeton exchange_read d'ERPlead, VisitLead
+ * seulement, organisation obligatoire, personne facultative et ignorée), champs minimaux. Clients archivés exclus.
+ * Pas de date de modification ici : ordre (created_at, id) croissant, curseur opaque ; `count=1` : le nombre seul.
+ */
+const KNOWN_READERS = ['visitlead']
+const KNOWN_LIMIT = 500
+const knownHits = new Map<string, number[]>()
+function knownBudget(org: string, now = Date.now()) {
+  const recent = (knownHits.get(org) ?? []).filter((t) => now - t < 60_000)
+  if (recent.length >= 120) { knownHits.set(org, recent); return false }
+  recent.push(now); knownHits.set(org, recent)
+  if (knownHits.size > 5000) knownHits.clear()
+  return true
+}
+const EMAIL_SQL = `'^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$'`
+const KNOWN_SQL = `
+  select 'client:' || c.id::text as id, 'client' as kind, lower(trim(c.email)) as email,
+         case when c.kind = 'company' then nullif(trim(c.contact_person), '') else nullif(trim(c.name), '') end as name,
+         case when c.kind = 'company' then nullif(trim(c.name), '') end as company, null::text as title,
+         date_trunc('milliseconds', c.created_at) as at
+    from clients c
+   where c.account_id = $1 and c.archived_at is null and c.email is not null and trim(c.email) ~ ${EMAIL_SQL}
+  union all
+  select 'contact:' || k.id::text, 'contact', lower(trim(k.email)), nullif(trim(k.name), ''), nullif(trim(c.name), ''),
+         nullif(trim(k.job_title), ''), date_trunc('milliseconds', k.created_at)
+    from client_contacts k join clients c on c.id = k.client_id and c.archived_at is null
+   where k.account_id = $1 and k.email is not null and trim(k.email) ~ ${EMAIL_SQL}`
+
+app.get('/api/lead-exchange/v1/read', async (c) => {
+  let tok: IncomingExchange | null = null
+  try { tok = await incomingExchange(c.req.header('authorization'), 'exchange_read') } catch { tok = null }
+  if (!tok) return c.json({ error: 'invalid_token' }, 401)
+  const type = c.req.query('type') ?? ''
+  if (type !== 'known_contacts') return c.json({ error: 'unsupported_type', reads: ['known_contacts'] }, 422)
+  if (!KNOWN_READERS.includes(tok.app)) return c.json({ error: 'sender_not_allowed' }, 403)
+  if (!tok.org) return c.json({ error: 'org_required' }, 401)
+  let cursor: { u: string; i: string } | null = null
+  const rawCursor = c.req.query('cursor')
+  if (rawCursor) {
+    try {
+      const x = JSON.parse(Buffer.from(rawCursor, 'base64url').toString())
+      if (typeof x?.u !== 'string' || Number.isNaN(Date.parse(x.u)) || typeof x?.i !== 'string') throw new Error('cursor')
+      cursor = { u: new Date(x.u).toISOString(), i: x.i.slice(0, 200) }
+    } catch { return c.json({ error: 'invalid_cursor' }, 400) }
+  }
+  const org = tok.org
+  const out = await anonTx(async (db) => {
+    const acc = (await db.query('select id from accounts where lead_org = $1', [org])).rows[0]
+    if (!acc) return { status: 404 as const, body: { error: 'unknown_org' } }
+    if (!knownBudget(acc.id)) return { status: 429 as const, body: { error: 'too_many_requests' } }
+    await db.query(`select set_config('app.account_id', $1, true), set_config('app.role', 'admin', true)`, [acc.id])
+    if (c.req.query('count') === '1') {
+      const n = (await db.query(`select count(distinct email)::int as n from (${KNOWN_SQL}) x`, [acc.id])).rows[0]?.n ?? 0
+      return { status: 200 as const, body: { count: n } }
+    }
+    const limit = Math.max(1, Math.min(KNOWN_LIMIT, Number(c.req.query('limit')) || KNOWN_LIMIT))
+    const rows = (await db.query(
+      `select * from (${KNOWN_SQL}) x where ($2::timestamptz is null or (x.at, x.id) > ($2::timestamptz, $3::text))
+        order by x.at, x.id limit $4`, [acc.id, cursor?.u ?? null, cursor?.i ?? '', limit + 1])).rows
+    const page = rows.slice(0, limit)
+    const last = page[page.length - 1]
+    return { status: 200 as const, body: {
+      data: page.map((r: any) => ({ id: r.id, kind: r.kind, email: r.email, name: r.name ?? null, company: r.company ?? null,
+                                    title: r.title ?? null, updated_at: new Date(r.at).toISOString() })),
+      next: rows.length > limit && last ? Buffer.from(JSON.stringify({ u: new Date(last.at).toISOString(), i: last.id })).toString('base64url') : null,
+    } }
+  })
+  return c.json(out.body, out.status)
+})
 
 app.post('/api/lead-exchange/v1/inbox', async (c) => {
   let tok: IncomingExchange | null = null

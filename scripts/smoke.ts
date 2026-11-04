@@ -2896,6 +2896,68 @@ section('Visite guidée (04.11.2026) : due au premier passage seulement, une foi
   await pool.query('update users set tour_pending = true where id = $1', [marcId])
 }
 
+section('Contacts connus pour VisitLead (known_contacts, 04.11.2026)')
+{
+  const knownOrg = (await pool.query('select lead_org from accounts where id = $1', [accountId])).rows[0].lead_org as string
+  const readJwt = (o: { app?: string; org?: string | null; scope?: string; person?: string } = {}) => {
+    const h = b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })
+    const t = Math.floor(Date.now() / 1000)
+    const p = b64({ iss: process.env.LEAD_ID_ISSUER, sub: `client:${o.app ?? 'visitlead'}`, aud: ['projectlead', 'lead-id'], app: o.app ?? 'visitlead',
+      client_id: o.app ?? 'visitlead', scope: o.scope ?? 'exchange_read', token_use: 'exchange', ...(o.org === null ? {} : { org: o.org ?? knownOrg }),
+      ...(o.person ? { person: o.person, person_role: 'admin' } : {}), iat: t, exp: t + 300, jti: randomUUID() })
+    return `${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`
+  }
+  const kread = (q: string, tok = readJwt()) => new Client().req('GET', `/api/lead-exchange/v1/read?${q}`, undefined, { authorization: `Bearer ${tok}` })
+  const tag = `vl${stamp}`
+  const t0 = '2030-01-01T10:00:00.000Z'
+  const c1 = (await pool.query(`insert into clients (account_id, kind, name, contact_person, email, created_at) values ($1,'company',$2,'Anne Rochat',$3,$4) returning id`,
+    [accountId, `Rochat ${tag}`, ` Anne.${tag}@Rochat.test `, t0])).rows[0].id
+  await pool.query(`insert into client_contacts (account_id, client_id, name, email, job_title, created_at) values ($1,$2,'Luc Favre',$3,'Achats',$4)`,
+    [accountId, c1, `luc.${tag}@rochat.test`, '2030-01-01T10:00:01.000Z'])
+  await pool.query(`insert into client_contacts (account_id, client_id, name, email, created_at) values ($1,$2,'Sans adresse',null,$3)`, [accountId, c1, t0])
+  const c2 = (await pool.query(`insert into clients (account_id, kind, name, email, created_at, archived_at) values ($1,'person',$2,$3,$4,now()) returning id`,
+    [accountId, `Archivé ${tag}`, `arch.${tag}@x.test`, '2030-01-01T10:00:02.000Z'])).rows[0].id
+  await pool.query(`insert into client_contacts (account_id, client_id, name, email, created_at) values ($1,$2,'Du client archivé',$3,$4)`,
+    [accountId, c2, `ka.${tag}@x.test`, '2030-01-01T10:00:03.000Z'])
+  await pool.query(`insert into clients (account_id, kind, name, email, created_at) values ($1,'person',$2,'pas-une-adresse',$3)`, [accountId, `Faux ${tag}`, t0])
+  const card = await new Client().get('/.well-known/lead-app.json')
+  check('carte : read et reads [known_contacts], boîte et accepts inchangés', card.body.exchange.reads?.join() === 'known_contacts'
+    && card.body.exchange.read?.endsWith('/api/lead-exchange/v1/read') && card.body.exchange.accepts.join() === 'deal,client', card.body)
+  // Les lignes de 2030 viennent après toutes les autres : on se place juste avant.
+  const before = Buffer.from(JSON.stringify({ u: '2030-01-01T09:59:59.000Z', i: '' })).toString('base64url')
+  let r = await kread(`type=known_contacts&cursor=${before}`)
+  check('VisitLead sans personne : client avec e-mail + son contact, archivés et adresses fausses exclus, champs minimaux',
+    r.status === 200 && JSON.stringify(r.body.data.map((x: any) => [x.kind, x.email, x.name, x.company, x.title])) === JSON.stringify([
+      ['client', `anne.${tag}@rochat.test`, 'Anne Rochat', `Rochat ${tag}`, null], ['contact', `luc.${tag}@rochat.test`, 'Luc Favre', `Rochat ${tag}`, 'Achats']])
+    && r.body.next === null && Object.keys(r.body.data[0]).sort().join() === 'company,email,id,kind,name,title,updated_at', r.body)
+  r = await kread(`type=known_contacts&limit=1&cursor=${before}`)
+  const r2 = await kread(`type=known_contacts&limit=1&cursor=${r.body.next}`)
+  check('curseur : une ligne par page, puis la suivante, puis la fin', r.body.data.length === 1 && typeof r.body.next === 'string'
+    && r2.body.data[0]?.email === `luc.${tag}@rochat.test` && r2.body.next === null, { r: r.body, r2: r2.body })
+  r = await kread('type=known_contacts&count=1')
+  const expected = (await pool.query(`select count(distinct lower(trim(email)))::int as n from (select email from clients where account_id = $1 and archived_at is null and email ~ '@.+\\.'
+    union all select k.email from client_contacts k join clients c on c.id = k.client_id and c.archived_at is null where k.account_id = $1 and k.email ~ '@.+\\.') x`, [accountId])).rows[0].n
+  check('count=1 : le nombre d’adresses seul', r.status === 200 && r.body.count === expected && r.body.count >= 2, { body: r.body, expected })
+  r = await kread('type=known_contacts', readJwt({ app: 'crmlead' }))
+  check('autre application que VisitLead : 403 sender_not_allowed', r.status === 403 && r.body.error === 'sender_not_allowed', r)
+  r = await kread('type=known_contacts', readJwt({ org: null }))
+  check('jeton sans organisation : 401', r.status === 401, r)
+  r = await kread('type=known_contacts', readJwt({ org: randomUUID() }))
+  check('organisation inconnue : 404 unknown_org', r.status === 404 && r.body.error === 'unknown_org', r)
+  r = await kread('type=known_contacts', readJwt({ scope: 'exchange' }))
+  check('jeton d’envoi (exchange) refusé en lecture : 401', r.status === 401, r)
+  r = await kread('type=known_contacts', readJwt({ person: EVE_SUB }))
+  check('personne présente : ignorée, même lecture', r.status === 200 && r.body.data.length > 0, r.status)
+  r = await kread('type=lead')
+  check('autre type : 422', r.status === 422, r)
+  r = await kread('type=known_contacts&cursor=%%%')
+  check('curseur illisible : 400', r.status === 400, r)
+  let last = 0
+  for (let i = 0; i < 125; i++) last = (await kread('type=known_contacts&count=1')).status
+  check('budget : 120 lectures par minute et par organisation, puis 429', last === 429, last)
+  await pool.query('delete from clients where account_id = $1 and name like $2', [accountId, `%${tag}`])
+}
+
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)
