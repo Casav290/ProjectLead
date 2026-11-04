@@ -152,7 +152,7 @@ function Chip({ it, onOpen, compact }: { it: Item; onOpen: (it: Item) => void; c
     it.done && 'line-through opacity-60', (it.ev || it.link) ? 'hover:brightness-95' : 'cursor-default')
   const style = it.type === 'event' ? { background: it.color } : deadline ? { borderColor: it.color } : undefined
   if (compact) return <span className="block h-1.5 w-full" style={{ background: it.color }} title={it.title} />
-  return <button type="button" className={cls} style={style} title={`${it.title}${it.sub ? ` — ${it.sub}` : ''}`} onClick={(e) => { e.stopPropagation(); onOpen(it) }}>{label}</button>
+  return <button type="button" className={cls} style={style} title={`${it.title}${it.sub ? ` · ${it.sub}` : ''}`} onClick={(e) => { e.stopPropagation(); onOpen(it) }}>{label}</button>
 }
 
 function MonthView({ cursor, from, byDay, selected, onSelect, onOpen }:

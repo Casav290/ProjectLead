@@ -2873,6 +2873,29 @@ section('Cinq langues (27.10.2026) : langue de la personne, de l’entreprise et
   await pool.query(`update users set locale = 'fr' where id = $1`, [marcId])
 }
 
+
+section('Visite guidée (04.11.2026) : due au premier passage seulement, une fois, retenue côté serveur (db/034)')
+{
+  // Les personnes créées après la migration 034 l'ont due ; celles d'avant ne l'ont pas (simulé : drapeau remis à faux).
+  const due = async (c: Client) => (await c.get('/api/me')).body.user?.tour_pending
+  check('personne neuve : /api/me dit la visite due', (await due(eve)) === true && (await due(marc)) === true)
+  const col = (await pool.query(`select column_default from information_schema.columns where table_name = 'users' and column_name = 'tour_pending'`)).rows[0]
+  check('db/034 : défaut vrai pour les personnes à venir', /true/.test(col?.column_default ?? ''), col)
+  r = await new Client().post('/api/me/tour', {})
+  check('POST /api/me/tour sans session → 401', r.status === 401, r)
+  r = await eve.post('/api/me/tour', {})
+  const row = (await pool.query('select tour_pending, tour_seen_at from users where id = $1', [eveId])).rows[0]
+  check('POST /api/me/tour : due = faux, première ouverture notée, relu par /api/me', r.status === 200 && row.tour_pending === false && row.tour_seen_at
+    && (await due(eve)) === false, { status: r.status, row })
+  const first = row.tour_seen_at
+  await eve.post('/api/me/tour', {})
+  check('POST /api/me/tour une 2e fois : rien ne change (première ouverture gardée)', String((await pool.query('select tour_seen_at from users where id = $1', [eveId])).rows[0].tour_seen_at) === String(first))
+  check('une autre personne de la même entreprise garde la sienne', (await due(marc)) === true)
+  await pool.query('update users set tour_pending = false where id = $1', [marcId])
+  check('personne d’avant la visite (drapeau faux) : pas due', (await due(marc)) === false)
+  await pool.query('update users set tour_pending = true where id = $1', [marcId])
+}
+
 delete process.env.LEAD_ID_CLIENT_SECRET
 
 console.log(`\n${ok} contrôles verts, ${ko} rouges`)

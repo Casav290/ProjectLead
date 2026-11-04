@@ -49,7 +49,7 @@ function ProjectTaskFields({ projects, projectId, taskId, onProject, onTask, ext
       <Field label={t('time.project')}>
         <Select required value={projectId} onChange={(e) => { onProject(e.target.value); onTask('') }}>
           <option value="">{t('time.chooseProject')}</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} — ${p.client_name}` : p.name}</option>)}
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} · ${p.client_name}` : p.name}</option>)}
         </Select>
       </Field>
       <Field label={t('time.taskOptional')}>

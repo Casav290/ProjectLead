@@ -1,0 +1,129 @@
+/* La visite guidée (04.11.2026), visuel Trait net : angles vifs, aucune ombre, Archivo, une couleur d'action.
+   L'application n'a qu'un thème clair ; la carte suit tout de même le réglage clair / sombre de l'appareil.
+   Une seule courbe (celle de Trait net), 200 à 450 ms ; prefers-reduced-motion : rien ne bouge. */
+
+.plt-root {
+  --plt-bg: #ffffff;
+  --plt-fg: #1b1a19;
+  --plt-muted: #57524c;
+  --plt-line: #cfcac4;
+  --plt-art: #fbf5e8;
+  --plt-ink: #1b1a19;
+  --plt-soft: #ffffff;
+  --plt-accent: #9a6a00;
+  --plt-accent-hover: #7a5300;
+  --plt-on-accent: #ffffff;
+  --plt-veil: rgba(27, 26, 25, 0.58);
+  --plt-ease: cubic-bezier(.2, .8, .3, 1);
+  position: fixed; inset: 0; z-index: 70;
+  font-family: var(--font-sans, Archivo, system-ui, sans-serif);
+}
+@media (prefers-color-scheme: dark) {
+  .plt-root {
+    --plt-bg: #1b1a19;
+    --plt-fg: #f4f1ec;
+    --plt-muted: #bdb5ab;
+    --plt-line: #3d3934;
+    --plt-art: #26231f;
+    --plt-ink: #e9e4dc;
+    --plt-soft: #1b1a19;
+    --plt-accent: #d9a538;
+    --plt-accent-hover: #e8bb5c;
+    --plt-on-accent: #1b1a19;
+    --plt-veil: rgba(8, 7, 6, 0.66);
+  }
+}
+
+.plt-veil { position: absolute; inset: 0; width: 100%; height: 100%; cursor: default; }
+.plt-veil path.plt-shade { fill: var(--plt-veil); }
+.plt-veil .plt-marks { fill: none; stroke: var(--plt-accent); stroke-width: 2.5; stroke-linecap: square; }
+.plt-root[data-dark-target] .plt-veil .plt-marks { stroke: #e8bb5c; }
+.plt-veil .plt-hit { fill: transparent; cursor: pointer; }
+
+/* La carte */
+.plt-card {
+  position: absolute; left: 0; top: 0;
+  width: min(352px, calc(100vw - 32px));
+  background: var(--plt-bg); color: var(--plt-fg);
+  border: 1px solid var(--plt-line);
+  transition: transform 420ms var(--plt-ease), opacity 200ms var(--plt-ease);
+  will-change: transform;
+}
+.plt-card:focus { outline: none; }
+.plt-card[data-docked] { width: auto; }
+.plt-art {
+  position: relative; height: 104px; background: var(--plt-art);
+  border-bottom: 1px solid var(--plt-line); overflow: hidden;
+}
+.plt-art-svg { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
+.plt-body { padding: 16px 18px 14px; }
+.plt-kicker { display: flex; gap: 4px; margin-bottom: 12px; }
+.plt-seg { position: relative; flex: 1; height: 3px; background: var(--plt-line); overflow: hidden; }
+.plt-seg > i { position: absolute; inset: 0; background: var(--plt-accent); transform-origin: left; transform: scaleX(0); transition: transform 450ms var(--plt-ease); }
+.plt-seg[data-on] > i { transform: scaleX(1); }
+.plt-title { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 800; letter-spacing: -0.025em; }
+.plt-text { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--plt-muted); }
+.plt-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.plt-skip { margin-right: auto; padding: 8px 2px; font-size: 13px; font-weight: 600; color: var(--plt-muted); background: none; border: 0; cursor: pointer; }
+.plt-skip:hover { color: var(--plt-fg); text-decoration: underline; text-underline-offset: 3px; }
+.plt-btn { min-height: 36px; padding: 0 14px; font-size: 13.5px; font-weight: 700; border: 1px solid var(--plt-line); background: transparent; color: var(--plt-fg); cursor: pointer; transition: background 120ms var(--plt-ease), border-color 120ms var(--plt-ease); }
+.plt-btn:hover { border-color: var(--plt-fg); }
+.plt-btn[data-primary] { background: var(--plt-accent); border-color: var(--plt-accent); color: var(--plt-on-accent); }
+.plt-btn[data-primary]:hover { background: var(--plt-accent-hover); border-color: var(--plt-accent-hover); }
+/* Le focus passe au bouton principal à chaque étape : son anneau ne se montre qu'au clavier. */
+.plt-skip:focus-visible, .plt-btn:focus-visible { outline: none; }
+.plt-root[data-kbd] .plt-skip:focus-visible, .plt-root[data-kbd] .plt-btn:focus-visible { outline: 2px solid var(--plt-accent); outline-offset: 2px; }
+.plt-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Le texte de chaque étape arrive en deux temps : titre, puis texte et boutons. */
+.plt-in { animation: plt-in 360ms var(--plt-ease) both; }
+.plt-in-2 { animation: plt-in 360ms var(--plt-ease) 70ms both; }
+@keyframes plt-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.plt-root[data-entering] .plt-card { opacity: 0; }
+
+/* Les animations des dessins (art.tsx) : l'état de base est l'image finale. */
+.plt-art-svg * { transform-box: fill-box; transform-origin: center; }
+.plt-a-seq { animation: plt-seq 5.4s var(--plt-ease) infinite both; }
+@keyframes plt-seq { 0% { opacity: 0; transform: scale(1.25); } 6%, 30% { opacity: 1; transform: none; } 34%, 100% { opacity: 0; transform: none; } }
+.plt-a-grow { transform-origin: left; animation: plt-grow 2.8s var(--plt-ease) infinite; }
+@keyframes plt-grow { 0% { transform: scaleX(0.05); } 45%, 100% { transform: scaleX(1); } }
+.plt-a-fill { animation: plt-fill 3.6s var(--plt-ease) infinite; }
+@keyframes plt-fill { 0% { fill-opacity: 0; } 30%, 88% { fill-opacity: 1; } 100% { fill-opacity: 0; } }
+.plt-a-drop { animation: plt-drop 3.6s var(--plt-ease) infinite; }
+@keyframes plt-drop { 0%, 55% { transform: translateY(-14px); opacity: 0; } 70%, 92% { transform: none; opacity: 1; } 100% { opacity: 0; } }
+.plt-a-card { animation: plt-card 4.2s var(--plt-ease) infinite; }
+@keyframes plt-card {
+  0%, 12% { transform: translate(-128px, 0); }
+  30%, 45% { transform: translate(-64px, -18px); }
+  63%, 100% { transform: translate(0, 0); }
+}
+.plt-a-mail { animation: plt-mail 3.4s var(--plt-ease) infinite; }
+@keyframes plt-mail { 0%, 20% { transform: none; opacity: 1; } 60% { transform: translate(126px, 0) scale(0.6); opacity: 0; } 61%, 100% { transform: none; opacity: 1; } }
+.plt-a-lines { animation: plt-lines 3.4s var(--plt-ease) infinite; }
+@keyframes plt-lines { 0%, 55% { opacity: 0.1; } 70%, 100% { opacity: 0.5; } }
+.plt-a-hand { transform-box: view-box; animation: plt-spin 4s linear infinite; }
+@keyframes plt-spin { to { transform: rotate(360deg); } }
+.plt-a-bar { transform-origin: bottom; transform: scaleY(var(--h, 1)); animation: plt-bar 3.2s var(--plt-ease) infinite; }
+@keyframes plt-bar { 0% { transform: scaleY(0.08); } 50%, 100% { transform: scaleY(var(--h, 1)); } }
+.plt-a-write { stroke-dasharray: 60; stroke-dashoffset: 0; animation: plt-write 3.6s var(--plt-ease) infinite; }
+@keyframes plt-write { 0% { stroke-dashoffset: 60; } 35%, 100% { stroke-dashoffset: 0; } }
+.plt-a-hit { animation: plt-hit 3s var(--plt-ease) infinite; }
+@keyframes plt-hit { 0%, 40% { opacity: 0; } 55%, 92% { opacity: 1; } 100% { opacity: 0; } }
+.plt-a-lens { animation: plt-lens 3s var(--plt-ease) infinite; }
+@keyframes plt-lens { 0% { transform: translate(0, 0); } 25% { transform: translate(90px, 0); } 50%, 92% { transform: translate(60px, 41px); } 100% { transform: translate(0, 0); } }
+.plt-a-switch { animation: plt-switch 3s var(--plt-ease) infinite; }
+@keyframes plt-switch { 0%, 15% { transform: translateX(-13px); opacity: 0.35; } 35%, 100% { transform: none; opacity: 1; } }
+.plt-a-pop { animation: plt-pop 4.4s var(--plt-ease) infinite; }
+@keyframes plt-pop { 0% { opacity: 0; transform: translateY(6px); } 12%, 100% { opacity: 1; transform: none; } }
+.plt-a-typing { opacity: 0; animation: plt-typing 4.4s steps(1) infinite; }
+@keyframes plt-typing { 0%, 18% { opacity: 0; } 20%, 44% { opacity: 1; } 46%, 100% { opacity: 0; } }
+.plt-a-typing circle { animation: plt-dot 0.6s ease-in-out infinite alternate; }
+@keyframes plt-dot { from { transform: translateY(2px); } to { transform: translateY(-2px); } }
+.plt-a-reply { animation: plt-reply 4.4s var(--plt-ease) infinite; }
+@keyframes plt-reply { 0%, 45% { opacity: 0; transform: translateY(8px); } 55%, 100% { opacity: 1; transform: none; } }
+.plt-a-spin { transform-box: view-box; animation: plt-spin 2.4s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .plt-root *, .plt-root *::before, .plt-root *::after { animation: none !important; transition: none !important; }
+  .plt-a-typing { opacity: 0; }
+}

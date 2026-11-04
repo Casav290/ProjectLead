@@ -110,7 +110,7 @@ export default function TimeTab({ project, onChanged }: Props) {
                         <td className="whitespace-nowrap px-3 py-2">{e.user_name}</td>
                         <td className="max-w-[22rem] px-3 py-2">
                           {e.task_title && <span className="block font-semibold">{e.task_title}</span>}
-                          {e.note ? <span className="text-muted-foreground">{e.note}</span> : !e.task_title && <span className="text-muted-foreground">—</span>}
+                          {e.note ? <span className="text-muted-foreground">{e.note}</span> : !e.task_title && <span className="text-muted-foreground">–</span>}
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums">{fmtMinutes(e.minutes)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs">
@@ -146,7 +146,7 @@ export default function TimeTab({ project, onChanged }: Props) {
               </dl>
             </Card>
             <Card title={t('ptabs.time.byPerson')}>
-              {!byPerson.length ? <p className="px-4 py-3 text-sm text-muted-foreground">—</p> : (
+              {!byPerson.length ? <p className="px-4 py-3 text-sm text-muted-foreground">–</p> : (
                 <ul className="divide-y divide-border">
                   {byPerson.map(([uid, p]) => (
                     <li key={uid} className="flex items-center gap-2.5 px-4 py-2.5 text-sm">

@@ -58,6 +58,10 @@ CRMlead.
   envoie lui-même les changements d'adresse et de contacts (type `client`) ; une affaire gagnée dans
   CRMlead arrive toute seule en projet (échange du Compte Lead, type `deal`). Reliés sans clé (26.10.2026).
 
+- **Visite guidée** (04.11.2026) : au premier passage, une visite courte et animée montre les vraies zones de l'écran
+  (menu, recherche, Assistant IA, profil), relançable par « Revoir la visite » ; principes repris de Figma, Asana,
+  Linear et monday.com (`docs/PASSATION.md`, « Visite guidée »).
+
 ## Pas repris (pour l'instant)
 
 - Éditeur de documents et wiki façon Notion ; tableaux blancs.

@@ -2,7 +2,9 @@
 
 export type Me = {
   user: { id: string; email: string; name: string; color: string; role: 'admin' | 'manager' | 'member'; hourly_rate_cents: number
-          capacity_minutes: number; lead_linked: boolean; locale?: string | null }
+          capacity_minutes: number; lead_linked: boolean; locale?: string | null
+          /** La visite guidée s'ouvre seule tant que c'est vrai (premier passage, db/034). */
+          tour_pending?: boolean }
   /** `lead_org` : l'organisation ERPlead de l'entreprise (null pour une entreprise d'avant le Compte Lead). */
   account: { id: string; name: string; plan: string; timezone: string; currency: string; week_hours: number; inbound_token: string
              lead_org: string | null; locale?: string }

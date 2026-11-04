@@ -19,7 +19,7 @@ export default function IntakeForm() {
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
 
   useEffect(() => {
-    publicFetch<Form>(`/forms/${slug}`).then((x) => { setForm(x); document.title = `${x.name} — ${x.account}` }).catch((e) => setLoadError(publicError(e)))
+    publicFetch<Form>(`/forms/${slug}`).then((x) => { setForm(x); document.title = `${x.name} · ${x.account}` }).catch((e) => setLoadError(publicError(e)))
   }, [slug])
 
   const submit = async (e: React.FormEvent) => {

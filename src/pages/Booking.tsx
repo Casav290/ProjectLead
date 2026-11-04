@@ -73,7 +73,7 @@ export default function Booking() {
     } catch (e) { setError(publicError(e)) } finally { setLoading(false) }
   }, [slug])
   useEffect(() => { load(from) }, [load, from])
-  useEffect(() => { if (page) document.title = `${page.name} — ${page.account}` }, [page])
+  useEffect(() => { if (page) document.title = `${page.name} · ${page.account}` }, [page])
 
   if (error && !page) return <PublicShell><p className="border border-border bg-card p-6 text-center text-sm">{error}</p></PublicShell>
   if (!page) return <PublicShell><p className="p-8 text-center text-sm text-muted-foreground">{t('common.loading')}</p></PublicShell>

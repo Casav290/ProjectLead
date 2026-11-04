@@ -12,34 +12,39 @@ import { LOCALES } from '../lib/i18n.js'
 
 const app = router()
 
-app.get('/me', async (c) => tx(c, async (db, ctx) => {
-  const me = (await db.query(
-    // i18n-ok
-    `select u.id, u.email, u.name, u.color, u.locale, (u.lead_sub is not null) as lead_linked,
-            au.role, au.hourly_rate_cents, au.capacity_minutes, au.ical_token
-       from users u join account_users au on au.user_id = u.id and au.account_id = app_account()
-      where u.id = app_user()`)).rows[0]
-  const account = (await db.query('select id, name, plan, locale, timezone, currency, week_hours, inbound_token, lead_org from accounts where id = app_account()')).rows[0]
-  // Les applications Lead reliées sans clé : même entreprise dans le Compte Lead et application déjà utilisée (lib/links.ts).
-  const links = await linkState(db, ctx.accountId)
-  const settings = { crmlead: links.crmlead === 'linked', invoicelead: links.invoicelead === 'linked' }
-  const unread = (await db.query('select count(*)::int as n from notifications where user_id = app_user() and read_at is null')).rows[0].n
-  const running = (await db.query(
-    `select t.id, t.started_at, t.project_id, p.name as project_name, t.task_id, k.title as task_title
-       from time_entries t join projects p on p.id = t.project_id left join tasks k on k.id = t.task_id
-      where t.user_id = app_user() and t.minutes is null`)).rows[0] ?? null
-  const inbox = (await db.query(`select count(*)::int as n from email_messages e where e.status = 'new' and ${EMAIL_VISIBLE}`)).rows[0].n
-  const plan = await planOf(db, ctx.accountId)
-  return c.json({
-    user: me, account, integrations: settings, unread, running, inbox, plan,
-    features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead,
-                assistant: assistantConfigured() },
-    // L'adresse de capture n'existe que si un domaine de réception est vraiment branché (MX vers un relais).
-    inboundAddress: process.env.INBOUND_DOMAIN ? `${account.inbound_token}@${process.env.INBOUND_DOMAIN}` : null,
-    inboundUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/inbound/${account.inbound_token}`,
-    icalUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/public/calendar/${me.ical_token}.ics`,
+app.get('/me', async (c) => {
+  // La visite guidée (db/034) : due au premier passage seulement. Colonne hors des droits de projectlead_app : lue en
+  // propriétaire, filtrée sur la personne de la session, avant la transaction (une connexion à la fois).
+  const tour = (await anon((a) => a.query('select tour_pending from users where id = $1', [c.get('ctx').userId]))).rows[0]
+  return tx(c, async (db, ctx) => {
+    const me = (await db.query(
+      // i18n-ok
+      `select u.id, u.email, u.name, u.color, u.locale, (u.lead_sub is not null) as lead_linked,
+              au.role, au.hourly_rate_cents, au.capacity_minutes, au.ical_token
+         from users u join account_users au on au.user_id = u.id and au.account_id = app_account()
+        where u.id = app_user()`)).rows[0]
+    const account = (await db.query('select id, name, plan, locale, timezone, currency, week_hours, inbound_token, lead_org from accounts where id = app_account()')).rows[0]
+    // Les applications Lead reliées sans clé : même entreprise dans le Compte Lead et application déjà utilisée (lib/links.ts).
+    const links = await linkState(db, ctx.accountId)
+    const settings = { crmlead: links.crmlead === 'linked', invoicelead: links.invoicelead === 'linked' }
+    const unread = (await db.query('select count(*)::int as n from notifications where user_id = app_user() and read_at is null')).rows[0].n
+    const running = (await db.query(
+      `select t.id, t.started_at, t.project_id, p.name as project_name, t.task_id, k.title as task_title
+         from time_entries t join projects p on p.id = t.project_id left join tasks k on k.id = t.task_id
+        where t.user_id = app_user() and t.minutes is null`)).rows[0] ?? null
+    const inbox = (await db.query(`select count(*)::int as n from email_messages e where e.status = 'new' and ${EMAIL_VISIBLE}`)).rows[0].n
+    const plan = await planOf(db, ctx.accountId)
+    return c.json({
+      user: { ...me, tour_pending: tour?.tour_pending === true }, account, integrations: settings, unread, running, inbox, plan,
+      features: { leadId: leadIdConfigured(), mailboxes: mailboxSecretConfigured(), crmlead: settings.crmlead, invoicelead: settings.invoicelead,
+                  assistant: assistantConfigured() },
+      // L'adresse de capture n'existe que si un domaine de réception est vraiment branché (MX vers un relais).
+      inboundAddress: process.env.INBOUND_DOMAIN ? `${account.inbound_token}@${process.env.INBOUND_DOMAIN}` : null,
+      inboundUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/inbound/${account.inbound_token}`,
+      icalUrl: `${(process.env.PUBLIC_URL ?? '').replace(/\/$/, '')}/api/public/calendar/${me.ical_token}.ics`,
+    })
   })
-}))
+})
 
 app.patch('/me', async (c) => {
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(120).optional(),
@@ -59,6 +64,16 @@ app.post('/me/locale', async (c) => {
   const ctx = c.get('ctx')
   await anon((db) => db.query('update users set locale = $1, locale_chosen = true where id = $2', [b.locale, ctx.userId]))
   return c.json({ ok: true, locale: b.locale })
+})
+
+/**
+ * La visite guidée s'est ouverte (ou a été passée) : elle ne s'ouvrira plus d'elle-même pour cette personne, sur aucun
+ * appareil (04.11.2026). « Revoir la visite » ne passe pas par ici : la relancer ne change rien en base.
+ */
+app.post('/me/tour', async (c) => {
+  const ctx = c.get('ctx')
+  await anon((db) => db.query('update users set tour_pending = false, tour_seen_at = coalesce(tour_seen_at, now()) where id = $1', [ctx.userId]))
+  return c.json({ ok: true })
 })
 
 app.post('/me/password', async (c) => {

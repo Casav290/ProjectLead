@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { leave, leavingState, watchLeaving } from '../lib/arrival'
@@ -11,6 +11,8 @@ import AppSwitcher from './AppSwitcher'
 import Assistant from './Assistant'
 import LanguageSelect from './LanguageSelect'
 import { Avatar } from './ui'
+import { projectLeadSteps } from '../tour/steps.projectlead'
+import { TourProvider, useTour } from '../tour/TourProvider'
 
 /** La mise en page de l'application connectée : navigation à gauche, barre du haut, contenu. */
 
@@ -125,6 +127,7 @@ function UserMenu() {
   const [open, setOpen] = useState(false)
   const ref = useClickOutside(open, () => setOpen(false))
   const leaving = useSyncExternalStore(watchLeaving, leavingState)
+  const tour = useTour()
   if (!me) return null
   // La page part vers la déconnexion du Compte Lead : rien ne la renvoie vers la connexion entre-temps, et un 2e clic
   // relance la même sortie, jamais /login (leave, src/lib/arrival.ts). Bouton : « Déconnexion… », désactivé tant que la
@@ -132,7 +135,8 @@ function UserMenu() {
   const logout = () => leave(() => api.post<{ redirect: string | null }>('/auth/logout'), (to) => { window.location.href = to })
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-2 px-1 py-1 hover:bg-muted" aria-label={t('shell.user.account')}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-2 px-1 py-1 hover:bg-muted" aria-label={t('shell.user.account')}
+              data-tour="profile">
         <Avatar person={me.user} size={28} />
       </button>
       {open && (
@@ -140,6 +144,9 @@ function UserMenu() {
           <div className="border-b border-border px-3 py-2"><p className="font-bold">{me.user.name}</p><p className="truncate text-xs text-muted-foreground">{me.user.email}</p>
             <p className="text-xs text-muted-foreground">{me.account.name}</p></div>
           <Link to="/reglages/profil" onClick={() => setOpen(false)} className="block px-3 py-2 hover:bg-muted">{t('shell.user.profile')}</Link>
+          {/* La visite guidée, relancée à la demande (04.11.2026) : autant de fois qu'on veut, rien n'est écrit. */}
+          <button type="button" onClick={() => { setOpen(false); tour.start() }} data-tour-replay
+                  className="block w-full px-3 py-2 text-left hover:bg-muted">{t('tour.replayMenu')}</button>
           <Link to="/reglages" onClick={() => setOpen(false)} className="block px-3 py-2 hover:bg-muted">{t('shell.nav.settings')}</Link>
           <button onClick={logout} disabled={Boolean(leaving && !leaving.to)} aria-busy={leaving ? true : undefined}
                   className="block w-full px-3 py-2 text-left hover:bg-muted disabled:cursor-wait disabled:text-muted-foreground">
@@ -158,6 +165,10 @@ export default function Layout({ children }: { children: ReactNode }) {
   const nav = useNavigate()
   const loc = useLocation()
   useEffect(() => setMenu(false), [loc.pathname])
+  // La visite guidée (src/tour/) : au premier passage, une seule fois (drapeau du serveur) ; sur un écran étroit, elle
+  // ouvre le menu replié le temps des étapes qui y montrent quelque chose.
+  const steps = useMemo(() => (me ? projectLeadSteps(me) : []), [me?.features.assistant, me?.user.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const markSeen = useCallback(() => api.post('/me/tour', {}), [])
   // Une écriture confirmée dans l'Assistant IA : la page ouverte se recharge pour la montrer.
   const [saved, setSaved] = useState(0)
   useEffect(() => {
@@ -168,7 +179,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const side = (
     <nav className="flex flex-col gap-0.5 p-2" aria-label={t('shell.nav.main')}>
       {NAV.map((n) => (
-        <NavLink key={n.to} to={n.to} end={n.to === '/'}
+        <NavLink key={n.to} to={n.to} end={n.to === '/'} data-tour={`nav:${n.to}`}
           className={({ isActive }) => clsx('flex items-center gap-2.5 px-3 py-2 text-[13.5px] font-semibold',
             isActive ? 'bg-accent-veil text-accent-dark shadow-[inset_3px_0_0_0_hsl(var(--accent))]' : 'text-[#44403c] hover:bg-muted')}>
           <Icon d={n.icon} /><span className="flex-1">{t(n.label)}</span>
@@ -179,6 +190,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   )
   return (
     // L'organisation ERPlead de l'espace ouvert : les contrôles de la famille vérifient qu'on est bien chez soi.
+    <TourProvider userId={me?.user.id ?? null} due={Boolean(me?.user.tour_pending)} steps={steps} t={t} markSeen={markSeen} onMenu={setMenu}>
     <div className="flex min-h-screen" data-lead-org={me?.account.lead_org ?? undefined}>
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-input bg-card lg:flex">
         <div className="flex h-14 items-center border-b border-border px-4"><Brand /></div>
@@ -198,13 +210,13 @@ export default function Layout({ children }: { children: ReactNode }) {
             <Icon d="M4 6h16M4 12h16M4 18h16" />
           </button>
           <span className="lg:hidden"><Brand compact /></span>
-          <form className="ml-2 hidden max-w-sm flex-1 md:block" onSubmit={(e) => { e.preventDefault(); if (q.trim()) nav(`/recherche?q=${encodeURIComponent(q.trim())}`) }}>
+          <form className="ml-2 hidden max-w-sm flex-1 md:block" data-tour="search" onSubmit={(e) => { e.preventDefault(); if (q.trim()) nav(`/recherche?q=${encodeURIComponent(q.trim())}`) }}>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('shell.search.placeholder')} aria-label={t('common.search')}
                    className="w-full border border-input bg-[#f7f5f3] px-3 py-1.5 text-sm focus:border-accent focus:outline-none" />
           </form>
           <div className="ml-auto flex items-center gap-1">
             <Timer />
-            <Link to="/recherche" className="grid h-9 w-9 place-items-center text-muted-foreground hover:bg-muted md:hidden" aria-label={t('common.search')}><Icon d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4" /></Link>
+            <Link to="/recherche" data-tour="search" className="grid h-9 w-9 place-items-center text-muted-foreground hover:bg-muted md:hidden" aria-label={t('common.search')}><Icon d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4" /></Link>
             {/* Au téléphone, le globe seul (le nom de la langue dès 640 px) : la barre reste lisible à 375 px. */}
             <LanguageSelect className="max-sm:[&_select]:w-9 max-sm:[&_select]:pl-0 max-sm:[&_select]:text-transparent max-sm:[&_option]:text-foreground" />
             <Bell />
@@ -218,5 +230,6 @@ export default function Layout({ children }: { children: ReactNode }) {
       </div>
       <Assistant />
     </div>
+    </TourProvider>
   )
 }

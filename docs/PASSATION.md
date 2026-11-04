@@ -289,6 +289,33 @@ portes : `GATES-billing-followups.md` (L4 en local).
 - **Mise en ligne** : la migration 011 est additive et rejouable ; l'ancien code ignore `last_seen_at` (retour arrière :
   revenir au commit précédent de `vercel`).
 
+## Visite guidée (04.11.2026, branche `visite-guidee`)
+
+Demande d'Ève : un onboarding dans l'application, qui guide à l'arrivée, montre où sont les choses, sympa et dynamique.
+Références (Linear, Notion, Asana, monday.com, ClickUp, Figma, Arc) et principes repris :
+`~/projets/.unlazy/projectlead-visite/REFERENCES.md`.
+
+- **Quand** : seule au PREMIER passage d'une personne, une seule fois (`users.tour_pending`, db/034 : la colonne naît
+  FAUX pour les personnes déjà là, puis le défaut devient VRAI). Dès qu'elle s'ouvre, POST `/api/me/tour` la retient
+  (`tour_pending = false`, `tour_seen_at`) pour tous les appareils, app mobile comprise ; ce navigateur s'en souvient
+  aussi (localStorage `lead.tour.seen.<personne>`) si l'envoi échoue. Les personnes d'avant ne la voient pas d'elles-mêmes.
+- **Relancer** : menu du profil (avatar) → « Revoir la visite » (`data-tour-replay`), sans rien écrire en base.
+- **Jamais bloquante** : « Passer » à chaque étape, Échap, clic sur la zone montrée (la visite se ferme, la zone
+  s'ouvre), flèches du clavier. Une zone introuvable fait passer l'étape.
+- **Étapes** (`src/tour/steps.projectlead.ts`) : accueil de la visite, Accueil, Projets, Mes tâches, Emails et agenda,
+  Temps/Charge/Rapports, Clients et facturation, Recherche, Modèles et réglages, Assistant IA (« L'essayer » ouvre la
+  bulle ; étape absente si l'assistant n'est pas branché), Revoir la visite. Textes : `tour.*` (cinq langues).
+- **Moteur commun** (`src/tour/` : `Tour.tsx`, `TourProvider.tsx`, `art.tsx`, `tour.css`, `types.ts`) : rien de propre à
+  ProjectLead ; pour une autre application, copier `src/tour/`, écrire `steps.<app>.ts`, poser les `data-tour`, monter
+  `TourProvider` et reprendre la colonne et les deux routes. Au téléphone, le menu replié s'ouvre pour les étapes du menu
+  (`onMenu`). Carte claire ou sombre selon l'appareil ; prefers-reduced-motion : rien ne bouge.
+- **Contrôles** : `npm test` (section « Visite guidée »), `scripts/e2e-visite.mjs` (navigateur sans tête : 390 et 1440 px,
+  clair et sombre, cinq langues, personne neuve et d'avant, Passer, Revoir, vidéos) → `E2E_VISITE_OK` ; portes :
+  `node scripts/visite-gates.mjs g1…g9` (`~/projets/.unlazy/projectlead-visite/GATES.md`).
+- **Tirets longs** : plus aucun « — » dans le HTML et le JS servis (cases vides « – », séparateurs « · »). Restent ceux des
+  textes envoyés par le serveur (lignes de brouillon de facture « Forfait — … », cartes de l'assistant) : non touchés.
+- **Retour arrière** : `~/projets/.unlazy/projectlead-visite/PROD.md` (la colonne reste, inoffensive).
+
 ## Assistant IA : périmètre du logiciel et limite de la formule gratuite (29.10.2026, branche `ia-limites`)
 
 Demande d'Ève : l'assistant ne sert que ProjectLead (consigne du bloc stable : une phrase polie et une proposition,

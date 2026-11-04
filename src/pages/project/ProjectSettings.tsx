@@ -147,7 +147,7 @@ function ColumnRow({ col, index, count, onMove, onDelete, onSaved }:
         onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name.trim() !== col.name ? patch({ name: name.trim() }) : setName(col.name)} />
       <Checkbox label={t('ptabs.settings.columnDone')} checked={col.is_done} onChange={(v) => patch({ is_done: v })} />
       <label className="flex items-center gap-1.5 text-xs text-muted-foreground">{t('ptabs.settings.limit')}
-        <Input value={wip} inputMode="numeric" aria-label={t('ptabs.settings.wipLimit')} placeholder="—" className="w-14 py-1.5 text-center"
+        <Input value={wip} inputMode="numeric" aria-label={t('ptabs.settings.wipLimit')} placeholder="–" className="w-14 py-1.5 text-center"
           onChange={(e) => setWip(e.target.value.replace(/\D/g, ''))}
           onBlur={() => { const n = wip ? Number(wip) : null; if (n !== col.wip_limit) patch({ wip_limit: n && n > 0 ? n : null }) }} />
       </label>

@@ -156,7 +156,7 @@ function TaskBody({ task, setTask, reload, onClose, onChanged, openTask }:
           </Field>
           <Field label={t('tasks.field.column')}>
             <Select value={task.column_id ?? ''} onChange={(e) => e.target.value && save({ column_id: e.target.value })}>
-              {!task.column_id && <option value="">—</option>}
+              {!task.column_id && <option value="">–</option>}
               {project?.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </Field>
@@ -177,7 +177,7 @@ function TaskBody({ task, setTask, reload, onClose, onChanged, openTask }:
             <Input type="date" value={task.due_date ?? ''} min={task.start_date ?? undefined} onChange={(e) => save({ due_date: e.target.value || null })} />
           </Field>
           <Field label={t('tasks.field.estimate')} hint={t('tasks.field.estimateHint')}>
-            <Input value={estimate} onChange={(e) => setEstimate(e.target.value)} placeholder="—"
+            <Input value={estimate} onChange={(e) => setEstimate(e.target.value)} placeholder="–"
               onBlur={() => {
                 const m = estimate.trim() ? parseDuration(estimate) : null
                 if (estimate.trim() && m === null) { toast(t('tasks.durationUnknown')); setEstimate(task.estimate_minutes ? fmtMinutes(task.estimate_minutes) : ''); return }
@@ -401,7 +401,7 @@ function TimeSection({ t: task, run, running, refreshMe }: { t: TaskDetail; run:
           {task.time.map((e) => (
             <li key={e.id} className="flex items-baseline gap-2 py-1.5">
               <span className="w-20 shrink-0 text-xs text-muted-foreground">{fmtDate(e.entry_date)}</span>
-              <span className="min-w-0 flex-1 truncate">{e.user_name}{e.note ? <span className="text-muted-foreground"> — {e.note}</span> : null}</span>
+              <span className="min-w-0 flex-1 truncate">{e.user_name}{e.note ? <span className="text-muted-foreground"> · {e.note}</span> : null}</span>
               <span className="shrink-0 font-semibold">{e.minutes == null ? t('tasks.time.running') : fmtMinutes(e.minutes)}</span>
             </li>
           ))}

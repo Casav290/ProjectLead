@@ -80,3 +80,7 @@ l'abonnement de CRMlead, filtre `own` commun aux applications Lead), `trait-net/
   `pl_lang`, `users.locale`). Langue des documents client : `projects.doc_locale`, sinon `accounts.locale`. Devise de
   l'entreprise à sa création selon le pays (`currencyForCountry`). Contrôle : `npx tsx scripts/i18n-check.ts --keys`,
   `--hardcoded`, `--control` ; navigateur : `scripts/e2e-langues.mjs`.
+- Visite guidée (Ève, 04.11.2026) : seule au premier passage d'une personne, une seule fois (`users.tour_pending`,
+  db/034), relançable par « Revoir la visite » (menu du profil), toujours « Passer ». Moteur commun `src/tour/`, étapes
+  `src/tour/steps.projectlead.ts` : une étape = une vraie zone de l'écran (`data-tour`), un texte court et vrai. Ne pas
+  retirer les `data-tour` de Layout.tsx. Contrôle : `scripts/e2e-visite.mjs`. Détail : `docs/PASSATION.md`, « Visite guidée ».

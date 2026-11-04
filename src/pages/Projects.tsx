@@ -43,7 +43,7 @@ function Advance({ p, wide }: { p: ProjectSummary; wide?: boolean }) {
 
 const Due = ({ p }: { p: ProjectSummary }) =>
   p.due_date ? <span className={clsx('whitespace-nowrap tabular-nums', isLate(p) && 'font-bold text-late')}>{fmtDate(p.due_date)}</span>
-    : <span className="text-muted-foreground">—</span>
+    : <span className="text-muted-foreground">–</span>
 
 function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
   const t = useT()
@@ -80,7 +80,7 @@ function ProjectTable({ rows }: { rows: ProjectSummary[] }) {
               <td className="px-3 py-2.5"><span className="inline-flex flex-col items-end gap-1 sm:items-start"><StatusBadge status={p.status} /><HealthBadge health={p.health} /></span></td>
               <td className="px-3 py-2.5">
                 {p.current_stage ? <span className="flex flex-col items-end gap-1 sm:items-start"><span className="font-semibold leading-tight">{p.current_stage.name}</span><StageBadge status={p.current_stage.status} /></span>
-                  : <span className="text-muted-foreground">{p.stages_total ? t('home.projects.allStagesDone') : '—'}</span>}
+                  : <span className="text-muted-foreground">{p.stages_total ? t('home.projects.allStagesDone') : '–'}</span>}
               </td>
               <td className="px-3 py-2.5"><Advance p={p} /></td>
               <td className="px-3 py-2.5"><TimeBudget p={p} bar /></td>

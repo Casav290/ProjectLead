@@ -220,7 +220,7 @@ export function PlanTiers({ b, annual, busy, onCheckout, onPortal }:
         <p className="mt-1 h-4 text-xs text-muted-foreground">
           {p !== 'free' && annual ? t('shell.plan.monthlyEquivalent', { price: euros(Math.round((price / 12) * 100) / 100) }) : ''}</p>
         <ul className="mt-3 flex-1 space-y-1.5 text-sm">
-          {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
+          {FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">–</span>{f}</li>)}
         </ul>
         <div className="mt-4 min-h-[36px]">{action}</div>
       </article>

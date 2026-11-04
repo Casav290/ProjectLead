@@ -82,7 +82,7 @@ export default function WorkloadPage() {
                             {od.tasks} <span className="text-xs font-semibold">{t('inbox.workload.tasksWord', { n: od.tasks })}</span>
                             <span className="block text-[11px] font-normal">{fmtMinutes(od.minutes)}</span>
                           </button>
-                        ) : <span className="text-muted-foreground">—</span>}
+                        ) : <span className="text-muted-foreground">–</span>}
                       </td>
                       {weekStarts.map((w, i) => {
                         const l = data.load.find((x) => x.user_id === p.id && x.week === i)
@@ -94,7 +94,7 @@ export default function WorkloadPage() {
                             <button type="button" disabled={!l} onClick={() => setCell({ person: p, week: i, from: w, to: addDays(w, 6) })}
                               aria-label={t('inbox.workload.cellAria', { name: p.name, date: fmtShortDate(w), h: hours(minutes), cap: hours(p.capacity_minutes) })}
                               className={clsx('w-full px-2 py-1.5 text-center enabled:hover:outline enabled:hover:outline-1 enabled:hover:outline-accent', tone(pct))}>
-                              <span className="block text-[13px] font-bold">{minutes ? `${hours(minutes)} h` : '—'}{minutes ? <span className="font-semibold"> · {Math.round(pct)} %</span> : null}</span>
+                              <span className="block text-[13px] font-bold">{minutes ? `${hours(minutes)} h` : '–'}{minutes ? <span className="font-semibold"> · {Math.round(pct)} %</span> : null}</span>
                               {minutes > 0 && <span className="mt-1 block h-1 w-full bg-black/5"><span className={clsx('block h-full', bar(pct))} style={{ width: `${Math.min(100, pct)}%` }} /></span>}
                               <span className="mt-0.5 block text-[11px] text-muted-foreground">{logged ? t('inbox.workload.logged', { h: hours(logged) }) : ' '}</span>
                             </button>

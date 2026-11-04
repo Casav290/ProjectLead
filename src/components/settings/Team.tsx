@@ -168,8 +168,8 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
                   </td>
                   <td className="px-3 py-2">{ROLE_LABEL[m.role]}</td>
                   {isAdmin && <td className="whitespace-nowrap px-3 py-2 tabular-nums"><LastSeen at={m.last_seen_at} /></td>}
-                  {canManage && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.hourly_rate_cents ? money(m.hourly_rate_cents, currency) : '—'}</td>}
-                  {isAdmin && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.cost_rate_cents ? money(m.cost_rate_cents, currency) : '—'}</td>}
+                  {canManage && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.hourly_rate_cents ? money(m.hourly_rate_cents, currency) : '–'}</td>}
+                  {isAdmin && <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{m.cost_rate_cents ? money(m.cost_rate_cents, currency) : '–'}</td>}
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{t('settings.team.hours', { h: hoursText(m.capacity_minutes) })}</td>
                   {canManage && (
                     <td className="px-3 py-2 text-right">
@@ -199,9 +199,9 @@ export function SeatList({ members, invitations, seatsMax, meId, isAdmin, canMan
                       <span className="block text-xs text-muted-foreground">{t('settings.team.validUntil', { date: fmtDate(i.expires_at) })}</span>
                     </td>
                   )}
-                  {canManage && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
-                  {isAdmin && <td className="px-3 py-2 text-right text-muted-foreground">—</td>}
-                  <td className="px-3 py-2 text-right text-muted-foreground">—</td>
+                  {canManage && <td className="px-3 py-2 text-right text-muted-foreground">–</td>}
+                  {isAdmin && <td className="px-3 py-2 text-right text-muted-foreground">–</td>}
+                  <td className="px-3 py-2 text-right text-muted-foreground">–</td>
                   {canManage && (
                     <td className="px-3 py-2 text-right">
                       {isAdmin

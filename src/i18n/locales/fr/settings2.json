@@ -19,7 +19,7 @@
  "settings2.api.example": "Exemple",
  "settings2.api.intro": "Reliez ProjectLead à vos autres outils (Make, n8n, Zapier, un script). Une clé agit au nom de la personne qui l'a créée.",
  "settings2.api.keyName": "Nom de la clé",
- "settings2.api.keyNamePlaceholder": "Make — devis",
+ "settings2.api.keyNamePlaceholder": "Make · devis",
  "settings2.api.never": "Jamais",
  "settings2.api.neverShown": "elle ne sera plus jamais affichée.",
  "settings2.api.newKey": "Nouvelle clé",

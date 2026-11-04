@@ -116,7 +116,7 @@ function Updates({ project, onChanged }: Props) {
         {u ? (
           <div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <HealthBadge health={u.health} /><span>{u.author_name ?? '—'}, {fmtRelative(u.created_at)}</span>
+              <HealthBadge health={u.health} /><span>{u.author_name ?? '–'}, {fmtRelative(u.created_at)}</span>
             </div>
             {u.body && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{u.body}</p>}
           </div>
@@ -234,7 +234,7 @@ export default function Overview(props: Props) {
   const amount = p.billing_mode === 'fixed' ? money(p.fixed_cents, p.currency)
     : p.billing_mode === 'retainer' ? t('project.overview.perMonth', { amount: money(p.retainer_cents, p.currency) })
     : p.billing_mode === 'milestone' ? money(p.stages.reduce((s, x) => s + (x.billing_cents ?? 0), 0), p.currency)
-    : p.billing_mode === 'none' ? '—' : money(p.billable_cents, p.currency)
+    : p.billing_mode === 'none' ? '–' : money(p.billable_cents, p.currency)
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="min-w-0 space-y-4">

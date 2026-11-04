@@ -308,9 +308,9 @@ function History({ runs, loading, error }: { runs: InvoiceRun[] | null; loading:
                 <Badge tone={RUN_STATUS[r.status].tone}>{t(RUN_STATUS[r.status].label)}</Badge>
                 {r.status === 'error' && <span className="mt-1 block text-xs text-late">{runError(r.error)}</span>}
               </td>
-              <td className="px-3 py-2 text-right tabular-nums">{r.amount_cents != null ? money(r.amount_cents) : '—'}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{r.amount_cents != null ? money(r.amount_cents) : '–'}</td>
               <td className="px-3 py-2">
-                {r.invoice_url ? <a href={r.invoice_url} target="_blank" rel="noreferrer" className="font-bold text-accent hover:text-accent-dark">{t('clients.open')} ↗</a> : '—'}
+                {r.invoice_url ? <a href={r.invoice_url} target="_blank" rel="noreferrer" className="font-bold text-accent hover:text-accent-dark">{t('clients.open')} ↗</a> : '–'}
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">{fmtDateTime(r.created_at)}{r.created_by_name ? ` · ${r.created_by_name}` : ` · ${t('clients.billing.automatic')}`}</td>
             </tr>

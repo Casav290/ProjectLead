@@ -143,7 +143,7 @@ export default function ClientDetail() {
 const Row = ({ label, children }: { label: string; children: ReactNode }) => (
   <>
     <dt className="text-muted-foreground">{label}</dt>
-    <dd className="min-w-0 break-words">{children || <span className="text-muted-foreground">—</span>}</dd>
+    <dd className="min-w-0 break-words">{children || <span className="text-muted-foreground">–</span>}</dd>
   </>
 )
 

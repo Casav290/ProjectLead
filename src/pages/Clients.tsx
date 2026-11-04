@@ -86,10 +86,10 @@ export default function Clients() {
                       {c.invoicelead_contact_id && <Badge>InvoiceLead</Badge>}
                     </span>
                   </td>
-                  <td className="px-3 py-2">{c.contact_person ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="px-3 py-2">{[c.postal_code, c.town].filter(Boolean).join(' ') || <span className="text-muted-foreground">—</span>}</td>
+                  <td className="px-3 py-2">{c.contact_person ?? <span className="text-muted-foreground">–</span>}</td>
+                  <td className="px-3 py-2">{[c.postal_code, c.town].filter(Boolean).join(' ') || <span className="text-muted-foreground">–</span>}</td>
                   <td className="px-3 py-2 break-words">
-                    {c.email ? <a href={`mailto:${c.email}`} className="hover:text-accent">{c.email}</a> : <span className="text-muted-foreground">—</span>}
+                    {c.email ? <a href={`mailto:${c.email}`} className="hover:text-accent">{c.email}</a> : <span className="text-muted-foreground">–</span>}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{c.active_projects ?? 0}</td>
                 </tr>

@@ -291,7 +291,7 @@ function LinkProject({ m, onClose, onDone }: { m: Message; onClose: () => void; 
         <Field label={t('inbox.link.project')}>
           <Select required value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">{t('inbox.link.choose')}</option>
-            {open.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} — ${p.client_name}` : p.name}</option>)}
+            {open.map((p) => <option key={p.id} value={p.id}>{p.client_name ? `${p.name} · ${p.client_name}` : p.name}</option>)}
           </Select>
         </Field>
         <Checkbox checked={asTask} onChange={setAsTask} label={t('inbox.link.asTask')} />

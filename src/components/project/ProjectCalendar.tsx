@@ -154,7 +154,7 @@ function Chip({ item: i, onOpen }: { item: Item; onOpen: (id: string) => void })
   }
   if (i.kind === 'event') {
     return (
-      <div className="truncate border-l-[3px] border-[#0284c7] bg-[#e0f2fe] px-1.5 py-0.5 text-[11.5px] text-[#0369a1]" title={`${i.ev.title}${i.ev.location ? ` — ${i.ev.location}` : ''}`}>
+      <div className="truncate border-l-[3px] border-[#0284c7] bg-[#e0f2fe] px-1.5 py-0.5 text-[11.5px] text-[#0369a1]" title={`${i.ev.title}${i.ev.location ? ` · ${i.ev.location}` : ''}`}>
         {!i.ev.all_day && <b className="mr-1">{fmtTime(i.ev.starts_at)}</b>}{i.ev.title}
       </div>
     )

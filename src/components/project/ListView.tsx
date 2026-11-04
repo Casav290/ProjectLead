@@ -211,7 +211,7 @@ function Row({ task, selected, onSelect, onOpen, onDone, onPatch }:
           {task.subtasks_total > 0 && <span className="shrink-0 text-xs text-muted-foreground">{task.subtasks_done}/{task.subtasks_total}</span>}
         </button>
       </td>
-      <td className="px-2 py-1.5 max-sm:ml-[3.75rem] max-sm:px-0">{task.assignees.length ? <AvatarStack people={task.assignees} size={22} max={3} /> : <span className="text-muted-foreground">—</span>}</td>
+      <td className="px-2 py-1.5 max-sm:ml-[3.75rem] max-sm:px-0">{task.assignees.length ? <AvatarStack people={task.assignees} size={22} max={3} /> : <span className="text-muted-foreground">–</span>}</td>
       <td className="px-2 py-1 max-sm:w-40">
         <input type="date" value={task.due_date ?? ''} aria-label={t('tasks.list.dueOf', { title: task.title })} onChange={(e) => onPatch({ due_date: e.target.value || null })}
           className={clsx('w-full border border-transparent bg-transparent px-1 py-0.5 text-[13px] hover:border-input focus:border-accent focus:outline-none',
@@ -224,11 +224,11 @@ function Row({ task, selected, onSelect, onOpen, onDone, onPatch }:
           {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </td>
-      <td className="px-2 py-1.5 text-[13px] text-muted-foreground max-sm:hidden">{task.estimate_minutes ? fmtMinutes(task.estimate_minutes) : '—'}</td>
+      <td className="px-2 py-1.5 text-[13px] text-muted-foreground max-sm:hidden">{task.estimate_minutes ? fmtMinutes(task.estimate_minutes) : '–'}</td>
       <td className={clsx('px-2 py-1.5 text-[13px] max-sm:hidden', task.estimate_minutes && task.minutes_spent > task.estimate_minutes ? 'font-bold text-late' : 'text-muted-foreground')}>
-        {task.minutes_spent ? fmtMinutes(task.minutes_spent) : '—'}
+        {task.minutes_spent ? fmtMinutes(task.minutes_spent) : '–'}
       </td>
-      <td className="truncate px-2 py-1.5 text-[13px] max-sm:hidden">{task.column_name ?? '—'}</td>
+      <td className="truncate px-2 py-1.5 text-[13px] max-sm:hidden">{task.column_name ?? '–'}</td>
     </tr>
   )
 }

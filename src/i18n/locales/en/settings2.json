@@ -19,7 +19,7 @@
  "settings2.api.example": "Example",
  "settings2.api.intro": "Connect ProjectLead to your other tools (Make, n8n, Zapier, a script). A key acts on behalf of the person who created it.",
  "settings2.api.keyName": "Key name",
- "settings2.api.keyNamePlaceholder": "Make — quotes",
+ "settings2.api.keyNamePlaceholder": "Make · quotes",
  "settings2.api.never": "Never",
  "settings2.api.neverShown": "it will never be shown again.",
  "settings2.api.newKey": "New key",

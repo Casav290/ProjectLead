@@ -22,7 +22,7 @@ export default function Plans() {
       </p>
       <p className="mt-1 h-4 text-xs text-muted-foreground">{p === 'free' ? '' : t('shell.plans.yearly', { price: euros(PLAN_PRICES[p].year) })}</p>
       <ul className="mt-4 flex-1 space-y-1.5 text-sm">
-        {PLAN_FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">—</span>{f}</li>)}
+        {PLAN_FEATURES[p].map((f) => <li key={f} className="flex gap-2"><span aria-hidden className="text-accent">–</span>{f}</li>)}
       </ul>
     </article>
   )
