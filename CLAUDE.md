@@ -11,6 +11,11 @@ Langue de travail : français. Commits en français, courts.
 - `docs/PLAN.md` : décisions, étapes, état, ce qui bloque. À tenir à jour.
 - `docs/INTEGRATIONS.md` : CRMlead (adresses, affaires gagnées) et InvoiceLead (facturation mensuelle), reliés
   SANS CLÉ par le Compte Lead depuis le 26.10.2026.
+- Site public (référencement, 04.11.2026) : `site/` (build.mjs, pages.mjs, content/<langue>.mjs, accueil.css/ts, media/),
+  écrit au build dans `dist/_site` (accueils /, /en, /de et 21 pages mots-clés /fr|en|de/…), robots.txt, sitemap.xml,
+  llms.txt, vraie 404 ; routes dans `scripts/vercel-build.mjs` (« / » : session ou app mobile → l'application ; sinon essai
+  silencieux ERPlead `/auth/lead/start?prompt=none&probe=1`, échec → page publique `/?lead_probe=1`). Aucun texte
+  inventé, aucun tiret long. Une nouvelle route de l'application doit être ajoutée à `APP_ROUTES`, sinon elle répond 404.
 - Dépôts sœurs : `Casav290/crmlead` (`docs/LEAD-ID.md`), `Casav290/InvoiceLead` (`docs/API.md`), ERPlead (émetteur du
   Compte Lead et des jetons d'échange).
 

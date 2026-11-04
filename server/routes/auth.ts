@@ -190,7 +190,7 @@ app.post('/api/auth/invitation/:token/accept', async (c) => {
 
 // ------------------------------------------------------------------ Compte Lead
 
-type Saved = { state: string; nonce: string; verifier: string; next?: string; silent?: boolean }
+type Saved = { state: string; nonce: string; verifier: string; next?: string; silent?: boolean; probe?: boolean }
 /**
  * La page où revenir après la connexion : un chemin de ProjectLead seulement. Ni « //autre.site », ni « /\autre.site »
  * (un navigateur lit la barre oblique inverse comme « / » : la redirection relative mènerait sur un autre site).
@@ -209,10 +209,15 @@ const startLeadLogin = async (c: any) => {
   // La langue des écrans du Compte Lead : ?locale= de l'adresse, sinon le choix du sélecteur ou du navigateur.
   const asked = c.req.query('locale')?.slice(0, 2).toLowerCase()
   const s = startLogin({ locale: isLocale(asked) ? asked : requestLocale(c.req.header('cookie'), c.req.header('accept-language')) ?? 'fr' })
-  const next = safeNext(c.req.query('next'))
+  // Essai silencieux de la racine (site public, 04.11.2026 ; règle commune des applications Lead, comme CRMlead) : une
+  // vraie navigation sur « / » sans session vient ici (routes de scripts/vercel-build.mjs). ERPlead connaît la personne :
+  // elle entre dans son espace ; sinon, retour sur la page publique (/?lead_probe=1), jamais le formulaire de connexion.
+  const probe = c.req.query('probe') === '1' && c.req.query('prompt') === 'none'
+  if (probe) setCookie(c, LEAD_PROBE, '1', { path: '/', maxAge: 600, sameSite: 'Lax', secure: isProduction(), httpOnly: false })
+  const next = probe ? undefined : safeNext(c.req.query('next'))
   // La page demandée voyage aussi dans `state` (rendu tel quel par ERPlead) : un retour qui a perdu le cookie de départ
   // ramène quand même vers elle (`nextFromState`). Le `state` entier reste comparé à celui du cookie (finishLogin).
-  const state = stateWithNext(s.state, next)
+  const state = probe ? `${PROBE_STATE}${s.state}` : stateWithNext(s.state, next)
   const authorize = new URL(s.url)
   authorize.searchParams.set('state', state)
   // « Créer un compte » : le Compte Lead ouvre directement son inscription (OIDC prompt=create).
@@ -227,11 +232,18 @@ const startLeadLogin = async (c: any) => {
   // Google refuse dans une vue web (et qui obligerait Apple à exiger aussi « Se connecter avec Apple », règle 4.8).
   if (/ProjectLeadApp/.test(c.req.header('user-agent') ?? '')) authorize.searchParams.set('platform', 'app')
   // Une heure : le temps de remplir le formulaire d'ERPlead, de retrouver son mot de passe ou de confirmer son adresse.
-  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next, ...(c.req.query('prompt') === 'none' ? { silent: true } : {}) } satisfies Saved),
+  await setSignedCookie(c, 'pl_lead_login', JSON.stringify({ state, nonce: s.nonce, verifier: s.verifier, next, ...(c.req.query('prompt') === 'none' ? { silent: true } : {}), ...(probe ? { probe: true } : {}) } satisfies Saved),
     cookieSecret(), { httpOnly: true, secure: isProduction(), sameSite: 'Lax', path: '/', maxAge: LOGIN_COOKIE_SECONDS })
   return c.redirect(authorize.toString())
 }
 const LOGIN_COOKIE_SECONDS = 3600
+/** L'essai silencieux de la racine : `lead_probe` (dix minutes, lisible, aucun secret) et le repère de son `state`. */
+const LEAD_PROBE = 'lead_probe'
+const PROBE_STATE = 'p.'
+const backToPublic = (c: any) => {
+  setCookie(c, LEAD_PROBE, '1', { path: '/', maxAge: 600, sameSite: 'Lax', secure: isProduction(), httpOnly: false })
+  return c.redirect('/?lead_probe=1')
+}
 /** `state` = aléa, puis la page demandée en base64url si elle est courte (rien de secret : c'est un chemin de ProjectLead). */
 const stateWithNext = (random: string, next?: string) =>
   next && next !== '/' && Buffer.byteLength(next) <= 512 ? `${random}.${Buffer.from(next).toString('base64url')}` : random
@@ -454,6 +466,8 @@ app.get('/auth/lead/callback', async (c) => {
   // ne garde que le dernier Set-Cookie. Il expire seul en une heure ; son `state` ne sert qu'une fois.
   // Sans lui (expiré, cookies refusés) : l'écran de connexion, qui garde la page demandée, et pas de nouveau départ seul.
   if (!raw) {
+    // Retour d'un essai silencieux de la racine dont le cookie s'est perdu (cookies refusés) : la page publique.
+    if (String(c.req.query('state') ?? '').startsWith(PROBE_STATE)) return backToPublic(c)
     const next = nextFromState(c.req.query('state'))
     return c.redirect(`/login?erreur=session${next ? `&next=${encodeURIComponent(next)}` : ''}`)
   }
@@ -467,6 +481,8 @@ app.get('/auth/lead/callback', async (c) => {
     // Reconnexion silencieuse refusée (plus de session au Compte Lead) : on repart avec le formulaire, une seule fois
     // (le départ suivant n'est plus silencieux : pas de boucle).
     const err = c.req.query('error')
+    // Essai silencieux de la racine sans réponse (pas de session ERPlead, consentement à donner…) : la page publique.
+    if (saved.probe && err) return backToPublic(c)
     if (saved.silent && (err === 'login_required' || err === 'interaction_required' || err === 'consent_required'))
       return c.redirect(`/auth/lead/start${saved.next ? `?next=${encodeURIComponent(saved.next)}` : ''}`)
     const { claims, tokens } = await finishLogin(c.req.query(), saved)

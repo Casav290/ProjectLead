@@ -1280,6 +1280,26 @@ check('formule Pro : session ouverte, retour à la page demandée', ll.location 
   const again = refusedSilent.headers.get('location') ?? ''
   check('plus de session au Compte Lead (login_required) : départ avec formulaire, sans prompt=none (pas de boucle)',
     again === `/auth/lead/start?next=${encodeURIComponent(next)}`, again)
+  // Essai silencieux de la racine (site public, 04.11.2026) : sans session ERPlead, retour sur la page publique, jamais le
+  // formulaire ; lead_probe posé (dix minutes) ; un retour sans cookie de départ (cookies refusés) aussi.
+  const probe = await app.request('http://localhost/auth/lead/start?prompt=none&probe=1&next=/projets')
+  const toP = new URL(probe.headers.get('location') ?? 'http://x/')
+  const jarP = (probe.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+  check('essai de la racine : prompt=none, state marqué, lead_probe posé, aucune page demandée',
+    toP.searchParams.get('prompt') === 'none' && (toP.searchParams.get('state') ?? '').startsWith('p.')
+    && /lead_probe=1/.test(probe.headers.get('set-cookie') ?? '') && !(toP.searchParams.get('state') ?? '').slice(2).includes('.'), toP.href)
+  const missP = await app.request(`http://localhost/auth/lead/callback?error=login_required&state=${toP.searchParams.get('state')}`, { headers: { cookie: jarP } })
+  check('essai de la racine sans session ERPlead : la page publique (/?lead_probe=1)', missP.headers.get('location') === '/?lead_probe=1'
+    && /lead_probe=1/.test(missP.headers.get('set-cookie') ?? ''), missP.headers.get('location'))
+  const lostP = await app.request(`http://localhost/auth/lead/callback?error=login_required&state=${toP.searchParams.get('state')}`)
+  check('essai de la racine, cookie de départ perdu : la page publique', lostP.headers.get('location') === '/?lead_probe=1', lostP.headers.get('location'))
+  const probe2 = await app.request('http://localhost/auth/lead/start?prompt=none&probe=1')
+  const toP2 = new URL(probe2.headers.get('location') ?? 'http://x/')
+  const jarP2 = (probe2.headers.get('set-cookie') ?? '').match(/pl_lead_login=[^;]+/)?.[0] ?? ''
+  nextIdClaims = lead(toP2.searchParams.get('nonce') ?? '', true)
+  const okP = await app.request(`http://localhost/auth/lead/callback?code=c&state=${toP2.searchParams.get('state')}`, { headers: { cookie: jarP2 } })
+  check('essai de la racine avec session ERPlead : session ouverte, accueil de l\u2019espace', okP.headers.get('location') === '/'
+    && /projectlead_session=/.test(okP.headers.get('set-cookie') ?? ''), okP.headers.get('location'))
 }
 for (const bad of ['/%5Cevil.test', '//evil.test', 'https://evil.test/']) {
   // « /\evil.test » dans un Location relatif mène un navigateur sur evil.test : jamais repris comme page demandée.

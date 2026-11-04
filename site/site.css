@@ -1,0 +1,53 @@
+
+/* ============================================================ site public : langues, pages mots-clés, pied de page */
+.langs { gap: 2px; padding: 0 10px; }
+.lang { display: inline-grid; place-items: center; min-width: 30px; height: 30px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-decoration: none; color: var(--ink-3); }
+a.lang:hover { background: var(--muted); color: var(--ink); }
+.lang.is-on { color: var(--accent-text); background-image: linear-gradient(var(--accent), var(--accent)); background-size: 100% 2px; background-position: 0 100%; background-repeat: no-repeat; }
+@media (max-width: 640px) { .langs { padding: 0 4px; } .lang { min-width: 26px; } }
+@media (max-width: 480px) { .langs { display: none; } }
+@media (max-width: 420px) { .util .btn-fill { padding: 0 10px; font-size: 12px; } }
+
+.crumbs { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--ink-3); }
+.crumbs a { color: var(--accent-text); font-weight: 700; text-decoration: none; }
+.crumbs a:hover { text-decoration: underline; }
+.art-hero h1 { font-size: clamp(36px, 5.6vw, 72px); line-height: .98; font-weight: 900; font-stretch: 78%; letter-spacing: -.03em; max-width: 22ch; }
+.art-figure { margin: clamp(20px, 4vw, 40px) 0 0; }
+.art-sec { padding-block: clamp(28px, 4.5vw, 52px); }
+.art-sec + .art-sec { border-top: 1px solid var(--line-strong); }
+.art-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 40px; align-items: start; }
+.art-grid.art-solo { grid-template-columns: minmax(0, 780px); }
+.prose { display: grid; gap: 16px; }
+.prose h2 { font-size: clamp(26px, 3.2vw, 38px); }
+.prose p { font-size: 17px; max-width: 70ch; }
+.prose a, .step a { color: var(--accent-text); font-weight: 700; text-underline-offset: 3px; }
+.prose ul.dash { font-size: 16px; }
+.art-shot { position: sticky; top: calc(var(--top) + 24px); }
+@media (max-width: 900px) { .art-grid { grid-template-columns: 1fr; gap: 24px; } .art-shot { position: static; } }
+.phone-solo { margin: 0 auto; width: min(70%, 300px); }
+.phone-solo .phone-screen { max-height: 560px; }
+
+.guides { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); border: 1px solid var(--line-strong); background: var(--panel); }
+.guide { display: grid; gap: 6px; align-content: start; padding: 20px; text-decoration: none; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; }
+.guide b { font-size: 18px; color: var(--ink); line-height: 1.2; }
+.guide span:not(.meta) { font-size: 14.5px; color: var(--ink-3); }
+.guide .meta { color: var(--accent-text); }
+.guide:hover { background: var(--accent-pale); }
+.guide:hover b { text-decoration: underline; text-underline-offset: 3px; }
+
+.foot-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, .8fr); gap: 32px; padding-block: 36px 8px; }
+.foot-title { font-size: 12px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--ink); margin-bottom: 12px; }
+.foot-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+.foot-list a { color: var(--ink-2); font-weight: 600; text-decoration: none; }
+.foot-list a:hover { color: var(--ink); text-decoration: underline; }
+.foot-apps li { display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
+.foot-apps span { color: var(--ink-3); }
+.foot-langs { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 16px; font-size: 13px; }
+.foot-langs a { color: var(--ink-3); font-weight: 600; text-decoration: none; }
+.foot-langs a:hover { color: var(--ink); text-decoration: underline; }
+footer .foot { border-top: 1px solid var(--line); margin-top: 20px; }
+@media (max-width: 900px) { .foot-grid { grid-template-columns: 1fr 1fr; } .foot-suite { grid-column: 1 / -1; order: -1; } }
+@media (max-width: 560px) { .foot-grid { grid-template-columns: 1fr; } .foot-apps li { grid-template-columns: 1fr; gap: 2px; } }
+
+.nf { display: grid; gap: 18px; min-height: 60vh; align-content: center; }
+.nf h1 { font-size: clamp(42px, 7vw, 88px); font-weight: 900; font-stretch: 76%; line-height: .95; }
