@@ -2947,7 +2947,7 @@ section('Contacts connus pour VisitLead (known_contacts, 04.11.2026)')
     [accountId, c2, `ka.${tag}@x.test`, '2030-01-01T10:00:03.000Z'])
   await pool.query(`insert into clients (account_id, kind, name, email, created_at) values ($1,'person',$2,'pas-une-adresse',$3)`, [accountId, `Faux ${tag}`, t0])
   const card = await new Client().get('/.well-known/lead-app.json')
-  check('carte : read et reads [known_contacts], boîte et accepts inchangés', card.body.exchange.reads?.join() === 'known_contacts'
+  check('carte : read et reads [known_contacts], boîte et accepts inchangés', card.body.exchange.reads?.join() === 'known_contacts,today'
     && card.body.exchange.read?.endsWith('/api/lead-exchange/v1/read') && card.body.exchange.accepts.join() === 'deal,client', card.body)
   // Les lignes de 2030 viennent après toutes les autres : on se place juste avant.
   const before = Buffer.from(JSON.stringify({ u: '2030-01-01T09:59:59.000Z', i: '' })).toString('base64url')

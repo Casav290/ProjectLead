@@ -67,6 +67,11 @@ limites (chaînes > 2000, contacts > 50, lignes > 200) → 400 `invalid_envelope
 - `client` : met à jour SEULEMENT le client `crmlead:<id du lead>` (adresse découpée, pays, contacts manquants
   ajoutés) ; jamais de création : client absent → 404 `not_linked` (`server/routes/exchangeClient.ts`).
 
+## ERPtoday : le tableau de bord d'erplead.io
+
+`GET /api/lead-exchange/v1/read?type=today` : lecteur ERPlead seulement, jeton `exchange_read` avec la personne ; les tâches
+qui lui sont confiées, ses rendez-vous et ses agendas reliés, avec ses droits. Aucune écriture.
+
 ## InvoiceLead : la facturation mensuelle
 
 1. Sur chaque projet, choisir le mode de facturation : à l'heure (taux du projet, sinon de la personne), forfait

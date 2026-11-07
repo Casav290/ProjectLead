@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { anonTx } from '../db.js'
+import { anon, anonTx, withTenant, type Role } from '../db.js'
 import { createDefaultColumns } from '../lib/defaults.js'
 import { appUrl, checkEnvelope, incomingExchange, orgSenders, parseEnvelope, sameOrigin, type IncomingExchange } from '../lib/leadId.js'
 import { planOf } from '../lib/plans.js'
@@ -23,7 +23,7 @@ const base = () => (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
 app.get('/.well-known/lead-app.json', (c) => c.json({
   app: 'projectlead', name: 'ProjectLead',
   exchange: { version: 1, inbox: `${base()}/api/lead-exchange/v1/inbox`, accepts: Object.keys(ALLOWED), sends: ['invoice'],
-              read: `${base()}/api/lead-exchange/v1/read`, reads: ['known_contacts'] },
+              read: `${base()}/api/lead-exchange/v1/read`, reads: ['known_contacts', 'today'] },
 }))
 
 /**
@@ -56,12 +56,60 @@ const KNOWN_SQL = `
     from client_contacts k join clients c on c.id = k.client_id and c.archived_at is null
    where k.account_id = $1 and k.email is not null and trim(k.email) ~ ${EMAIL_SQL}`
 
+/**
+ * ERPtoday (tableau de bord d'erplead.io, 07.11.2026) : les tâches confiées à LA personne du jeton et ses agendas, avec ses
+ * droits, mêmes requêtes que l'accueil de ProjectLead (routes/work.ts). Lecteur : ERPlead seulement, personne obligatoire,
+ * membre actif de ce compte. Aucune écriture.
+ */
+async function readToday(c: any, tok: IncomingExchange) {
+  if (tok.app !== 'erplead') return c.json({ error: 'sender_not_allowed' }, 403)
+  if (!tok.org) return c.json({ error: 'org_required' }, 401)
+  if (!tok.person) return c.json({ error: 'person_required' }, 403)
+  const who = await anon(async (db) => (await db.query(
+    // i18n-ok
+    `select a.id as account_id, a.timezone, u.id as user_id, au.role
+       from accounts a join account_users au on au.account_id = a.id and au.active join users u on u.id = au.user_id
+      where a.lead_org = $1 and u.lead_sub = $2`, [tok.org, tok.person])).rows[0])
+  if (!who) return c.json({ error: 'person_not_member' }, 403)
+  if (!knownBudget(`today:${who.account_id}`)) return c.json({ error: 'too_many_requests' }, 429)
+  const site = base()
+  const data = await withTenant({ accountId: who.account_id, userId: who.user_id, role: who.role as Role }, async (db) => {
+    const tasks = (await db.query(
+      `select t.id, t.title, to_char(t.due_date, 'YYYY-MM-DD') as due_date, t.priority, t.project_id, p.name as project_name
+         from tasks t join projects p on p.id = t.project_id join task_assignees ta on ta.task_id = t.id and ta.user_id = app_user()
+        where t.completed_at is null and not p.is_template and p.archived_at is null
+        order by t.due_date nulls last, case t.priority when 'urgent' then 0 when 'high' then 1 when 'normal' then 2 else 3 end limit 100`)).rows
+    const events = (await db.query(
+      `select * from (
+         select 'event:' || e.id::text as id, e.title, e.starts_at, e.ends_at, e.all_day, nullif(e.location, '') as location,
+                p.name as context, null::text as calendar, true as linked
+           from events e left join projects p on p.id = e.project_id
+          where e.ends_at > now() - interval '1 day' and e.starts_at < now() + interval '8 days'
+            and (e.organizer_id = app_user() or exists (select 1 from event_attendees a where a.event_id = e.id and a.user_id = app_user()))
+         union all
+         select 'ext:' || x.id::text, x.title, x.starts_at, x.ends_at, x.all_day, null, null, f.name, false
+           from external_events x join calendar_feeds f on f.id = x.feed_id
+          where x.user_id = app_user() and x.ends_at > now() - interval '1 day' and x.starts_at < now() + interval '8 days'
+       ) ev order by starts_at limit 100`)).rows
+    return { tasks, events }
+  })
+  return c.json({
+    timezone: who.timezone ?? null,
+    tasks: data.tasks.map((t: any) => ({ id: `task:${t.id}`, title: t.title, context: t.project_name ?? null, note: null, action: null, due_at: null,
+                                         due_date: t.due_date ?? null, priority: t.priority, url: `${site}/projets/${t.project_id}?tache=${t.id}` })),
+    events: data.events.map((e: any) => ({ id: e.id, title: e.title, starts_at: new Date(e.starts_at).toISOString(), ends_at: new Date(e.ends_at).toISOString(),
+                                           all_day: !!e.all_day, location: e.location ?? null, context: e.context ?? null, calendar: e.calendar ?? null,
+                                           url: e.linked ? `${site}/agenda` : null })),
+  })
+}
+
 app.get('/api/lead-exchange/v1/read', async (c) => {
   let tok: IncomingExchange | null = null
   try { tok = await incomingExchange(c.req.header('authorization'), 'exchange_read') } catch { tok = null }
   if (!tok) return c.json({ error: 'invalid_token' }, 401)
   const type = c.req.query('type') ?? ''
-  if (type !== 'known_contacts') return c.json({ error: 'unsupported_type', reads: ['known_contacts'] }, 422)
+  if (type === 'today') return readToday(c, tok)
+  if (type !== 'known_contacts') return c.json({ error: 'unsupported_type', reads: ['known_contacts', 'today'] }, 422)
   if (!KNOWN_READERS.includes(tok.app)) return c.json({ error: 'sender_not_allowed' }, 403)
   if (!tok.org) return c.json({ error: 'org_required' }, 401)
   let cursor: { u: string; i: string } | null = null
