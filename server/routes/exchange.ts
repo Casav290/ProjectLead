@@ -91,10 +91,21 @@ async function readToday(c: any, tok: IncomingExchange) {
            from external_events x join calendar_feeds f on f.id = x.feed_id
           where x.user_id = app_user() and x.ends_at > now() - interval '1 day' and x.starts_at < now() + interval '8 days'
        ) ev order by starts_at limit 100`)).rows
-    return { tasks, events }
+    const projects = (await db.query(
+      `select p.id, p.name, p.status, p.health, to_char(p.due_date, 'YYYY-MM-DD') as due_date, c.name as client_name,
+              (select count(*)::int from tasks t where t.project_id = p.id and t.parent_id is null) as tasks_total,
+              (select count(*)::int from tasks t where t.project_id = p.id and t.parent_id is null and t.completed_at is not null) as tasks_done,
+              (select count(*)::int from tasks t where t.project_id = p.id and t.completed_at is null and t.due_date < current_date) as tasks_late
+         from projects p left join clients c on c.id = p.client_id
+        where not p.is_template and p.archived_at is null and p.status in ('active','planned','on_hold')
+          and (exists (select 1 from project_members m where m.project_id = p.id and m.user_id = app_user()) or p.owner_id = app_user() or app_role() <> 'member')
+        order by case p.health when 'off_track' then 0 when 'at_risk' then 1 else 2 end, p.due_date nulls last limit 30`)).rows
+    return { tasks, events, projects }
   })
   return c.json({
     timezone: who.timezone ?? null,
+    projects: data.projects.map((p: any) => ({ id: p.id, name: p.name, client: p.client_name ?? null, status: p.status, health: p.health, due_date: p.due_date ?? null,
+                                               tasks_total: p.tasks_total, tasks_done: p.tasks_done, tasks_late: p.tasks_late, url: `${site}/projets/${p.id}` })),
     tasks: data.tasks.map((t: any) => ({ id: `task:${t.id}`, title: t.title, context: t.project_name ?? null, note: null, action: null, due_at: null,
                                          due_date: t.due_date ?? null, priority: t.priority, url: `${site}/projets/${t.project_id}?tache=${t.id}` })),
     events: data.events.map((e: any) => ({ id: e.id, title: e.title, starts_at: new Date(e.starts_at).toISOString(), ends_at: new Date(e.ends_at).toISOString(),
