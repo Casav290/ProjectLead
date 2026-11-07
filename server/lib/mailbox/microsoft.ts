@@ -1,6 +1,6 @@
 import { api, freshTokens, type Tokens } from './oauth.js'
 import { simpleParser } from 'mailparser'
-import { addresses, attachmentsOf, HISTORY_PER_ADDRESS, readable, worthFetching, type AttachmentInfo,
+import { addresses, attachmentsOf, HISTORY_PER_ADDRESS, looksSpam, readable, worthFetching, type AttachmentInfo,
          type BackfillResult, type Outgoing, type SendOutcome, type SyncContext,
          type SyncResult } from './types.js'
 
@@ -20,7 +20,14 @@ export async function profileEmail(t: Tokens): Promise<string> {
   return String(me.mail || me.userPrincipalName || '').toLowerCase()
 }
 
-const SELECT = 'id,internetMessageId,subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments'
+const SELECT = 'id,internetMessageId,subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments,parentFolderId'
+
+/**
+ * Le dossier « Courrier indésirable » : /me/messages lit tous les dossiers, lui compris. Illisible, l'objet marqué reste
+ * le seul filtre ; une session expirée se voit à l'appel suivant, qui dit de reconnecter la boîte.
+ */
+const junkFolder = (token: string): Promise<string> =>
+  api(`${BASE()}/me/mailFolders/junkemail?$select=id`, token).then((r: any) => String(r.id ?? ''), () => '')
 
 /** Le MIME d'origine : Graph ne rend les pièces jointes qu'à part, et pas dans le même ordre. */
 async function mime(token: string, id: string): Promise<Buffer> {
@@ -33,9 +40,10 @@ async function mime(token: string, id: string): Promise<Buffer> {
 }
 
 /** Enregistre ceux d'une page de résultats qui concernent un contact connu. */
-async function importPage(token: string, value: any[], ctx: SyncContext): Promise<number> {
+async function importPage(token: string, value: any[], ctx: SyncContext, junk: string): Promise<number> {
   const batch = value.map((m: any) => ({
     raw: m,
+    spam: (!!junk && m.parentFolderId === junk) || looksSpam(m.subject),
     messageId: String(m.internetMessageId ?? '').trim(),
     from: addresses(m.from?.emailAddress?.address)[0] ?? '',
     to: addresses([...(m.toRecipients ?? []), ...(m.ccRecipients ?? [])]
@@ -72,13 +80,14 @@ export async function sync(tokens: Tokens, state: any, ctx: SyncContext): Promis
     $select: SELECT,
   })
 
+  const junk = await junkFolder(t.access_token)
   let imported = 0
   let last: string | null = null
   let pages = 0
   while (url && pages < PAGES) {
     const r: any = await api(url, t.access_token, { headers: { Prefer: 'outlook.body-content-type="text"' } })
     pages++
-    imported += await importPage(t.access_token, r.value ?? [], ctx)
+    imported += await importPage(t.access_token, r.value ?? [], ctx, junk)
     if ((r.value ?? []).length) last = r.value[r.value.length - 1].receivedDateTime
     url = r['@odata.nextLink'] ?? null
   }
@@ -91,12 +100,13 @@ export async function sync(tokens: Tokens, state: any, ctx: SyncContext): Promis
 /** L'historique de quelques contacts : Graph cherche par correspondant dans toute la boîte. */
 export async function backfill(tokens: Tokens, list: string[], ctx: SyncContext): Promise<BackfillResult> {
   const { tokens: t, changed } = await freshTokens('microsoft', tokens)
+  const junk = await junkFolder(t.access_token)
   let imported = 0
   for (const a of list) {
     const r: any = await api(`${BASE()}/me/messages?` + new URLSearchParams({
       $search: `"participants:${a}"`, $top: String(HISTORY_PER_ADDRESS), $select: SELECT,
     }), t.access_token, { headers: { Prefer: 'outlook.body-content-type="text"' } })
-    imported += await importPage(t.access_token, (r.value ?? []).filter((m: any) => !m.isDraft), ctx)
+    imported += await importPage(t.access_token, (r.value ?? []).filter((m: any) => !m.isDraft), ctx, junk)
   }
   return { imported, secret: changed ? t : undefined }
 }

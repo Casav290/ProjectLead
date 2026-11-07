@@ -52,6 +52,32 @@ export function looksAutomated(from: string, h: (name: string) => string) {
   return /^(no-?reply|do-?not-?reply|notifications?|mailer-daemon|postmaster|bounces?|newsletter|info-noreply)[+@.-]/i.test(from)
 }
 
+const SPAM_WORD = String.raw`(?:(?:possible|probable|probably|potential|suspected|suspect|likely|maybe|verdacht\s+auf)[-\s]+)?` +
+  String.raw`(?:spam|spamverdacht|pourriel|(?:courrier\s+)?ind[ée]sirables?|junk|(?:posta\s+)?indesiderata|(?:correo\s+)?no\s+deseado)\b` +
+  String.raw`\s*\??\s*(?:[-:=]?\s*(?:score\s*[:=]?\s*)?\d{1,2}(?:[.,]\d+)?(?:/\d+)?|-\s*(?:low|medium|high))?\s*`
+// La marque d'un filtre est en tête d'objet, seule ou après une autre marque (« [EXTERNAL] [SPAM] … »). « Re: [SPAM] … » ne
+// l'est pas : c'est une personne qui répond à un faux positif.
+const SPAM_TAG = new RegExp(
+  String.raw`^\s*(?:\[[^\]]{1,40}\]\s*)*` +
+  String.raw`(?:\[\s*\**\s*${SPAM_WORD}\**\s*\]|\(\s*${SPAM_WORD}\)|\{\s*${SPAM_WORD}\}|<\s*${SPAM_WORD}>|\*+\s*${SPAM_WORD}\*+)`, 'i')
+// Sans crochets, seulement en capitales et collé (« SPAM: offre ») : « Spam : comment l'éviter » reste un objet ordinaire.
+const SPAM_CAPS = /^\s*SPAM(?::|\s\|\s|\s-\s)/
+
+/** Les en-têtes que les filtres posent sur un message qu'ils laissent dans la boîte de réception. */
+export const SPAM_HEADERS = ['X-Spam-Flag', 'X-Spam-Status', 'X-Spam']
+
+/**
+ * Un message que le serveur de messagerie a marqué comme indésirable sans le sortir de la boîte de réception : objet
+ * préfixé (« [SPAM] | HVB844005112026 », « ***SPAM*** », « [Possible spam] ») ou en-tête X-Spam-* à « yes ». Demande
+ * d'Ève du 07.11.2026 : un e-mail marqué comme spam ne s'affiche pas. Un objet qui parle du spam n'est pas marqué.
+ */
+export function looksSpam(subject: string | null | undefined, h: (name: string) => string = () => '') {
+  if (SPAM_HEADERS.some((name) => /^\s*yes\b/i.test(h(name)))) return true
+  // Blancs réduits d'abord : une suite d'espaces rendrait l'expression très lente (près d'une seconde par objet).
+  const s = String(subject ?? '').slice(0, 300).replace(/\s+/g, ' ')
+  return SPAM_TAG.test(s) || SPAM_CAPS.test(s)
+}
+
 /** « Marc Dupont <marc@dupont.ch> » → « Marc Dupont ». */
 export const displayName = (raw: string) =>
   (raw.match(/^\s*"?([^"<]+?)"?\s*</)?.[1] ?? '').trim() || null
@@ -118,9 +144,11 @@ export function readable(text: string | null | undefined, html: string | null | 
  * concernent un contact connu et qu'on n'a pas encore. Deux requêtes pour toute la
  * fournée, pas deux par message.
  */
-export async function worthFetching<T extends { messageId: string; from: string; to: string[] }>(
-  ctx: SyncContext, batch: T[],
+export async function worthFetching<T extends { messageId: string; from: string; to: string[]; spam?: boolean }>(
+  ctx: SyncContext, all: T[],
 ): Promise<T[]> {
+  // Reçu et marqué comme spam : jamais rangé sur le lead. Sa propre réponse (« Re: [SPAM] … », un faux positif) reste.
+  const batch = all.filter((m) => !m.spam || m.from.toLowerCase() === ctx.email)
   if (!batch.length) return []
   const others = (m: T) =>
     [m.from, ...m.to].map((a) => a.toLowerCase()).filter((a) => a && a !== ctx.email)

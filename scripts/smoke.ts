@@ -521,6 +521,57 @@ const spam = r.body.find((m: any) => m.from_email === 'pub@spam.ch')
 await eve.post(`/api/mail/messages/${spam.id}/status`, { status: 'ignored' })
 r = await eve.get('/api/mail/inbox')
 check('email écarté', !r.body.some((m: any) => m.id === spam.id))
+
+section('Emails marqués comme spam par le serveur (demande d’Ève du 07.11.2026)')
+const inbound = (m: Record<string, unknown>) => new Client().req('POST', `/api/inbound/${inboundToken}`, m)
+r = await inbound({ from: 'pourriel@inconnu.test', subject: '[SPAM] | HVB844005112026', text: 'x', message_id: `<sp1-${stamp}@inconnu.test>` })
+check('capture : un objet [SPAM] n’entre pas', r.status === 200 && r.body.status === 'spam', r.body)
+r = await inbound({ from: 'pourriel@inconnu.test', subject: 'Offre du jour', text: 'x', message_id: `<sp2-${stamp}@inconnu.test>`, headers: { 'x-spam-flag': 'YES' } })
+check('capture : un en-tête X-Spam-Flag non plus', r.status === 200 && r.body.status === 'spam', r.body)
+r = await inbound({ from: 'julie@martin-archi.ch', subject: '***SPAM*** Plans', text: 'x', message_id: `<sp3-${stamp}@martin-archi.ch>` })
+check('capture : même d’un client connu', r.status === 200 && r.body.status === 'spam', r.body)
+r = await inbound({ from: 'lea@question.test', subject: 'Comment éviter le spam dans vos envois', text: 'x', message_id: `<sp4-${stamp}@question.test>` })
+check('capture : un objet qui parle du spam entre (témoin)', r.status === 201, r.body)
+r = await inbound({ from: 'filtre@question.test', subject: 'Rapport', text: 'x', message_id: `<sp5-${stamp}@question.test>`, headers: { 'X-Spam-Status': 'No, score=0.1' } })
+check('capture : X-Spam-Status à No entre (témoin)', r.status === 201, r.body)
+r = await inbound({ from: 'client@question.test', subject: 'Re: [SPAM] Ma réponse à un faux positif', text: 'x', message_id: `<sp6-${stamp}@question.test>` })
+check('capture : la réponse d’une personne à un faux positif entre', r.status === 201, r.body)
+r = await eve.get('/api/mail/inbox?status=all')
+check('boîte : rien de marqué, les témoins présents',
+  !r.body.some((m: any) => m.from_email === 'pourriel@inconnu.test' || m.subject === '***SPAM*** Plans')
+    && ['lea@question.test', 'filtre@question.test', 'client@question.test'].every((a) => r.body.some((m: any) => m.from_email === a)),
+  r.body.map((m: any) => m.subject))
+// Le cas réel : déjà « à trier » avant ce filtre. La migration suit exactement looksSpam, pastille comprise.
+const { looksSpam } = await import('../server/lib/mailbox/types.js')
+const { readFileSync: readSql } = await import('node:fs')
+const SPAM_SUBJECTS = ['[SPAM] | HVB844005112026', '[Spam] offre', '***SPAM*** offre', '*** SPAM *** offre', '{SPAM} offre', '(SPAM) offre', '<SPAM> offre', '[SPAM?] offre',
+  '[SPAM 5.2] offre', '[SPAM - 7.5] offre', '[SPAM-LOW] offre', '[Spam score: 7] offre', '[Possible spam] offre', '[SUSPECTED-SPAM] offre', '[MAYBE SPAM] offre',
+  '[EXTERNAL] [SPAM] offre', '[***SPAM***] offre', '[SPAM] Re: offre', 'SPAM: offre', 'SPAM - offre', 'SPAM | offre', '[Pourriel] offre', '[Indésirable] offre',
+  '[Courrier indésirable] offre', '[Junk] offre', '[Spamverdacht] Angebot', '[Posta indesiderata] offerta', '[Correo no deseado] oferta']
+const PLAIN_SUBJECTS = ['Le spam, parlons-en', 'Spam : comment l’éviter', 'SPAM : comment l’éviter', 'Re: [SPAM] Ma réponse', 'Fwd: [SPAM] Facture 2026', '[Spam filter] rapport',
+  '[Spammer list] mise à jour', '[Spam 2026] Conférence', '*Spam filter configuration*', '** Spam filter down **', '*Junk removal quote', '[EXTERNAL] Devis', 'Indésirable']
+for (const x of SPAM_SUBJECTS) if (!looksSpam(x)) check(`looksSpam reconnaît ${x}`, false)
+for (const x of PLAIN_SUBJECTS) if (looksSpam(x)) check(`looksSpam laisse ${x}`, false)
+const aTrier = async () => (await eve.get('/api/me')).body.inbox as number
+const aTrierAvant = await aTrier()
+const row = async (subject: string, i: number, kind: 'triage' | 'capture') => (await pool.query(
+  `insert into email_messages (account_id, message_id, direction, from_email, to_emails, subject, received_at, status)
+   values ($1, $2, 'in', 'ancien@inconnu.test', array['x@exemple.test'], $3, now(), 'new') returning id`,
+  [accountId, kind === 'triage' ? `triage:x:ancien-${stamp}-${i}` : `<ancien-${stamp}-${i}@inconnu.test>`, subject])).rows[0].id as string
+const anciensFile = await Promise.all(SPAM_SUBJECTS.map((x, i) => row(x, i, 'triage')))
+const anciensCapture = await Promise.all(SPAM_SUBJECTS.map((x, i) => row(x, i + 100, 'capture')))
+const ordinaires = await Promise.all(PLAIN_SUBJECTS.map((x, i) => row(x, i + 200, 'triage')))
+const total = SPAM_SUBJECTS.length * 2 + PLAIN_SUBJECTS.length
+check('pastille : les anciens comptent avant la migration (témoin)', (await aTrier()) === aTrierAvant + total, await aTrier())
+await pool.query(readSql(new URL('../db/035_emails_spam_a_trier.sql', import.meta.url), 'utf8'))
+const etats = async (ids: string[]) => (await pool.query('select id, subject, status from email_messages where id = any($1)', [ids])).rows
+check('migration 035 : les entrées de la file marquées sont effacées, toutes les formes', (await etats(anciensFile)).length === 0, await etats(anciensFile))
+check('migration 035 : les e-mails capturés marqués sont écartés, pas effacés', (await etats(anciensCapture)).filter((x: any) => x.status === 'ignored').length === SPAM_SUBJECTS.length, await etats(anciensCapture))
+check('migration 035 : les objets ordinaires restent à trier', (await etats(ordinaires)).filter((x: any) => x.status === 'new').length === PLAIN_SUBJECTS.length, (await etats(ordinaires)).filter((x: any) => x.status !== 'new'))
+check('pastille : plus que les objets ordinaires après la migration', (await aTrier()) === aTrierAvant + PLAIN_SUBJECTS.length, await aTrier())
+r = await eve.get('/api/mail/inbox')
+check('boîte : la liste et la pastille disent la même chose', r.body.length === await aTrier(), { liste: r.body.length, pastille: await aTrier() })
+await pool.query(`delete from email_messages where account_id = $1 and (id = any($2) or message_id like '<sp%-' || $3 || '@%')`, [accountId, [...anciensCapture, ...ordinaires], String(stamp)])
 r = await new Client().req('POST', `/api/inbound/${inboundToken}`, { from: 'paul@favre.ch', subject: 'Question', text: 'Une question', message_id: `<m4-${stamp}@favre.ch>` })
 r = await eve.get(`/api/projects/${projId}/emails`)
 check('email d’un contact client → projet en cours du client', r.body.some((m: any) => m.subject === 'Question'), r.body)

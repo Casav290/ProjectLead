@@ -1,7 +1,7 @@
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
 import { simpleParser } from 'mailparser'
 import { api, freshTokens, type Tokens } from './oauth.js'
-import { addresses, attachmentsOf, displayName, HISTORY_PER_ADDRESS, looksAutomated, readable, TRIAGE_PER_SYNC,
+import { addresses, attachmentsOf, displayName, HISTORY_PER_ADDRESS, looksAutomated, looksSpam, readable, SPAM_HEADERS, TRIAGE_PER_SYNC,
          worthFetching, type BackfillResult,
          type FoundMessage, type Outgoing, type SendOutcome, type SyncContext, type SyncResult } from './types.js'
 
@@ -22,20 +22,20 @@ export async function profileEmail(t: Tokens): Promise<string> {
   return String(p.emailAddress ?? '').toLowerCase()
 }
 
-type Head = { id: string; messageId: string; from: string; to: string[]; date: Date }
+type Head = { id: string; messageId: string; from: string; to: string[]; date: Date; spam: boolean }
 
 async function heads(t: Tokens, ids: string[]): Promise<Head[]> {
   const out: Head[] = []
   for (const id of ids) {
     const m = await api(`${BASE()}/users/me/messages/${id}?format=metadata` +
-      ['From', 'To', 'Cc', 'Subject', 'Message-ID', 'Date'].map((h) => `&metadataHeaders=${h}`).join(''),
+      ['From', 'To', 'Cc', 'Subject', 'Message-ID', 'Date', ...SPAM_HEADERS].map((h) => `&metadataHeaders=${h}`).join(''),
       t.access_token)
     await pause()
     const h = (name: string) =>
       (m.payload?.headers ?? []).find((x: any) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
     out.push({
       id, messageId: h('Message-ID').trim(), from: addresses(h('From'))[0] ?? '',
-      to: addresses([h('To'), h('Cc')]), date: new Date(Number(m.internalDate ?? Date.now())),
+      to: addresses([h('To'), h('Cc')]), date: new Date(Number(m.internalDate ?? Date.now())), spam: looksSpam(h('Subject'), h),
     })
   }
   return out
@@ -114,13 +114,13 @@ export async function triage(tokens: Tokens, state: any, ctx: SyncContext): Prom
   const seen = await ctx.triageKnown(ids)
   for (const id of ids.filter((x) => !seen.has(x)).reverse()) {
     const m = await api(`${BASE()}/users/me/messages/${id}?format=metadata` +
-      ['From', 'Subject', 'List-Unsubscribe', 'List-Id', 'Precedence', 'Auto-Submitted'].map((h) => `&metadataHeaders=${h}`).join(''),
+      ['From', 'Subject', 'List-Unsubscribe', 'List-Id', 'Precedence', 'Auto-Submitted', ...SPAM_HEADERS].map((h) => `&metadataHeaders=${h}`).join(''),
       t.access_token)
     await pause()
     const h = (name: string) =>
       (m.payload?.headers ?? []).find((x: any) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
     const from = addresses(h('From'))[0] ?? ''
-    if (!from || looksAutomated(from, h)) continue
+    if (!from || looksAutomated(from, h) || looksSpam(h('Subject'), h)) continue
     // L'identifiant Gmail sert de repère : c'est lui qu'on retrouve au passage suivant.
     await ctx.offer({ messageId: id, from, name: displayName(h('From')), subject: h('Subject'),
                       date: new Date(Number(m.internalDate ?? Date.now())) })

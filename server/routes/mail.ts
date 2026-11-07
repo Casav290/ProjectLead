@@ -14,7 +14,7 @@ import * as microsoft from '../lib/mailbox/microsoft.js'
 import { beginAuthorization, exchangeCode, mailboxOAuthEnabled, type OAuthProvider } from '../lib/mailbox/oauth.js'
 import { detect, userFor } from '../lib/mailbox/presets.js'
 import { mailboxSecretConfigured, seal } from '../lib/mailbox/secret.js'
-import { addresses, displayName, newMessageId, readable } from '../lib/mailbox/types.js'
+import { addresses, displayName, looksSpam, newMessageId, readable } from '../lib/mailbox/types.js'
 import { createProject } from './projects.js'
 import { fmtDateIn, tr } from '../lib/i18n.js'
 
@@ -301,6 +301,7 @@ publicMail.post('/:token', async (c) => {
   const acc = await anon(async (db) => (await db.query('select id from accounts where inbound_token = $1', [c.req.param('token')])).rows[0])
   if (!acc) return c.json({ error: 'not_found' }, 404)
   let msg: { from: string; fromName: string | null; to: string[]; subject: string; body: string; messageId: string }
+  let header: (name: string) => string
   const type = c.req.header('content-type') ?? ''
   if (/message\/rfc822|text\/plain/.test(type)) {
     const raw = Buffer.from(await c.req.arrayBuffer())
@@ -309,13 +310,18 @@ publicMail.post('/:token', async (c) => {
     const fromText = (p.from as any)?.text ?? ''
     msg = { from: addresses(fromText)[0] ?? '', fromName: displayName(fromText), to: addresses((p.to as any)?.text ?? ''),
             subject: p.subject ?? '', body: readable(p.text, p.html || null), messageId: String(p.messageId ?? '') }
+    header = (name) => { const v = p.headers.get(name.toLowerCase()); return typeof v === 'string' ? v : '' }
   } else {
     const j = await c.req.json().catch(() => null) as any
     if (!j?.from) return c.json({ error: 'invalid_input' }, 400)
     msg = { from: addresses(j.from)[0] ?? '', fromName: j.from_name ?? displayName(String(j.from)), to: addresses(j.to ?? []),
             subject: String(j.subject ?? ''), body: readable(j.text, j.html), messageId: String(j.message_id ?? '') }
+    const given = j.headers && typeof j.headers === 'object' ? j.headers as Record<string, unknown> : {}
+    header = (name) => { const v = given[Object.keys(given).find((k) => k.toLowerCase() === name.toLowerCase()) ?? '']; return typeof v === 'string' ? v : '' }
   }
   if (!msg.from) return c.json({ error: 'from_required' }, 400)
+  // Marqué comme spam en amont : rien n'entre (demande d'Ève du 07.11.2026). Un 200 : le relais n'a pas à renvoyer.
+  if (looksSpam(msg.subject, header)) return c.json({ ok: true, status: 'spam' })
   msg.messageId ||= `inbound:${Date.now()}:${Math.random().toString(36).slice(2)}`
   const r = await ingest({ id: null, account_id: acc.id, email: '' }, {
     messageId: msg.messageId, providerId: null,

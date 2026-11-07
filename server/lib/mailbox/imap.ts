@@ -6,7 +6,7 @@ import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import nodemailer from 'nodemailer'
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
-import { addresses, attachmentsOf, HISTORY_PER_ADDRESS, looksAutomated, readable, TRIAGE_PER_SYNC, worthFetching, type BackfillResult,
+import { addresses, attachmentsOf, HISTORY_PER_ADDRESS, looksAutomated, looksSpam, readable, SPAM_HEADERS, TRIAGE_PER_SYNC, worthFetching, type BackfillResult,
          type Outgoing, type SendOutcome, type SyncContext, type SyncResult } from './types.js'
 
 /**
@@ -97,14 +97,18 @@ const PER_FOLDER = 300
  */
 const idOf = (path: string, uidValidity: any, uid: number) => `${String(uidValidity)}:${uid}:${path}`
 
+/** Lit un en-tête dans ceux qu'on a demandés au serveur. */
+const headerOf = (raw: unknown) => (name: string) => String(raw ?? '').match(new RegExp(`^${name}:\\s*(.*)$`, 'mi'))?.[1] ?? ''
+
 /** Lit les en-têtes de ces UID, puis télécharge et enregistre ceux qui concernent un contact. */
 async function importUids(c: ImapFlow, path: string, uids: number[], ctx: SyncContext): Promise<number> {
   if (!uids.length) return 0
   const box = c.mailbox as any
-  const heads: { uid: number; messageId: string; from: string; to: string[]; date: Date }[] = []
-  for await (const m of c.fetch(uids, { envelope: true, internalDate: true }, { uid: true })) {
+  const heads: { uid: number; messageId: string; from: string; to: string[]; date: Date; spam: boolean }[] = []
+  for await (const m of c.fetch(uids, { envelope: true, internalDate: true, headers: SPAM_HEADERS }, { uid: true })) {
     const env = m.envelope as any
     heads.push({
+      spam: looksSpam(env?.subject, headerOf(m.headers)),
       uid: m.uid,
       messageId: String(env?.messageId ?? '').trim(),
       from: addresses((env?.from ?? []).map((a: any) => a.address ?? ''))[0] ?? '',
@@ -186,13 +190,12 @@ export async function triage(s: ImapSecret, state: any, ctx: SyncContext): Promi
         const todo = uids.filter((u) => !seen.has(idOf('INBOX', box.uidValidity, u)))
         if (todo.length) {
           for await (const m of c.fetch(todo, { envelope: true, internalDate: true,
-            headers: ['list-unsubscribe', 'list-id', 'precedence', 'auto-submitted'] }, { uid: true })) {
+            headers: ['list-unsubscribe', 'list-id', 'precedence', 'auto-submitted', ...SPAM_HEADERS] }, { uid: true })) {
             const env = m.envelope as any
-            const raw = String(m.headers ?? '')
-            const h = (name: string) => raw.match(new RegExp(`^${name}:\\s*(.*)$`, 'mi'))?.[1] ?? ''
+            const h = headerOf(m.headers)
             const sender = env?.from?.[0]
             const from = String(sender?.address ?? '').toLowerCase()
-            if (!from || looksAutomated(from, h)) continue
+            if (!from || looksAutomated(from, h) || looksSpam(env?.subject, h)) continue
             await ctx.offer({ messageId: idOf('INBOX', box.uidValidity, m.uid), from, name: sender?.name || null,
                               subject: String(env?.subject ?? ''), date: new Date((m.internalDate as any) ?? Date.now()) })
           }
